@@ -192,7 +192,8 @@ struct PDFViewerView: View {
     @Binding var annotationMode: AnnotationMode
     @Binding var highlightColor: Color
     let notificationManager: NotificationManager
-    
+    @EnvironmentObject var alertManager: AlertManager
+
     @StateObject private var undoRedoManager = UndoRedoManager()
     @StateObject private var searchManager = PDFSearchManager()
     @StateObject private var bookmarkManager = BookmarkManager()
@@ -710,6 +711,23 @@ struct PDFViewerView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NavigateToPage"))) { notification in
             if let pageIndex = notification.object as? Int {
                 goToPage(pageIndex)
+                // If bounding box provided, show a source pulse
+                if let userInfo = notification.userInfo,
+                   let boundingBox = userInfo["boundingBox"] as? CGRect,
+                   let document = pdfView.document,
+                   pageIndex < document.pageCount,
+                   let page = document.page(at: pageIndex) {
+                    // Temporary pulse highlight — navigate and flash
+                    let annotation = PDFAnnotation(bounds: boundingBox, forType: .highlight, withProperties: nil)
+                    annotation.color = NSColor.systemBlue.withAlphaComponent(0.4)
+                    page.addAnnotation(annotation)
+                    let destination = PDFDestination(page: page, at: CGPoint(x: boundingBox.midX, y: boundingBox.midY))
+                    pdfView.go(to: destination)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                        page.removeAnnotation(annotation)
+                        pdfView.setNeedsDisplay(pdfView.bounds)
+                    }
+                }
             }
         }
         .sheet(isPresented: $showingTextAnnotationDialog) {
