@@ -6,6 +6,13 @@
 //
 
 import SwiftUI
+import AppKit
+
+// MARK: - Node Level (Hierarchy)
+enum NodeLevel: String, Codable, Hashable {
+    case concept   // top-level organizational unit (theme/topic)
+    case entity    // specific thing within a concept (term, technique, person, formula)
+}
 
 // MARK: - Concept Types
 enum ConceptType: String, Codable, CaseIterable, Hashable {
@@ -53,6 +60,16 @@ enum ConceptType: String, Codable, CaseIterable, Hashable {
         case .equation: return .pink
         }
     }
+
+    /// Heuristic default hierarchy level when the LLM doesn't specify one
+    var defaultLevel: NodeLevel {
+        switch self {
+        case .concept, .theorem, .method, .claim:
+            return .concept
+        case .definition, .example, .person, .dataset, .result, .equation:
+            return .entity
+        }
+    }
 }
 
 // MARK: - Edge Types
@@ -66,6 +83,7 @@ enum EdgeType: String, Codable, CaseIterable, Hashable {
     case sameTopic
     case partOf
     case uses
+    case containsEntity
 
     var displayName: String {
         switch self {
@@ -78,6 +96,7 @@ enum EdgeType: String, Codable, CaseIterable, Hashable {
         case .sameTopic: return "Same Topic"
         case .partOf: return "Part Of"
         case .uses: return "Uses"
+        case .containsEntity: return "Contains"
         }
     }
 
@@ -92,6 +111,7 @@ enum EdgeType: String, Codable, CaseIterable, Hashable {
         case .sameTopic: return .cyan
         case .partOf: return .indigo
         case .uses: return .mint
+        case .containsEntity: return .secondary
         }
     }
 }
@@ -116,14 +136,14 @@ enum SemanticZoomLevel: Int, Codable, CaseIterable, Comparable {
     case document = 0
     case chapter = 1
     case concept = 2
-    case passage = 3
+    case entity = 3
 
     var displayName: String {
         switch self {
         case .document: return "Document"
         case .chapter: return "Chapter"
         case .concept: return "Concept"
-        case .passage: return "Passage"
+        case .entity: return "Entity"
         }
     }
 
@@ -146,4 +166,17 @@ enum ProcessingState: String, Codable {
     case partial
     case complete
     case failed
+}
+
+// MARK: - Source Highlight Palette
+enum SourceHighlightPalette {
+    static let colors: [NSColor] = [
+        .systemBlue, .systemPurple, .systemTeal, .systemOrange,
+        .systemPink, .systemGreen, .systemIndigo, .systemBrown,
+        .systemCyan, .systemMint, .systemRed, .systemYellow
+    ]
+
+    static func color(for index: Int) -> NSColor {
+        colors[index % colors.count]
+    }
 }
