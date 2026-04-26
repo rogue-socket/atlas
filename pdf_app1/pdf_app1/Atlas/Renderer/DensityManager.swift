@@ -29,20 +29,25 @@ class DensityManager {
             }
 
         case .chapter:
-            // Only definitions, high-confidence concepts, and pinned nodes
+            // Concept-level nodes only (all collapsed)
             return allNodes.filter { node in
-                node.type == .definition || node.type == .theorem ||
-                node.isPinned || node.id == activeNodeID ||
-                node.confidence >= 0.9 ||
-                graph.degree(of: node.id) >= 3
+                node.level == .concept ||
+                node.isPinned || node.id == activeNodeID
             }
 
         case .concept:
-            // All nodes (default view)
-            return allNodes
+            // Concepts + entities of expanded concepts
+            return allNodes.filter { node in
+                if node.level == .concept { return true }
+                if node.isPinned || node.id == activeNodeID { return true }
+                // Show entity only if its parent concept is expanded
+                guard let parentID = node.parentConceptID,
+                      let parent = graph.node(for: parentID) else { return false }
+                return parent.expansionState == .expanded
+            }
 
-        case .passage:
-            // All nodes — at passage level we show everything including low confidence
+        case .entity:
+            // Everything — auto-expand all
             return allNodes
         }
     }
