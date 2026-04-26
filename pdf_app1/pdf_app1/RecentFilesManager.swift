@@ -39,21 +39,23 @@ struct SecurityScopedRecentFilesBookmarker: RecentFilesBookmarking {
 
 class RecentFilesManager: ObservableObject {
     @Published var recentFiles: [URL] = []
-    @Published var inaccessibleFiles: [Int] = [] // Track indices of inaccessible files
-    
+    @Published var inaccessibleFiles: Set<Int> = [] // Track indices of inaccessible files
+
     private let maxRecentFiles = AppConstants.maxRecentFiles
     private let userDefaultsKey = AppConstants.recentFilesBookmarksKey
+    private let staleLaunchCounterKey = "RecentFiles.staleLaunchCounter"
     private let userDefaults: UserDefaults
     private let bookmarker: RecentFilesBookmarking
     private let fileCheckQueue = DispatchQueue(label: "file.check", qos: .utility)
     private var fileCheckWorkItem: DispatchWorkItem?
     private var lastFileCheckTime: Date = Date.distantPast
     private let fileCheckThrottleInterval: TimeInterval = 5.0
-    
+
     init(userDefaults: UserDefaults = .standard, bookmarker: RecentFilesBookmarking = SecurityScopedRecentFilesBookmarker()) {
         self.userDefaults = userDefaults
         self.bookmarker = bookmarker
         loadRecentFiles()
+        autoRemoveStaleFiles()
     }
     
     /// Add a file to recent files list using security-scoped bookmark
@@ -110,18 +112,22 @@ class RecentFilesManager: ObservableObject {
         loadRecentFiles()
     }
     
-    /// Remove inaccessible file at index
+    /// Remove inaccessible file at index and clear its stale counter
     func removeInaccessibleFile(at index: Int) {
-        var offsets = IndexSet()
-        offsets.insert(index)
-        removeFiles(at: offsets)
+        if index < recentFiles.count {
+            var counter = userDefaults.dictionary(forKey: staleLaunchCounterKey) as? [String: Int] ?? [:]
+            counter.removeValue(forKey: recentFiles[index].path)
+            userDefaults.set(counter, forKey: staleLaunchCounterKey)
+        }
+        removeFiles(at: IndexSet(integer: index))
     }
     
-    /// Load recent files from bookmarks with throttled file system checks
-    private func loadRecentFiles() {
+    /// Load recent files from bookmarks. Inaccessible files are kept but tracked in `inaccessibleFiles`.
+    func loadRecentFiles() {
         guard let data = userDefaults.data(forKey: userDefaultsKey),
               var bookmarks = try? JSONDecoder().decode([Data].self, from: data) else {
             recentFiles = []
+            inaccessibleFiles = []
             return
         }
 
@@ -129,13 +135,15 @@ class RecentFilesManager: ObservableObject {
         let shouldSkipFileCheck = now.timeIntervalSince(lastFileCheckTime) < fileCheckThrottleInterval
 
         var resolvedURLs: [URL] = []
-        var staleIndices: [Int] = []
+        var unresolvedIndices: [Int] = []
+        var inaccessible: Set<Int> = []
         var didRefreshAny = false
 
         for (index, bookmarkData) in bookmarks.enumerated() {
             var isStale = false
             guard let url = bookmarker.resolveBookmark(bookmarkData, isStale: &isStale) else {
-                staleIndices.append(index)
+                // Bookmark can't be resolved at all — keep in list as inaccessible
+                unresolvedIndices.append(index)
                 continue
             }
 
@@ -145,72 +153,65 @@ class RecentFilesManager: ObservableObject {
                 didRefreshAny = true
             }
 
-            // Throttle file existence checks for performance
+            resolvedURLs.append(url)
+
+            // Check file existence (throttled)
             if !shouldSkipFileCheck {
+                let resolvedIndex = resolvedURLs.count - 1
                 fileCheckQueue.async { [weak self] in
                     if !FileManager.default.fileExists(atPath: url.path) {
                         DispatchQueue.main.async {
-                            self?.scheduleFileCleanup()
+                            self?.inaccessibleFiles.insert(resolvedIndex)
                         }
                     }
                 }
             }
-            resolvedURLs.append(url)
         }
 
         if !shouldSkipFileCheck {
             lastFileCheckTime = now
         }
 
-        // Remove stale bookmarks and save refreshed ones
-        if !staleIndices.isEmpty {
-            for index in staleIndices.reversed() {
+        // For unresolved bookmarks, add placeholder URLs so indices stay aligned
+        // Actually, we skip them and track by resolved index — simpler to just remove unresolvable ones
+        if !unresolvedIndices.isEmpty {
+            for index in unresolvedIndices.reversed() {
                 bookmarks.remove(at: index)
             }
         }
 
-        if !staleIndices.isEmpty || didRefreshAny {
+        if !unresolvedIndices.isEmpty || didRefreshAny {
             saveBookmarks(bookmarks)
         }
 
         recentFiles = resolvedURLs
+        inaccessible.formUnion(inaccessibleFiles) // keep any previously detected inaccessible entries
+        inaccessibleFiles = inaccessible
     }
-    
-    /// Schedule file cleanup with throttling
-    private func scheduleFileCleanup() {
-        fileCheckWorkItem?.cancel()
-        fileCheckWorkItem = DispatchWorkItem { [weak self] in
-            self?.performFileCleanup()
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: fileCheckWorkItem!)
-    }
-    
-    /// Perform actual file cleanup
-    private func performFileCleanup() {
-        guard let data = userDefaults.data(forKey: userDefaultsKey),
-              let bookmarks = try? JSONDecoder().decode([Data].self, from: data) else {
-            return
-        }
-        
-        var staleIndices: [Int] = []
-        
-        for (index, bookmarkData) in bookmarks.enumerated() {
-            if let url = resolveBookmark(bookmarkData) {
-                if !FileManager.default.fileExists(atPath: url.path) {
-                    staleIndices.append(index)
-                }
-            } else {
-                staleIndices.append(index)
+
+    /// Increment stale launch counter for inaccessible files and auto-remove those seen stale for 3+ launches.
+    private func autoRemoveStaleFiles() {
+        guard !inaccessibleFiles.isEmpty else { return }
+
+        var counter = userDefaults.dictionary(forKey: staleLaunchCounterKey) as? [String: Int] ?? [:]
+        var indicesToRemove: [Int] = []
+
+        for index in inaccessibleFiles {
+            guard index < recentFiles.count else { continue }
+            let key = recentFiles[index].path
+            let count = (counter[key] ?? 0) + 1
+            counter[key] = count
+
+            if count >= 3 {
+                indicesToRemove.append(index)
+                counter.removeValue(forKey: key)
             }
         }
-        
-        if !staleIndices.isEmpty {
-            var updatedBookmarks = bookmarks
-            for index in staleIndices.reversed() {
-                updatedBookmarks.remove(at: index)
-            }
-            saveBookmarks(updatedBookmarks)
-            loadRecentFiles()
+
+        userDefaults.set(counter, forKey: staleLaunchCounterKey)
+
+        if !indicesToRemove.isEmpty {
+            removeFiles(at: IndexSet(indicesToRemove))
         }
     }
     
