@@ -9,12 +9,21 @@ import Foundation
 
 // MARK: - Merge Proposal
 
+// MARK: - Merge Type
+enum MergeType: String {
+    case exactMatch
+    case semanticEquivalent
+    case partialOverlap
+}
+
 struct MergeProposal: Identifiable {
     let id = UUID()
     let sourceNode: ConceptNode
     let targetNode: ConceptNode
     let similarity: Double
     let reason: String
+    var mergeType: MergeType = .exactMatch
+    var llmReason: String?
 }
 
 // MARK: - Document Pair Key
@@ -76,7 +85,77 @@ class GraphMergeEngine {
         return proposals.sorted { $0.similarity > $1.similarity }
     }
 
-    /// Execute an accepted merge: combine two nodes into one
+    // MARK: - Semantic Merge Proposals (LLM-powered)
+
+    func findSemanticMergeProposals(
+        newDocumentGraph: KnowledgeGraph,
+        projectGraph: KnowledgeGraph,
+        backend: any AtlasModel
+    ) async throws -> [MergeProposal] {
+        // Stage 1: Fast Levenshtein pre-filter (lower threshold for wider net)
+        var proposals: [MergeProposal] = []
+        var seenPairs: Set<String> = []
+
+        for newNode in newDocumentGraph.allNodes where newNode.level == .concept {
+            for existingNode in projectGraph.allNodes where existingNode.level == .concept {
+                let newDocs = Set(newNode.sourceAnchors.map { $0.documentURL })
+                let existingDocs = Set(existingNode.sourceAnchors.map { $0.documentURL })
+                guard newDocs.isDisjoint(with: existingDocs) else { continue }
+
+                let similarity = computeSimilarity(newNode.label, existingNode.label)
+                if similarity > 0.5 {
+                    let pairKey = [newNode.label, existingNode.label].sorted().joined(separator: "||")
+                    guard !seenPairs.contains(pairKey) else { continue }
+                    seenPairs.insert(pairKey)
+
+                    let mergeType: MergeType = similarity > 0.95 ? .exactMatch : .semanticEquivalent
+                    proposals.append(MergeProposal(
+                        sourceNode: newNode,
+                        targetNode: existingNode,
+                        similarity: similarity,
+                        reason: similarity > 0.95 ? "Exact label match" : "Similar labels (Levenshtein: \(Int(similarity * 100))%)",
+                        mergeType: mergeType
+                    ))
+                }
+            }
+        }
+
+        // Stage 2: LLM semantic match on concept-level nodes
+        let newConcepts = newDocumentGraph.conceptNodes().prefix(50).map { (label: $0.label, summary: $0.summary) }
+        let existingConcepts = projectGraph.conceptNodes().prefix(50).map { (label: $0.label, summary: $0.summary) }
+
+        if !newConcepts.isEmpty && !existingConcepts.isEmpty {
+            let rawMerges = try await backend.proposeMerges(
+                documentAConcepts: newConcepts,
+                documentBConcepts: existingConcepts
+            )
+
+            for raw in rawMerges {
+                let pairKey = [raw.labelA, raw.labelB].sorted().joined(separator: "||")
+                guard !seenPairs.contains(pairKey) else { continue }
+                seenPairs.insert(pairKey)
+
+                guard let sourceNode = newDocumentGraph.allNodes.first(where: { $0.label.lowercased() == raw.labelA.lowercased() }),
+                      let targetNode = projectGraph.allNodes.first(where: { $0.label.lowercased() == raw.labelB.lowercased() }) else {
+                    continue
+                }
+
+                let mergeType = MergeType(rawValue: raw.mergeType ?? "semanticEquivalent") ?? .semanticEquivalent
+                proposals.append(MergeProposal(
+                    sourceNode: sourceNode,
+                    targetNode: targetNode,
+                    similarity: raw.confidence,
+                    reason: raw.reason,
+                    mergeType: mergeType,
+                    llmReason: raw.reason
+                ))
+            }
+        }
+
+        return proposals.sorted { $0.similarity > $1.similarity }
+    }
+
+    /// Execute an accepted merge: combine two nodes into one, handling hierarchy
     func executeMerge(
         sourceNodeID: UUID,
         targetNodeID: UUID,
@@ -98,25 +177,32 @@ class GraphMergeEngine {
 
         // Transfer edges from source to target
         for edge in graph.edges(for: sourceNodeID) {
-            var newEdge = edge
-            if newEdge.sourceNodeID == sourceNodeID {
-                newEdge = GraphEdge(
-                    sourceNodeID: targetNodeID,
-                    targetNodeID: newEdge.targetNodeID,
-                    type: newEdge.type,
-                    confidence: newEdge.confidence,
-                    label: newEdge.label
-                )
-            } else {
-                newEdge = GraphEdge(
-                    sourceNodeID: newEdge.sourceNodeID,
-                    targetNodeID: targetNodeID,
-                    type: newEdge.type,
-                    confidence: newEdge.confidence,
-                    label: newEdge.label
-                )
-            }
+            // Skip containsEntity edges — re-parenting handles these
+            if edge.type == .containsEntity { continue }
+
+            let newSourceID = edge.sourceNodeID == sourceNodeID ? targetNodeID : edge.sourceNodeID
+            let newTargetID = edge.targetNodeID == sourceNodeID ? targetNodeID : edge.targetNodeID
+
+            // Skip self-loops (e.g., source had an edge to target before merge)
+            guard newSourceID != newTargetID else { continue }
+
+            let newEdge = GraphEdge(
+                sourceNodeID: newSourceID,
+                targetNodeID: newTargetID,
+                type: edge.type,
+                confidence: edge.confidence,
+                label: edge.label
+            )
             graph.addEdge(newEdge)
+        }
+
+        // Re-parent child entities of the source under the target
+        if sourceNode.level == .concept {
+            for entity in graph.entities(for: sourceNodeID) {
+                var updated = entity
+                updated.parentConceptID = targetNodeID
+                graph.updateNode(updated)
+            }
         }
 
         // Update target and remove source
