@@ -73,6 +73,22 @@ final class GeminiBackend: AtlasModel, @unchecked Sendable {
         return try parseAnswerResponse(response)
     }
 
+    func proposeMerges(
+        documentAConcepts: [(label: String, summary: String?)],
+        documentBConcepts: [(label: String, summary: String?)]
+    ) async throws -> [RawMergeProposal] {
+        let prompt = PromptTemplates.semanticMergeProposal(
+            documentATitle: "Document A",
+            documentAConcepts: documentAConcepts,
+            documentBTitle: "Document B",
+            documentBConcepts: documentBConcepts
+        )
+        let response = try await generateContent(prompt)
+        let cleaned = extractJSON(from: response)
+        guard let data = cleaned.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([RawMergeProposal].self, from: data)) ?? []
+    }
+
     // MARK: - HTTP
 
     private func generateContent(_ content: String) async throws -> String {
