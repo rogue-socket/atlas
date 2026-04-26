@@ -40,6 +40,15 @@ enum ComparisonSplitView {
     case horizontal
 }
 
+// MARK: - Open Result
+enum OpenResult {
+    case success
+    case alreadyOpen
+    case tooManyTabs
+    case fileNotReadable
+    case invalidPDF
+}
+
 // MARK: - Document Manager
 class DocumentManager: ObservableObject {
     @Published var documents: [PDFDocumentItem] = []
@@ -60,23 +69,24 @@ class DocumentManager: ObservableObject {
     
     // MARK: - Document Management
     @discardableResult
-    func openDocument(_ url: URL, projectID: UUID? = nil) -> Bool {
-        guard canAddDocument else { return false }
-        
+    func openDocument(_ url: URL, projectID: UUID? = nil) -> OpenResult {
+        guard canAddDocument else { return .tooManyTabs }
+
         // Check if already open
         if documents.contains(where: { $0.url == url }) {
             selectDocument(url: url)
-            return true
+            return .alreadyOpen
         }
-        
-        guard let document = PDFKit.PDFDocument(url: url) else { return false }
-        
+
+        guard FileManager.default.isReadableFile(atPath: url.path) else { return .fileNotReadable }
+        guard let document = PDFKit.PDFDocument(url: url) else { return .invalidPDF }
+
         let pdfDoc = PDFDocumentItem(url: url, document: document, projectID: projectID)
         documents.append(pdfDoc)
         selectedDocumentID = pdfDoc.id
         recentFilesManager?.addRecentFile(url)
 
-        return true
+        return .success
     }
     
     func openDocuments(_ urls: [URL], projectID: UUID? = nil) {
