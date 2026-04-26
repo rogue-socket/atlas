@@ -79,6 +79,22 @@ enum AppError: LocalizedError {
             return "Please try adding the annotation again."
         }
     }
+
+    /// Modal errors require user acknowledgement; toast errors auto-dismiss.
+    var severity: ErrorSeverity {
+        switch self {
+        case .fileAccessDenied, .fileNotFound, .invalidPDF, .corruptedPDF,
+             .loadFailed, .securityScopedResourceFailed:
+            return .modal
+        case .saveFailed, .annotationFailed:
+            return .toast
+        }
+    }
+}
+
+enum ErrorSeverity {
+    case modal
+    case toast
 }
 
 // MARK: - Alert Manager
@@ -95,6 +111,16 @@ class AlertManager: ObservableObject {
         )
     }
     
+    /// Route an error to the correct feedback channel based on severity.
+    func routeError(_ error: AppError, notificationManager: NotificationManager) {
+        switch error.severity {
+        case .modal:
+            showAlert(error)
+        case .toast:
+            notificationManager.showError(error.failureReason ?? error.errorDescription ?? "An error occurred")
+        }
+    }
+
     func showAlert(title: String, message: String, primaryButton: String = "OK", secondaryButton: String? = nil, primaryAction: (() -> Void)? = nil, secondaryAction: (() -> Void)? = nil) {
         alertItem = AlertItem(
             title: title,
