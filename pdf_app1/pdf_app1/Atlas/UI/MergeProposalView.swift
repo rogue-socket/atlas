@@ -36,6 +36,27 @@ struct MergeProposalView: View {
 
             Divider()
 
+            // Bulk action for high-confidence proposals
+            if pendingProposals.contains(where: { $0.similarity > 0.9 }) {
+                HStack {
+                    Spacer()
+                    Button("Accept All High-Confidence") {
+                        for proposal in pendingProposals where proposal.similarity > 0.9 {
+                            mergeEngine.executeMerge(
+                                sourceNodeID: proposal.sourceNode.id,
+                                targetNodeID: proposal.targetNode.id,
+                                in: graph
+                            )
+                            processedIDs.insert(proposal.id)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 4)
+            }
+
             if pendingProposals.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "checkmark.circle")
@@ -91,13 +112,23 @@ struct MergeProposalRow: View {
                     nodeLabel(proposal.targetNode)
                 }
 
-                Text(proposal.reason)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                HStack(spacing: 6) {
+                    mergeTypeBadge(proposal.mergeType)
+                    Text("Confidence: \(Int(proposal.similarity * 100))%")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
 
-                Text("Similarity: \(Int(proposal.similarity * 100))%")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                if let llmReason = proposal.llmReason {
+                    Text(llmReason)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                } else {
+                    Text(proposal.reason)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
 
             Spacer()
@@ -128,5 +159,21 @@ struct MergeProposalRow: View {
                 .font(.callout)
                 .lineLimit(1)
         }
+    }
+
+    private func mergeTypeBadge(_ type: MergeType) -> some View {
+        let (text, color): (String, Color) = switch type {
+        case .exactMatch: ("Exact", .green)
+        case .semanticEquivalent: ("Semantic", .blue)
+        case .partialOverlap: ("Partial", .orange)
+        }
+        return Text(text)
+            .font(.caption2)
+            .fontWeight(.medium)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.15))
+            .foregroundColor(color)
+            .clipShape(Capsule())
     }
 }
