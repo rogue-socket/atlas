@@ -28,6 +28,7 @@ class ForceDirectedLayout {
     private let repulsionConstant: Double = 25000
     private let attractionConstant: Double = 0.005
     private let groupAttractionConstant: Double = 0.002
+    private let parentAttractionConstant: Double = 0.006 // entities pulled toward parent concept (3x group)
     private let dampingFactor: Double = 0.8
     private let minMovement: Double = 0.3
     private let maxIterations: Int
@@ -53,8 +54,15 @@ class ForceDirectedLayout {
             height: max(canvasSize.height, Double(nodes.count) * 90)
         )
 
-        // Group centers — arrange groups in a grid
-        let groups = Dictionary(grouping: nodes, by: { $0.type.rawValue })
+        // Group by hierarchy: concept nodes are their own group, entities group under parent
+        func groupKey(for node: ConceptNode) -> String {
+            if node.level == .entity, let parentID = node.parentConceptID {
+                return parentID.uuidString
+            }
+            return node.id.uuidString
+        }
+
+        let groups = Dictionary(grouping: nodes, by: { groupKey(for: $0) })
         let groupNames = groups.keys.sorted()
         var groupCenters: [String: CGPoint] = [:]
         let cols = max(Int(ceil(sqrt(Double(groupNames.count)))), 2)
@@ -71,20 +79,21 @@ class ForceDirectedLayout {
 
         // Initialize positions
         for node in nodes {
+            let gk = groupKey(for: node)
             if positions[node.id] == nil {
                 if let anchor = anchorNodes[node.id] {
-                    positions[node.id] = NodePosition(x: anchor.x, y: anchor.y, isFixed: true, group: node.type.rawValue)
+                    positions[node.id] = NodePosition(x: anchor.x, y: anchor.y, isFixed: true, group: gk)
                 } else if let existing = node.position {
-                    positions[node.id] = NodePosition(x: existing.x, y: existing.y, group: node.type.rawValue)
+                    positions[node.id] = NodePosition(x: existing.x, y: existing.y, group: gk)
                 } else {
                     // Place near group center with jitter
-                    let center = groupCenters[node.type.rawValue] ?? CGPoint(x: virtualSize.width / 2, y: virtualSize.height / 2)
+                    let center = groupCenters[gk] ?? CGPoint(x: virtualSize.width / 2, y: virtualSize.height / 2)
                     let jitterX = Double.random(in: -80...80)
                     let jitterY = Double.random(in: -80...80)
-                    positions[node.id] = NodePosition(x: center.x + jitterX, y: center.y + jitterY, group: node.type.rawValue)
+                    positions[node.id] = NodePosition(x: center.x + jitterX, y: center.y + jitterY, group: gk)
                 }
             } else {
-                positions[node.id]?.group = node.type.rawValue
+                positions[node.id]?.group = gk
             }
         }
 
@@ -154,11 +163,28 @@ class ForceDirectedLayout {
 
         // Group attraction — pull nodes toward their group center
         for node in nodes {
-            guard let pos = positions[node.id], let center = groupCenters[node.type.rawValue] else { continue }
+            guard let pos = positions[node.id],
+                  let center = groupCenters[pos.group] else { continue }
             let dx = center.x - pos.x
             let dy = center.y - pos.y
-            forces[node.id]?.dx += dx * groupAttractionConstant
-            forces[node.id]?.dy += dy * groupAttractionConstant
+
+            // Entities get stronger pull toward their parent concept
+            let strength = (node.level == .entity && node.parentConceptID != nil)
+                ? parentAttractionConstant
+                : groupAttractionConstant
+            forces[node.id]?.dx += dx * strength
+            forces[node.id]?.dy += dy * strength
+        }
+
+        // Direct parent-entity attraction: pull entities toward their parent's position
+        for node in nodes where node.level == .entity {
+            guard let parentID = node.parentConceptID,
+                  let entityPos = positions[node.id],
+                  let parentPos = positions[parentID] else { continue }
+            let dx = parentPos.x - entityPos.x
+            let dy = parentPos.y - entityPos.y
+            forces[node.id]?.dx += dx * parentAttractionConstant
+            forces[node.id]?.dy += dy * parentAttractionConstant
         }
 
         // Apply
