@@ -756,12 +756,14 @@ struct MultiDocumentView: View {
                             graph: knowledgeGraph,
                             zoomLevel: $mapZoomLevel,
                             documentURL: document.url,
-                            onNavigateToPage: { pageIndex, boundingBox in
-                                // Navigate the PDF to the given page with optional bounding box
+                            onNavigateToPage: { pageIndex, boundingBox, textSnippet in
+                                var info: [String: Any] = [:]
+                                if let bb = boundingBox { info["boundingBox"] = bb }
+                                if let ts = textSnippet, !ts.isEmpty { info["textSnippet"] = ts }
                                 NotificationCenter.default.post(
                                     name: NSNotification.Name("NavigateToPage"),
                                     object: pageIndex,
-                                    userInfo: boundingBox.map { ["boundingBox": $0] }
+                                    userInfo: info.isEmpty ? nil : info
                                 )
                             },
                             activeNodeID: syncManager.activeNodeID
