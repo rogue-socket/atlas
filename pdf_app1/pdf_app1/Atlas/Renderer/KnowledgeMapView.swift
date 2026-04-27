@@ -23,6 +23,14 @@ struct KnowledgeMapView: View {
     @Environment(AIServiceManager.self) private var aiService
     @State private var pipeline = ExtractionPipeline()
 
+    // Extraction mode
+    @AppStorage("atlas.extraction.mode") private var selectedModeRaw: String = ExtractionMode.fast.rawValue
+    @State private var showModePicker = false
+
+    private var selectedMode: ExtractionMode {
+        ExtractionMode(rawValue: selectedModeRaw) ?? .fast
+    }
+
     // Search
     @State private var searchQuery = ""
     @State private var showSearch = false
@@ -261,9 +269,12 @@ struct KnowledgeMapView: View {
 
             if documentURL != nil && aiService.isConfigured {
                 Divider().frame(width: 16)
-                Button(action: { startExtraction() }) { Image(systemName: "brain") }
+                Button(action: { showModePicker.toggle() }) { Image(systemName: "brain") }
                     .help("Analyze Document")
                     .disabled(pipeline.isProcessing)
+                    .popover(isPresented: $showModePicker, arrowEdge: .leading) {
+                        modePickerPopover
+                    }
             }
         }
         .buttonStyle(.borderless)
@@ -376,8 +387,11 @@ struct KnowledgeMapView: View {
                         .foregroundColor(.secondary.opacity(0.7))
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 280)
-                    Button("Analyze Document") { startExtraction() }
+                    Button("Analyze Document") { showModePicker.toggle() }
                         .buttonStyle(.borderedProminent)
+                        .popover(isPresented: $showModePicker, arrowEdge: .bottom) {
+                            modePickerPopover
+                        }
                 } else {
                     Text("Configure an AI backend in Settings > AI to analyze documents.")
                         .font(.callout)
@@ -461,12 +475,67 @@ struct KnowledgeMapView: View {
         .background(RoundedRectangle(cornerRadius: 10).fill(.ultraThinMaterial))
     }
 
+    // MARK: - Mode Picker
+
+    private var modePickerPopover: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Extraction Mode")
+                .font(.headline)
+
+            ForEach(ExtractionMode.allCases, id: \.self) { mode in
+                Button(action: {
+                    selectedModeRaw = mode.rawValue
+                }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: selectedMode == mode ? "checkmark.circle.fill" : "circle")
+                            .foregroundColor(selectedMode == mode ? .accentColor : .secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 4) {
+                                Text(mode.displayName)
+                                    .fontWeight(.medium)
+                                if !mode.isAvailable {
+                                    Text("Coming Soon")
+                                        .font(.caption2)
+                                        .padding(.horizontal, 4)
+                                        .padding(.vertical, 1)
+                                        .background(Capsule().fill(.secondary.opacity(0.2)))
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            Text(mode.description)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!mode.isAvailable)
+            }
+
+            Divider()
+
+            Button(action: {
+                showModePicker = false
+                startExtraction()
+            }) {
+                Text("Analyze")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!selectedMode.isAvailable)
+        }
+        .padding(12)
+        .frame(width: 240)
+    }
+
     // MARK: - Actions
 
     private func startExtraction() {
         guard let url = documentURL else { return }
         guard let document = PDFDocument(url: url) else { return }
-        log.info("[MapView] startExtraction: \(url.lastPathComponent), \(document.pageCount) pages")
-        pipeline.processFullDocument(document: document, documentURL: url, graph: graph, aiService: aiService)
+        log.info("[MapView] startExtraction: \(url.lastPathComponent), \(document.pageCount) pages, mode=\(selectedMode.rawValue)")
+        pipeline.processFullDocument(document: document, documentURL: url, graph: graph, aiService: aiService, mode: selectedMode)
     }
 }
