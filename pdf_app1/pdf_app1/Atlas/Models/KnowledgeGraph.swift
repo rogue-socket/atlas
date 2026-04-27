@@ -148,6 +148,7 @@ class KnowledgeGraph {
 
     var nodeCount: Int { nodes.count }
     var edgeCount: Int { edges.count }
+    var expansionGeneration: Int = 0
 
     var allNodes: [ConceptNode] {
         Array(nodes.values)
@@ -250,6 +251,49 @@ class KnowledgeGraph {
     func parentConcept(of entityID: UUID) -> ConceptNode? {
         guard let entity = nodes[entityID], let parentID = entity.parentConceptID else { return nil }
         return nodes[parentID]
+    }
+
+    func childNodes(of nodeID: UUID) -> [ConceptNode] {
+        guard let edgeIDs = adjacency[nodeID] else { return [] }
+        return edgeIDs.compactMap { edgeID -> ConceptNode? in
+            guard let edge = edges[edgeID],
+                  edge.type == .subtopicOf,
+                  edge.targetNodeID == nodeID else { return nil }
+            return nodes[edge.sourceNodeID]
+        }
+    }
+
+    func level0Nodes() -> [ConceptNode] {
+        allNodes.filter { $0.hierarchyLevel == 0 }
+    }
+
+    func toggleExpansion(_ nodeID: UUID) {
+        guard var node = nodes[nodeID] else { return }
+        node.expansionState = (node.expansionState == .expanded) ? .collapsed : .expanded
+        nodes[nodeID] = node
+        expansionGeneration += 1
+    }
+
+    func expandAll() {
+        for id in nodes.keys {
+            nodes[id]?.expansionState = .expanded
+        }
+        expansionGeneration += 1
+    }
+
+    func collapseAll() {
+        for id in nodes.keys {
+            nodes[id]?.expansionState = .collapsed
+        }
+        expansionGeneration += 1
+    }
+
+    func hasChildren(_ nodeID: UUID) -> Bool {
+        guard let edgeIDs = adjacency[nodeID] else { return false }
+        return edgeIDs.contains { edgeID in
+            guard let edge = edges[edgeID] else { return false }
+            return edge.type == .subtopicOf && edge.targetNodeID == nodeID
+        }
     }
 
     // MARK: - Highlight Color Assignment
