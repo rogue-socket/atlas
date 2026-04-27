@@ -9,6 +9,13 @@ import Foundation
 
 class DensityManager {
 
+    private func subtopicParents(of nodeID: UUID, in graph: KnowledgeGraph) -> [ConceptNode] {
+        graph.edges(for: nodeID).compactMap { edge in
+            guard edge.type == .subtopicOf, edge.sourceNodeID == nodeID else { return nil }
+            return graph.node(for: edge.targetNodeID)
+        }
+    }
+
     func visibleNodes(
         from graph: KnowledgeGraph,
         zoomLevel: SemanticZoomLevel,
@@ -36,14 +43,22 @@ class DensityManager {
             }
 
         case .concept:
-            // Concepts + entities of expanded concepts
+            // Level-0 nodes always visible; sub-concepts visible if any parent is expanded
             return allNodes.filter { node in
-                if node.level == .concept { return true }
                 if node.isPinned || node.id == activeNodeID { return true }
-                // Show entity only if its parent concept is expanded
-                guard let parentID = node.parentConceptID,
-                      let parent = graph.node(for: parentID) else { return false }
-                return parent.expansionState == .expanded
+                if node.hierarchyLevel == 0 { return true }
+                // Sub-concept: visible if any subtopicOf parent is expanded
+                if node.hierarchyLevel > 0 {
+                    let parents = subtopicParents(of: node.id, in: graph)
+                    if parents.contains(where: { $0.expansionState == .expanded }) { return true }
+                }
+                // Entity: visible if its parentConceptID is expanded
+                if node.level == .entity {
+                    guard let parentID = node.parentConceptID,
+                          let parent = graph.node(for: parentID) else { return false }
+                    return parent.expansionState == .expanded
+                }
+                return false
             }
 
         case .entity:
