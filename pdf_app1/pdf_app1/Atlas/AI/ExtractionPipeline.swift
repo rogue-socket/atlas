@@ -20,6 +20,7 @@ class ExtractionPipeline {
     var totalPages: Int = 0
     var statusMessage: String = ""
     var scannedPDFDetected: Bool = false
+    var extractionMode: ExtractionMode = .fast
 
     var progress: Double {
         guard totalPages > 0 else { return 0 }
@@ -29,6 +30,7 @@ class ExtractionPipeline {
     private var processingTask: Task<Void, Never>?
     private let textExtractor = TextExtractor()
     private let layoutAnalyzer = LayoutAnalyzer()
+    private let deepPipeline = DeepExtractionPipeline()
     private let batchSize = 5
 
     func cancel() {
@@ -59,6 +61,25 @@ class ExtractionPipeline {
         }
 
         log.info("Using backend: \(backend.displayName) / \(backend.modelIdentifier)")
+
+        if mode == .deep {
+            statusMessage = "Deep extraction: extracting text..."
+            log.info("Using Deep mode (3-pass pipeline)")
+
+            let chunks = extractTextChunks(
+                document: document,
+                documentURL: documentURL,
+                pageRange: pageRange
+            )
+
+            await deepPipeline.processChunks(chunks, backend: backend, graph: graph, documentURL: documentURL)
+
+            statusMessage = deepPipeline.statusMessage
+            isProcessing = false
+            graph.documentProcessingState[documentURL] = .complete
+            GraphStore.shared.scheduleSave(graph, for: documentURL)
+            return
+        }
 
         totalPages = pageRange.count
 
@@ -437,6 +458,31 @@ class ExtractionPipeline {
             GraphStore.shared.scheduleSave(graph, for: documentURL)
             log.info("[Step 7] Scheduled per-document auto-save")
         }
+    }
+
+    // MARK: - Deep Mode Text Chunking
+
+    private func extractTextChunks(
+        document: PDFDocument,
+        documentURL: URL,
+        pageRange: Range<Int>
+    ) -> [TextChunk] {
+        var chunks: [TextChunk] = []
+        var pageIndex = pageRange.lowerBound
+
+        while pageIndex < pageRange.upperBound {
+            let batchEnd = min(pageIndex + batchSize, pageRange.upperBound)
+            let batchRange = pageIndex..<batchEnd
+
+            let pageResults = textExtractor.extractPages(from: document, pageRange: batchRange)
+            let text = pageResults.map { $0.fullText }.joined(separator: "\n\n")
+
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                chunks.append(TextChunk(text: text, pageRange: batchRange, documentURL: documentURL))
+            }
+            pageIndex = batchEnd
+        }
+        return chunks
     }
 
     // MARK: - Source Anchor Resolution
