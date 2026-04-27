@@ -18,6 +18,8 @@ struct RawConcept: Codable {
     let level: String?       // "concept" or "entity" — nil for flat extraction
     let parentLabel: String? // label of parent concept (for entities)
     let entities: [RawConcept]? // nested entities when using hierarchical extraction
+    let hierarchyLevel: Int? // 0 = top theme, 1+ = sub-concept depth
+    let subtopicOf: String?  // label of parent theme (for Novak-style maps)
 }
 
 // MARK: - Raw Edge (from AI)
@@ -27,6 +29,7 @@ struct RawEdge: Codable {
     let targetLabel: String
     let type: String // maps to EdgeType raw value
     let confidence: Double?
+    let linkingPhrase: String? // natural-language verb phrase for Novak-style edges
 }
 
 // MARK: - Extraction Context
