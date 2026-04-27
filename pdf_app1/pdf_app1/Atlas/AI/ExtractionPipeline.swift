@@ -46,7 +46,8 @@ class ExtractionPipeline {
         pageRange: Range<Int>,
         graph: KnowledgeGraph,
         aiService: AIServiceManager,
-        projectID: UUID? = nil
+        projectID: UUID? = nil,
+        mode: ExtractionMode = .fast
     ) async {
         log.info("=== Starting extraction for \(documentURL.lastPathComponent), pages \(pageRange.lowerBound+1)-\(pageRange.upperBound) ===")
 
@@ -127,13 +128,14 @@ class ExtractionPipeline {
         documentURL: URL,
         graph: KnowledgeGraph,
         aiService: AIServiceManager,
-        projectID: UUID? = nil
+        projectID: UUID? = nil,
+        mode: ExtractionMode = .fast
     ) {
         guard !isProcessing else {
             log.warning("processFullDocument called while already processing — queued by caller")
             return
         }
-        log.info("processFullDocument: \(documentURL.lastPathComponent), \(document.pageCount) pages")
+        log.info("processFullDocument: \(documentURL.lastPathComponent), \(document.pageCount) pages, mode=\(mode.rawValue)")
         isProcessing = true
         graph.documentProcessingState[documentURL] = .processing
         scannedPDFDetected = false
@@ -144,7 +146,8 @@ class ExtractionPipeline {
                 pageRange: 0..<document.pageCount,
                 graph: graph,
                 aiService: aiService,
-                projectID: projectID
+                projectID: projectID,
+                mode: mode
             )
         }
     }
