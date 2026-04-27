@@ -719,22 +719,42 @@ struct PDFViewerView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NavigateToPage"))) { notification in
             if let pageIndex = notification.object as? Int {
                 goToPage(pageIndex)
-                // If bounding box provided, show a source pulse
-                if let userInfo = notification.userInfo,
-                   let boundingBox = userInfo["boundingBox"] as? CGRect,
-                   let document = pdfView.document,
-                   pageIndex < document.pageCount,
-                   let page = document.page(at: pageIndex) {
-                    // Temporary pulse highlight — navigate and flash
-                    let annotation = PDFAnnotation(bounds: boundingBox, forType: .highlight, withProperties: nil)
-                    annotation.color = NSColor.systemBlue.withAlphaComponent(0.4)
+                guard let document = pdfView.document,
+                      pageIndex < document.pageCount,
+                      let page = document.page(at: pageIndex) else { return }
+
+                let userInfo = notification.userInfo
+                let boundingBox = userInfo?["boundingBox"] as? CGRect
+                let textSnippet = userInfo?["textSnippet"] as? String
+
+                let bridge = HighlightSyncBridge()
+                let passageRects: [CGRect]
+                if let snippet = textSnippet,
+                   let found = bridge.findPassageRects(snippet: snippet, on: page) {
+                    passageRects = found
+                } else if let bb = boundingBox {
+                    passageRects = [bb]
+                } else {
+                    return
+                }
+
+                var annotations: [PDFAnnotation] = []
+                for rect in passageRects {
+                    let annotation = PDFAnnotation(bounds: rect, forType: .highlight, withProperties: nil)
+                    annotation.color = NSColor.systemYellow.withAlphaComponent(0.4)
                     page.addAnnotation(annotation)
-                    let destination = PDFDestination(page: page, at: CGPoint(x: boundingBox.midX, y: boundingBox.midY))
-                    pdfView.go(to: destination)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    annotations.append(annotation)
+                }
+
+                let scrollTarget = passageRects.first ?? passageRects[0]
+                let destination = PDFDestination(page: page, at: CGPoint(x: scrollTarget.midX, y: scrollTarget.midY))
+                pdfView.go(to: destination)
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + AppConstants.sourcePulseDuration) {
+                    for annotation in annotations {
                         page.removeAnnotation(annotation)
-                        pdfView.setNeedsDisplay(pdfView.bounds)
                     }
+                    pdfView.setNeedsDisplay(pdfView.bounds)
                 }
             }
         }
