@@ -44,14 +44,25 @@ The app is a macOS PDF reader ("Atlas") with an AI-powered knowledge map. Two ma
 
 **AI backends** implement the `AtlasModel` protocol (4 methods: extractConcepts, proposeEdges, summarizeConcept, answerQuestion). All use raw `URLSession` with 180s timeout. API keys stored in macOS Keychain via `Security` framework. Response caching uses SHA256(model+prompt) as key, stored in `~/Library/Application Support/Atlas/cache/`.
 
-**Graph rendering** uses SwiftUI `Canvas` (not Metal). The `ForceDirectedLayout` runs Fruchterman-Reingold with group clustering by concept type and a post-process overlap resolution pass. Nodes are grouped visually with colored background regions.
+**Novak-style extraction (Fast mode):** The prompt asks for proposition-based concept maps — 5-6 top themes (`hierarchyLevel: 0`) with sub-concepts (`hierarchyLevel: 1+`) linked via `subtopicOf`. Every edge has a `linkingPhrase` (1-4 word verb phrase) so "A [phrase] B" reads as a sentence. `RawConcept` carries `hierarchyLevel: Int?` and `subtopicOf: String?`; `RawEdge` carries `linkingPhrase: String?`. The pipeline auto-creates `EdgeType.subtopicOf` edges from the `subtopicOf` field.
+
+**Hierarchical collapse/expand:** `ConceptNode` has `hierarchyLevel: Int` (0 = top theme, 1+ = sub-concept) and `expansionState`. Parent-child relationships use `subtopicOf` edges. `DensityManager` gates visibility: level-0 nodes always visible, sub-concepts shown only when a `subtopicOf` parent is expanded.
+
+**Graph rendering** uses SwiftUI `Canvas` (not Metal). The `ForceDirectedLayout` runs Fruchterman-Reingold with group clustering by concept type and a post-process overlap resolution pass. Nodes are grouped visually with colored background regions. Scroll-to-zoom uses `ScrollWheelOverlay` (AppKit bridge) since SwiftUI Canvas doesn't expose scroll events natively.
 
 **PDF ↔ Map communication** uses `NotificationCenter` posts (e.g., `"NavigateToPage"`) and closure callbacks (`onNavigateToPage`), not direct references between the two views.
+
+**Multi-document extraction:** `KnowledgeGraph` tracks per-document `ProcessingState` via `documentProcessingState: [URL: ProcessingState]`. The `ProjectCorrelationSidebar` provides per-document and batch "Analyze All" extraction triggers for projects with multiple PDFs.
 
 ## Key Gotchas
 
 - **PDFKit is not thread-safe.** All PDFKit calls (page access, text extraction, drawing) must happen on the main thread. The page preload cache was moved off background queues for this reason.
 - **`@Observable` vs `@ObservableObject`:** `KnowledgeGraph` and `AIServiceManager` use the new `@Observable` macro (injected with `.environment()`). The older managers use `@StateObject`/`@EnvironmentObject`. Don't mix them — `@ObservedObject` won't work with `@Observable` classes.
+- **Don't duplicate `@Observable` instances.** If a Settings scene or sheet needs an `@Observable` object (e.g., `AIServiceManager`), pass the same instance from the environment — never create a second `@State private var` copy. Separate instances cause state divergence (Keychain writes succeed but in-memory `@Observable` notifications don't cross instances).
+- **Use `SettingsLink`, not `NSApp.sendAction`.** SwiftUI does not support opening Settings programmatically via `NSApp.sendAction(Selector(("showSettingsWindow:")), ...)`. It logs `Please use SettingsLink for opening the Settings scene.` and does nothing. Use the `SettingsLink` view instead.
+- **SwiftUI Canvas doesn't expose scroll wheel events.** For scroll-to-zoom on `Canvas`, you need an AppKit bridge (`NSViewRepresentable` wrapping an `NSView` that overrides `scrollWheel:`). See `ScrollWheelOverlay.swift`.
+- **Debounce resize-driven work.** `SplitPaneContainer` drag, toolbar `GeometryReader`, and `PDFView.boundsDidChangeNotification` all fire on every frame during resize. Always debounce or throttle state updates triggered by continuous geometry/bounds changes.
+- **Guard layout recomputation during drag.** Changing `selectedNodeID` during a node drag can invalidate `visibleNodes` → trigger `recomputeLayout()` → call `fitToContent()` which resets the viewport. Any code path that recomputes layout or calls `fitToContent` must check `isDraggingNode` first.
 - **LLM JSON responses are often truncated.** `JSONRepair.cleanAndRepair()` handles this — always use it when parsing AI output. It closes unclosed strings/brackets and can recover partial concept arrays.
 - **Gemini needs `responseMimeType: "application/json"`** in the generation config for structured output, plus a high `maxOutputTokens` (32768) to avoid truncation.
 - **App Sandbox is enabled.** Network access requires the `com.apple.security.network.client` entitlement (already configured). File access uses security-scoped bookmarks.
