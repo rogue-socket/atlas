@@ -404,8 +404,13 @@ class ExtractionPipeline {
         }
 
         // Step 7: Auto-save
-        GraphStore.shared.scheduleSave(graph, for: documentURL)
-        log.info("[Step 7] Scheduled auto-save")
+        if let projectID = projectID {
+            GraphStore.shared.saveProjectGraph(graph, projectID: projectID)
+            log.info("[Step 7] Saved project graph")
+        } else {
+            GraphStore.shared.scheduleSave(graph, for: documentURL)
+            log.info("[Step 7] Scheduled per-document auto-save")
+        }
     }
 
     // MARK: - Source Anchor Resolution
