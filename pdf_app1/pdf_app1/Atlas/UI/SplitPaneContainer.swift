@@ -50,7 +50,12 @@ struct SplitPaneContainer<PDFContent: View, MapContent: View>: View {
                             DragGesture()
                                 .onChanged { value in
                                     let newFraction = value.location.x / geometry.size.width
-                                    splitFraction = min(max(newFraction, 0.25), 0.85)
+                                    var t = Transaction()
+                                    t.isContinuous = true
+                                    t.animation = nil
+                                    withTransaction(t) {
+                                        splitFraction = min(max(newFraction, 0.25), 0.85)
+                                    }
                                 }
                         )
 

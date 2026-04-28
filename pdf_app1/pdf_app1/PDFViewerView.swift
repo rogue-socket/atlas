@@ -76,7 +76,7 @@ final class BookmarkManager: ObservableObject {
      var menuProvider: ((NSEvent) -> NSMenu?)?
      private var pageCache: [Int: NSImage] = [:]
      private let maxCacheSize = 10
-     // Page preloading runs on main thread since PDFKit is not thread-safe
+     private var pageChangeDebounceTimer: Timer?
 
      override func viewDidMoveToWindow() {
          super.viewDidMoveToWindow()
@@ -100,11 +100,14 @@ final class BookmarkManager: ObservableObject {
      }
      
      @objc private func pageChanged() {
-         guard let currentPage = self.currentPage,
-               let document = self.document else { return }
-         
-         let currentIndex = document.index(for: currentPage)
-         preloadPages(around: currentIndex, in: document)
+         pageChangeDebounceTimer?.invalidate()
+         pageChangeDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak self] _ in
+             guard let self,
+                   let currentPage = self.currentPage,
+                   let document = self.document else { return }
+             let currentIndex = document.index(for: currentPage)
+             self.preloadPages(around: currentIndex, in: document)
+         }
      }
      
      private func preloadPages(around currentIndex: Int, in document: PDFDocument) {
@@ -607,7 +610,12 @@ struct PDFViewerView: View {
                     GeometryReader { geo in
                         Color.clear
                             .onAppear { toolbarIsCompact = geo.size.width < 580 }
-                            .onChange(of: geo.size.width) { _, w in toolbarIsCompact = w < 580 }
+                            .onChange(of: geo.size.width) { _, w in
+                                let shouldBeCompact = w < 580
+                                if toolbarIsCompact != shouldBeCompact {
+                                    toolbarIsCompact = shouldBeCompact
+                                }
+                            }
                     }
                 )
             } else {

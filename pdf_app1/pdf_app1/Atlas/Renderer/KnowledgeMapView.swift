@@ -30,6 +30,11 @@ struct KnowledgeMapView: View {
     // Node detail popover
     @State private var popoverNodeID: UUID?
 
+    // Cached filtered graph to avoid recomputation on every body evaluation
+    @State private var cachedFilteredGraph: KnowledgeGraph?
+    @State private var cachedFilteredNodeCount: Int = 0
+    @State private var cachedZoomLevel: SemanticZoomLevel?
+
     // Callback to navigate PDF (set by parent)
     var onNavigateToPage: ((Int, CGRect?) -> Void)?
     // Active node from bidirectional sync (set by parent)
@@ -59,7 +64,7 @@ struct KnowledgeMapView: View {
                 } else {
                     // Map canvas
                     MapCanvasRenderer(
-                        graph: graphForCurrentZoom,
+                        graph: cachedFilteredGraph ?? graph,
                         layout: layout,
                         zoomLevel: $zoomLevel,
                         selectedNodeID: $interaction.selectedNodeID,
@@ -161,6 +166,11 @@ struct KnowledgeMapView: View {
         let nodeIDs = Set(nodes.map(\.id))
         let edges = graph.allEdges.filter { nodeIDs.contains($0.sourceNodeID) && nodeIDs.contains($0.targetNodeID) }
         layout.computeLayout(nodes: nodes, edges: edges, canvasSize: canvasSize)
+
+        cachedFilteredGraph = graphForCurrentZoom
+        cachedFilteredNodeCount = graph.nodeCount
+        cachedZoomLevel = zoomLevel
+
         if !hasComputedLayout {
             interaction.fitToContent(layout: layout, canvasSize: canvasSize)
             hasComputedLayout = true
