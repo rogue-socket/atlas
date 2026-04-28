@@ -11,9 +11,6 @@
 import SwiftUI
 import PDFKit
 import UniformTypeIdentifiers
-import os.log
-
-private let log = AtlasLogger.ui
 
 // MARK: - Vertical Tab Bar View
 struct DocumentVerticalTabBar: View {
