@@ -261,7 +261,9 @@ struct MultiDocumentView: View {
     @EnvironmentObject var projectsManager: ProjectsManager
     
     @Environment(KnowledgeGraph.self) var knowledgeGraph
+    @Environment(AIServiceManager.self) var aiService
 
+    @State private var projectPipeline = ExtractionPipeline()
     @State private var selectedPDF: PDFDocument?
     @State private var selectedPDFURL: URL?
     @State private var annotationMode: AnnotationMode = .none
@@ -884,6 +886,29 @@ struct MultiDocumentView: View {
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
+
+            if aiService.isConfigured && hasUnprocessedFiles {
+                HStack {
+                    Button(action: analyzeAllUnprocessed) {
+                        Label(
+                            projectPipeline.isProcessing ? "Analyzing..." : "Analyze All",
+                            systemImage: "brain"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(projectPipeline.isProcessing)
+
+                    if projectPipeline.isProcessing {
+                        ProgressView(value: projectPipeline.progress)
+                            .controlSize(.small)
+                    }
+
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 4)
+            }
             
             Divider()
             
@@ -907,18 +932,21 @@ struct MultiDocumentView: View {
                             file: file,
                             projectsManager: projectsManager,
                             projectID: projectsManager.selectedProjectID ?? UUID(),
+                            processingState: knowledgeGraph.documentProcessingState[file] ?? .unprocessed,
+                            canAnalyze: aiService.isConfigured && !projectPipeline.isProcessing,
                             onSelect: { url in
-                                // Open the file in the multi-document system with project context
                                 documentManager.openDocument(url, projectID: projectsManager.selectedProjectID)
                             },
                             onRemove: { url in
                                 if let projectID = projectsManager.selectedProjectID {
-                                    // Find the file ID and remove it
                                     let projectFiles = projectsManager.files(for: projectID, query: "")
                                     if let projectFile = projectFiles.first(where: { $0.lastKnownPath == url.path }) {
                                         projectsManager.removeFile(projectID: projectID, fileID: projectFile.id)
                                     }
                                 }
+                            },
+                            onAnalyze: { url in
+                                analyzeDocument(at: url)
                             }
                         )
                     }
@@ -934,18 +962,19 @@ struct MultiDocumentView: View {
         let file: URL
         let projectsManager: ProjectsManager
         let projectID: UUID
+        let processingState: ProcessingState
+        let canAnalyze: Bool
         let onSelect: (URL) -> Void
         let onRemove: (URL) -> Void
-        
+        let onAnalyze: (URL) -> Void
+
         var body: some View {
             HStack(spacing: 8) {
-                // File icon
                 Image(systemName: "doc.fill")
                     .font(.system(size: 14))
                     .foregroundColor(.blue)
                     .frame(width: 16)
-                
-                // File name
+
                 Button(action: { onSelect(file) }) {
                     HStack {
                         Text(file.lastPathComponent)
@@ -956,8 +985,19 @@ struct MultiDocumentView: View {
                     }
                 }
                 .buttonStyle(.borderless)
-                
-                // Remove button
+
+                processingBadge
+
+                if canAnalyze && processingState == .unprocessed {
+                    Button(action: { onAnalyze(file) }) {
+                        Image(systemName: "brain")
+                            .font(.system(size: 11))
+                            .foregroundColor(.accentColor)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Analyze this document")
+                }
+
                 Button(action: { onRemove(file) }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 12))
@@ -965,12 +1005,6 @@ struct MultiDocumentView: View {
                 }
                 .buttonStyle(.borderless)
                 .opacity(0.8)
-                .onHover { isHovered in
-                    // Show remove button more prominently on hover
-                    if isHovered {
-                        NSCursor.pointingHand.set()
-                    }
-                }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -980,6 +1014,30 @@ struct MultiDocumentView: View {
                     NSCursor.pointingHand.set()
                 } else {
                     NSCursor.arrow.set()
+                }
+            }
+        }
+
+        private var processingBadge: some View {
+            Group {
+                switch processingState {
+                case .unprocessed:
+                    EmptyView()
+                case .processing:
+                    ProgressView()
+                        .controlSize(.mini)
+                case .partial:
+                    Image(systemName: "circle.lefthalf.filled")
+                        .foregroundColor(.orange)
+                        .font(.caption2)
+                case .complete:
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                        .font(.caption2)
+                case .failed:
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundColor(.red)
+                        .font(.caption2)
                 }
             }
         }
@@ -1034,6 +1092,44 @@ struct MultiDocumentView: View {
         }
     }
     
+    // MARK: - Document Extraction
+
+    private var hasUnprocessedFiles: Bool {
+        filteredProjectFiles.contains { url in
+            let state = knowledgeGraph.documentProcessingState[url] ?? .unprocessed
+            return state == .unprocessed || state == .failed
+        }
+    }
+
+    private func analyzeDocument(at url: URL) {
+        guard let document = PDFDocument(url: url) else { return }
+        projectPipeline.processFullDocument(
+            document: document, documentURL: url,
+            graph: knowledgeGraph, aiService: aiService
+        )
+    }
+
+    private func analyzeAllUnprocessed() {
+        let unprocessed = filteredProjectFiles.filter { url in
+            let state = knowledgeGraph.documentProcessingState[url] ?? .unprocessed
+            return state == .unprocessed || state == .failed
+        }
+        guard !unprocessed.isEmpty else { return }
+
+        Task {
+            for url in unprocessed {
+                guard let document = PDFDocument(url: url) else { continue }
+                projectPipeline.processFullDocument(
+                    document: document, documentURL: url,
+                    graph: knowledgeGraph, aiService: aiService
+                )
+                while projectPipeline.isProcessing {
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+            }
+        }
+    }
+
     // MARK: - Computed Properties
     private var filteredProjects: [Project] {
         if projectsQuery.isEmpty {
