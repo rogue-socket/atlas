@@ -110,11 +110,14 @@ class ExtractionPipeline {
         }
 
         isProcessing = false
-        if !Task.isCancelled {
+        if Task.isCancelled {
+            graph.documentProcessingState[documentURL] = .unprocessed
+            log.info("=== Extraction cancelled for \(documentURL.lastPathComponent) ===")
+        } else {
             statusMessage = "Done — \(graph.nodeCount) concepts extracted"
+            graph.documentProcessingState[documentURL] = .complete
+            log.info("=== Extraction complete: \(graph.nodeCount) nodes, \(graph.edgeCount) edges ===")
         }
-        graph.documentProcessingState[documentURL] = .complete
-        log.info("=== Extraction complete: \(graph.nodeCount) nodes, \(graph.edgeCount) edges ===")
     }
 
     func processFullDocument(
