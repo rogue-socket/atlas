@@ -76,6 +76,7 @@ struct PDFViewerApp: App {
 
         Settings {
             PreferencesView()
+                .environment(aiServiceManager)
         }
     }
     

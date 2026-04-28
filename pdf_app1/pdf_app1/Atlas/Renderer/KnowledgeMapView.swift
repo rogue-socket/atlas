@@ -359,8 +359,8 @@ struct KnowledgeMapView: View {
                         .foregroundColor(.secondary.opacity(0.7))
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 280)
-                    Button("Open Settings") {
-                        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                    SettingsLink {
+                        Text("Open Settings")
                     }
                     .buttonStyle(.bordered)
                 }

@@ -2,7 +2,7 @@ import SwiftUI
 import PDFKit
 
 struct PreferencesView: View {
-    @State private var aiServiceManager = AIServiceManager()
+    @Environment(AIServiceManager.self) private var aiServiceManager
 
     var body: some View {
         TabView {
