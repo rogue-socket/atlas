@@ -47,22 +47,17 @@ class ExtractionPipeline {
         graph: KnowledgeGraph,
         aiService: AIServiceManager
     ) async {
-        guard !isProcessing else {
-            log.warning("processPages called while already processing — skipping")
-            return
-        }
-
         log.info("=== Starting extraction for \(documentURL.lastPathComponent), pages \(pageRange.lowerBound+1)-\(pageRange.upperBound) ===")
 
         guard let backend = aiService.createBackend() else {
             log.error("No AI backend configured (type=\(aiService.selectedBackendType.rawValue), model=\(aiService.selectedModel))")
             statusMessage = "AI backend not configured"
+            isProcessing = false
             return
         }
 
         log.info("Using backend: \(backend.displayName) / \(backend.modelIdentifier)")
 
-        isProcessing = true
         totalPages = pageRange.count
 
         var existingLabels = graph.allNodes.map { $0.label }
@@ -128,7 +123,12 @@ class ExtractionPipeline {
         graph: KnowledgeGraph,
         aiService: AIServiceManager
     ) {
+        guard !isProcessing else {
+            log.warning("processFullDocument called while already processing — queued by caller")
+            return
+        }
         log.info("processFullDocument: \(documentURL.lastPathComponent), \(document.pageCount) pages")
+        isProcessing = true
         graph.documentProcessingState[documentURL] = .processing
         scannedPDFDetected = false
         processingTask = Task {
