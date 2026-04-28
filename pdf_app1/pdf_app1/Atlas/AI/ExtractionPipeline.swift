@@ -45,7 +45,8 @@ class ExtractionPipeline {
         documentURL: URL,
         pageRange: Range<Int>,
         graph: KnowledgeGraph,
-        aiService: AIServiceManager
+        aiService: AIServiceManager,
+        projectID: UUID? = nil
     ) async {
         log.info("=== Starting extraction for \(documentURL.lastPathComponent), pages \(pageRange.lowerBound+1)-\(pageRange.upperBound) ===")
 
@@ -91,7 +92,8 @@ class ExtractionPipeline {
                     graph: graph,
                     backend: backend,
                     existingLabels: existingLabels,
-                    outlineHints: outlineHints
+                    outlineHints: outlineHints,
+                    projectID: projectID
                 )
                 // Update existing labels for next batch so the LLM doesn't re-extract
                 existingLabels = graph.allNodes.map { $0.label }
@@ -124,7 +126,8 @@ class ExtractionPipeline {
         document: PDFDocument,
         documentURL: URL,
         graph: KnowledgeGraph,
-        aiService: AIServiceManager
+        aiService: AIServiceManager,
+        projectID: UUID? = nil
     ) {
         guard !isProcessing else {
             log.warning("processFullDocument called while already processing — queued by caller")
@@ -140,7 +143,8 @@ class ExtractionPipeline {
                 documentURL: documentURL,
                 pageRange: 0..<document.pageCount,
                 graph: graph,
-                aiService: aiService
+                aiService: aiService,
+                projectID: projectID
             )
         }
     }
@@ -154,7 +158,8 @@ class ExtractionPipeline {
         graph: KnowledgeGraph,
         backend: any AtlasModel,
         existingLabels: [String],
-        outlineHints: [String]
+        outlineHints: [String],
+        projectID: UUID? = nil
     ) async throws {
         // Step 1: Extract text
         let pageResults = textExtractor.extractPages(from: document, pageRange: pageRange)
