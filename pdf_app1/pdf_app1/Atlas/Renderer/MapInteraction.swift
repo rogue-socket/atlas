@@ -16,8 +16,9 @@ class MapInteraction {
     var hoveredNodeID: UUID?
 
     private var dragStartOffset: CGPoint = .zero
-    private var isDraggingNode: Bool = false
+    private(set) var isDraggingNode: Bool = false
     private var draggingNodeID: UUID?
+    private var dragStartNodePosition: CGPoint = .zero
 
     // MARK: - Zoom
 
@@ -42,10 +43,10 @@ class MapInteraction {
     // MARK: - Pan
 
     func handleDragStart(at location: CGPoint, layout: ForceDirectedLayout, graph: KnowledgeGraph) {
-        // Check if we're clicking on a node
         if let nodeID = hitTest(location: location, layout: layout, graph: graph) {
             isDraggingNode = true
             draggingNodeID = nodeID
+            dragStartNodePosition = layout.point(for: nodeID) ?? .zero
             selectedNodeID = nodeID
         } else {
             isDraggingNode = false
@@ -56,16 +57,12 @@ class MapInteraction {
 
     func handleDragChanged(translation: CGSize, layout: ForceDirectedLayout) {
         if isDraggingNode, let nodeID = draggingNodeID {
-            // Move the node
-            if let currentPos = layout.point(for: nodeID) {
-                let newPos = CGPoint(
-                    x: currentPos.x + translation.width / viewScale,
-                    y: currentPos.y + translation.height / viewScale
-                )
-                layout.setPosition(newPos, for: nodeID)
-            }
+            let newPos = CGPoint(
+                x: dragStartNodePosition.x + translation.width / viewScale,
+                y: dragStartNodePosition.y + translation.height / viewScale
+            )
+            layout.setPosition(newPos, for: nodeID)
         } else {
-            // Pan the viewport
             viewOffset = CGPoint(
                 x: dragStartOffset.x + translation.width,
                 y: dragStartOffset.y + translation.height
@@ -117,10 +114,26 @@ class MapInteraction {
         return nil
     }
 
+    // MARK: - Scroll Wheel Zoom
+
+    func handleScrollWheel(deltaY: CGFloat, cursorLocation: CGPoint) {
+        let factor: CGFloat = deltaY > 0 ? 1.05 : 0.95
+        let newScale = max(0.1, min(5.0, viewScale * factor))
+        let cursorInGraph = CGPoint(
+            x: (cursorLocation.x - viewOffset.x) / viewScale,
+            y: (cursorLocation.y - viewOffset.y) / viewScale
+        )
+        viewScale = newScale
+        viewOffset = CGPoint(
+            x: cursorLocation.x - cursorInGraph.x * newScale,
+            y: cursorLocation.y - cursorInGraph.y * newScale
+        )
+    }
+
     // MARK: - Fit to Content
 
     func fitToContent(layout: ForceDirectedLayout, canvasSize: CGSize) {
-        guard !layout.positions.isEmpty else { return }
+        guard !layout.positions.isEmpty, !isDraggingNode else { return }
 
         let positions = layout.positions.values
         let minX = positions.map { $0.x }.min() ?? 0

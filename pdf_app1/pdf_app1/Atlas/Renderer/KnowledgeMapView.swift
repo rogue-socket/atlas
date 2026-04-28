@@ -91,6 +91,11 @@ struct KnowledgeMapView: View {
                                 interaction.handleDragEnded()
                             }
                     )
+                    .overlay {
+                        ScrollWheelOverlay { deltaY, location in
+                            interaction.handleScrollWheel(deltaY: deltaY, cursorLocation: location)
+                        }
+                    }
                     .onTapGesture { location in
                         interaction.handleClick(at: location, layout: layout, graph: graph)
                     }
@@ -130,12 +135,14 @@ struct KnowledgeMapView: View {
             }
             .onChange(of: graph.nodeCount) { _, newCount in
                 log.info("[MapView] graph.nodeCount changed to \(newCount)")
-                if newCount > 0 {
+                if newCount > 0 && !interaction.isDraggingNode {
                     recomputeLayout(canvasSize: geometry.size)
                 }
             }
             .onChange(of: zoomLevel) { _, _ in
-                recomputeLayout(canvasSize: geometry.size)
+                if !interaction.isDraggingNode {
+                    recomputeLayout(canvasSize: geometry.size)
+                }
             }
             .onAppear {
                 if graph.nodeCount > 0 {

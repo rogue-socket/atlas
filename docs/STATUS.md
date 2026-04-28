@@ -1,6 +1,6 @@
 # Atlas PDF Viewer - Current Status
 
-**Last updated:** 2026-04-27
+**Last updated:** 2026-04-28
 
 ## Quick Orientation
 
@@ -11,7 +11,19 @@ Key entry points:
 - `PDFViewerView.swift` — PDF viewer (~1800 lines, largest file)
 - `Atlas/` directory — knowledge map system (extraction pipeline, graph, renderer)
 
-## What Was Just Done (2026-04-27)
+## What Was Just Done (2026-04-28)
+
+Fixed two knowledge map interaction bugs (GitHub #15, #18):
+
+### Issue #15: Node drag fixes
+- **Root cause:** `handleDragChanged` applied cumulative translation on top of already-moved node position, causing runaway movement. Also, `selectedNodeID` set during drag could trigger layout recomputation which calls `fitToContent`, resetting the viewport.
+- **Fixes:** Store initial node position on drag start, compute new position from `startPos + delta`. Guard `fitToContent` and `recomputeLayout` with `isDraggingNode` flag. Made `isDraggingNode` publicly readable.
+
+### Issue #18: Scroll wheel zoom
+- **New file:** `ScrollWheelOverlay.swift` — `NSViewRepresentable` wrapper that captures `scrollWheel:` events from AppKit and forwards delta+location to `MapInteraction.handleScrollWheel()`.
+- **Zoom-toward-cursor:** `handleScrollWheel` adjusts both `viewScale` and `viewOffset` so the zoom centers on the cursor position.
+
+## What Was Done (2026-04-27)
 
 Implemented 4 UX fixes from `docs/UX_FIXES_PLAN.md`. All compile cleanly.
 
@@ -43,6 +55,14 @@ See `docs/UX_FIXES_PLAN.md` verification checklist (bottom of file) — those sc
 4. Project-level search (V2)
 
 ## Files Modified This Session
+
+| File | What changed |
+|------|-------------|
+| `MapInteraction.swift` | Fixed node drag position calc, added `handleScrollWheel`, guarded `fitToContent` during drag |
+| `KnowledgeMapView.swift` | Added `ScrollWheelOverlay`, guarded `recomputeLayout` during drag |
+| `ScrollWheelOverlay.swift` | **New** — NSViewRepresentable for scroll wheel capture |
+
+## Files Modified Previous Session
 
 | File | What changed |
 |------|-------------|
