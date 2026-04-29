@@ -82,7 +82,7 @@ struct KnowledgeMapView: View {
                     .gesture(
                         DragGesture()
                             .onChanged { value in
-                                if value.translation == .zero {
+                                if !interaction.isDragging {
                                     interaction.handleDragStart(at: value.startLocation, layout: layout, graph: graph)
                                 }
                                 interaction.handleDragChanged(translation: value.translation, layout: layout)
@@ -135,12 +135,12 @@ struct KnowledgeMapView: View {
             }
             .onChange(of: graph.nodeCount) { _, newCount in
                 log.info("[MapView] graph.nodeCount changed to \(newCount)")
-                if newCount > 0 && !interaction.isDraggingNode {
+                if newCount > 0 && !interaction.isDragging {
                     recomputeLayout(canvasSize: geometry.size)
                 }
             }
             .onChange(of: zoomLevel) { _, _ in
-                if !interaction.isDraggingNode {
+                if !interaction.isDragging {
                     recomputeLayout(canvasSize: geometry.size)
                 }
             }

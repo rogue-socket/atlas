@@ -186,4 +186,55 @@ class DocumentManager: ObservableObject {
     func openInNewWindow(_ document: PDFDocumentItem) {
         NSWorkspace.shared.open(document.url)
     }
+
+    // MARK: - Session Persistence
+
+    /// Save bookmarks for all currently open tabs so they can be restored on next launch.
+    func saveOpenSession() {
+        let bookmarks: [Data] = documents.compactMap { item in
+            try? item.url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+        }
+        if let encoded = try? JSONEncoder().encode(bookmarks) {
+            UserDefaults.standard.set(encoded, forKey: AppConstants.openSessionBookmarksKey)
+        }
+        log.info("[DocManager] saveOpenSession: saved \(bookmarks.count) tab(s)")
+    }
+
+    /// Restore tabs from the previous session's bookmarks.
+    /// Uses security-scoped access directly instead of `openDocument` because
+    /// `FileManager.isReadableFile` returns false for bookmark-resolved URLs in a sandboxed app.
+    func restoreOpenSession() {
+        guard let data = UserDefaults.standard.data(forKey: AppConstants.openSessionBookmarksKey),
+              let bookmarks = try? JSONDecoder().decode([Data].self, from: data) else {
+            return
+        }
+
+        var restoredCount = 0
+        for bookmark in bookmarks {
+            guard canAddDocument else { break }
+
+            var isStale = false
+            guard let url = try? URL(resolvingBookmarkData: bookmark, options: [.withSecurityScope, .withoutUI], relativeTo: nil, bookmarkDataIsStale: &isStale) else {
+                continue
+            }
+
+            // Start security-scoped access — do NOT stop it, the document needs
+            // continued access for rendering. Access is released on app termination.
+            _ = url.startAccessingSecurityScopedResource()
+
+            guard !documents.contains(where: { $0.url == url }) else { continue }
+            guard let document = PDFKit.PDFDocument(url: url) else {
+                url.stopAccessingSecurityScopedResource()
+                log.warning("[DocManager] restoreOpenSession: failed to open \(url.lastPathComponent)")
+                continue
+            }
+
+            let pdfDoc = PDFDocumentItem(url: url, document: document, projectID: nil)
+            documents.append(pdfDoc)
+            selectedDocumentID = pdfDoc.id
+            recentFilesManager?.addRecentFile(url)
+            restoredCount += 1
+        }
+        log.info("[DocManager] restoreOpenSession: restored \(restoredCount)/\(bookmarks.count) tab(s)")
+    }
 }

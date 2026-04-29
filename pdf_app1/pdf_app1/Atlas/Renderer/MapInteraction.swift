@@ -16,6 +16,7 @@ class MapInteraction {
     var hoveredNodeID: UUID?
 
     private var dragStartOffset: CGPoint = .zero
+    private(set) var isDragging: Bool = false
     private(set) var isDraggingNode: Bool = false
     private var draggingNodeID: UUID?
     private var dragStartNodePosition: CGPoint = .zero
@@ -43,6 +44,7 @@ class MapInteraction {
     // MARK: - Pan
 
     func handleDragStart(at location: CGPoint, layout: ForceDirectedLayout, graph: KnowledgeGraph) {
+        isDragging = true
         if let nodeID = hitTest(location: location, layout: layout, graph: graph) {
             isDraggingNode = true
             draggingNodeID = nodeID
@@ -71,6 +73,7 @@ class MapInteraction {
     }
 
     func handleDragEnded() {
+        isDragging = false
         isDraggingNode = false
         draggingNodeID = nil
     }
@@ -133,7 +136,7 @@ class MapInteraction {
     // MARK: - Fit to Content
 
     func fitToContent(layout: ForceDirectedLayout, canvasSize: CGSize) {
-        guard !layout.positions.isEmpty, !isDraggingNode else { return }
+        guard !layout.positions.isEmpty, !isDragging else { return }
 
         let positions = layout.positions.values
         let minX = positions.map { $0.x }.min() ?? 0

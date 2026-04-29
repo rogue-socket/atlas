@@ -27,11 +27,14 @@ struct SplitPaneContainer<PDFContent: View, MapContent: View>: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             case .split:
-                let leftWidth = geometry.size.width * splitFraction
-                let rightWidth = geometry.size.width * (1.0 - splitFraction) - 6
+                let dividerWidth: CGFloat = 6
+                let availableWidth = geometry.size.width - dividerWidth
+                let leftWidth = availableWidth * splitFraction
+                let rightWidth = availableWidth * (1.0 - splitFraction)
                 HStack(spacing: 0) {
                     pdfContent()
-                        .frame(width: max(leftWidth, 200))
+                        .frame(width: leftWidth)
+                        .clipped()
 
                     // Draggable divider
                     Rectangle()
@@ -47,9 +50,9 @@ struct SplitPaneContainer<PDFContent: View, MapContent: View>: View {
                             }
                         }
                         .gesture(
-                            DragGesture()
+                            DragGesture(coordinateSpace: .named("splitContainer"))
                                 .onChanged { value in
-                                    let newFraction = value.location.x / geometry.size.width
+                                    let newFraction = (value.location.x - dividerWidth / 2) / availableWidth
                                     var t = Transaction()
                                     t.isContinuous = true
                                     t.animation = nil
@@ -60,9 +63,11 @@ struct SplitPaneContainer<PDFContent: View, MapContent: View>: View {
                         )
 
                     mapContent()
-                        .frame(width: max(rightWidth, 200))
+                        .frame(width: rightWidth)
+                        .clipped()
                 }
             }
         }
+        .coordinateSpace(name: "splitContainer")
     }
 }

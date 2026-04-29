@@ -27,7 +27,12 @@ struct PDFViewerApp: App {
                 .frame(minWidth: AppConstants.minWindowWidth, minHeight: AppConstants.minWindowHeight)
                 .onAppear {
                     documentManager.recentFilesManager = recentFilesManager
+                    documentManager.restoreOpenSession()
                     configureWindow()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    documentManager.saveOpenSession()
+                    GraphStore.shared.flushPendingSave()
                 }
         }
         .defaultSize(width: NSScreen.main?.frame.width ?? AppConstants.minWindowWidth,

@@ -99,4 +99,6 @@ struct AppConstants {
     static let recentFilesBookmarksKey = "RecentPDFFilesBookmarks"
     /// UserDefaults key for window state preference
     static let windowStateKey = "WindowStatePreference"
+    /// UserDefaults key for open session tab bookmarks
+    static let openSessionBookmarksKey = "OpenSessionBookmarks"
 }
