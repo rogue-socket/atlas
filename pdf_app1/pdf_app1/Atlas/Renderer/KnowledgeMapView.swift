@@ -111,7 +111,7 @@ struct KnowledgeMapView: View {
             // Right: zoom controls
             .overlay(alignment: .topTrailing) {
                 if graph.nodeCount > 0 {
-                    actionControls
+                    actionControls(canvasSize: geometry.size)
                         .padding(.top, 44)
                         .padding(.trailing, 8)
                 }
@@ -142,6 +142,7 @@ struct KnowledgeMapView: View {
             .onChange(of: zoomLevel) { _, _ in
                 if !interaction.isDragging {
                     recomputeLayout(canvasSize: geometry.size)
+                    interaction.fitToContent(layout: layout, canvasSize: geometry.size)
                 }
             }
             .onAppear {
@@ -240,16 +241,20 @@ struct KnowledgeMapView: View {
 
     // MARK: - Action Controls
 
-    private var actionControls: some View {
+    private func actionControls(canvasSize: CGSize) -> some View {
         VStack(spacing: 4) {
             Button(action: { interaction.zoomIn() }) { Image(systemName: "plus.magnifyingglass") }
             Button(action: { interaction.zoomOut() }) { Image(systemName: "minus.magnifyingglass") }
             Button(action: {
-                if let geo = NSApplication.shared.keyWindow?.contentView?.bounds.size {
-                    interaction.fitToContent(layout: layout, canvasSize: geo)
-                }
+                interaction.fitToContent(layout: layout, canvasSize: canvasSize)
             }) { Image(systemName: "arrow.up.left.and.arrow.down.right") }
                 .help("Fit All")
+            Button(action: {
+                interaction.recenter(layout: layout, canvasSize: canvasSize)
+            }) {
+                Image(systemName: "location.fill")
+            }
+            .help("Recenter")
 
             if documentURL != nil && aiService.isConfigured {
                 Divider().frame(width: 16)

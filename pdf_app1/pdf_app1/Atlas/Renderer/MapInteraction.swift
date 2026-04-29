@@ -41,6 +41,18 @@ class MapInteraction {
         viewOffset = .zero
     }
 
+    /// Center the viewport on the graph content without changing zoom level.
+    func recenter(layout: ForceDirectedLayout, canvasSize: CGSize) {
+        guard !layout.positions.isEmpty else { return }
+        let positions = layout.positions.values
+        let midX = ((positions.map { $0.x }.min() ?? 0) + (positions.map { $0.x }.max() ?? 0)) / 2
+        let midY = ((positions.map { $0.y }.min() ?? 0) + (positions.map { $0.y }.max() ?? 0)) / 2
+        viewOffset = CGPoint(
+            x: canvasSize.width / 2 - midX * viewScale,
+            y: canvasSize.height / 2 - midY * viewScale
+        )
+    }
+
     // MARK: - Pan
 
     func handleDragStart(at location: CGPoint, layout: ForceDirectedLayout, graph: KnowledgeGraph) {

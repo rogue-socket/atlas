@@ -387,12 +387,14 @@ struct MultiDocumentView: View {
             if let doc = documentManager.selectedDocument {
                 syncManager.setDocumentURL(doc.url)
                 syncManager.setGraph(knowledgeGraph)
+                loadGraphIfNeeded(for: doc.url)
             }
         }
         .onAppear {
             if let doc = documentManager.selectedDocument {
                 syncManager.setDocumentURL(doc.url)
                 syncManager.setGraph(knowledgeGraph)
+                loadGraphIfNeeded(for: doc.url)
             }
         }
     }
@@ -1127,6 +1129,20 @@ struct MultiDocumentView: View {
                     try? await Task.sleep(for: .milliseconds(500))
                 }
             }
+        }
+    }
+
+    // MARK: - Graph Persistence
+
+    /// Load the persisted graph for a document if the current graph has no data for it.
+    private func loadGraphIfNeeded(for documentURL: URL) {
+        let alreadyHasNodes = knowledgeGraph.allNodes.contains { node in
+            node.sourceAnchors.contains { $0.documentURL == documentURL }
+        }
+        guard !alreadyHasNodes else { return }
+
+        if let saved = GraphStore.shared.load(for: documentURL) {
+            try? knowledgeGraph.decode(from: saved.encode())
         }
     }
 
