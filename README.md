@@ -6,6 +6,8 @@ Built entirely with Apple frameworks. No Electron, no web views, no external dep
 
 ![Atlas - PDF viewer with live knowledge map](docs/images/atlas-screenshot.png)
 
+![Atlas — knowledge map with bidirectional sync](docs/images/atlas-screenshot-2.png)
+
 ## Features
 
 - **PDF Viewer** - Full-featured reader with text-selection highlights, area annotations, search, bookmarks, thumbnails, multi-tab, comparison mode, print, and undo/redo
