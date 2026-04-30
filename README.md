@@ -4,6 +4,8 @@ A native macOS PDF reader that builds a live, AI-generated knowledge map as you 
 
 Built entirely with Apple frameworks. No Electron, no web views, no external dependencies.
 
+![Atlas — PDF viewer with live knowledge map](docs/images/atlas-screenshot.png)
+
 ## Features
 
 - **PDF Viewer** — Full-featured reader with text-selection highlights, area annotations, search, bookmarks, thumbnails, multi-tab, comparison mode, print, and undo/redo
