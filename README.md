@@ -1,28 +1,28 @@
 # Atlas
 
-A native macOS PDF reader that builds a live, AI-generated knowledge map as you read. Open any PDF and Atlas extracts concepts, definitions, theorems, and relationships — rendering them as an interactive force-directed graph linked back to every source passage. Add multiple PDFs to a project and Atlas merges shared concepts across documents, revealing connections you'd otherwise miss.
+A native macOS PDF reader that builds a live, AI-generated knowledge map as you read. Open any PDF and Atlas extracts concepts, definitions, theorems, and relationships - rendering them as an interactive force-directed graph linked back to every source passage. Add multiple PDFs to a project and Atlas merges shared concepts across documents, revealing connections you'd otherwise miss.
 
 Built entirely with Apple frameworks. No Electron, no web views, no external dependencies.
 
-![Atlas — PDF viewer with live knowledge map](docs/images/atlas-screenshot.png)
+![Atlas - PDF viewer with live knowledge map](docs/images/atlas-screenshot.png)
 
 ## Features
 
-- **PDF Viewer** — Full-featured reader with text-selection highlights, area annotations, search, bookmarks, thumbnails, multi-tab, comparison mode, print, and undo/redo
-- **Knowledge Map** — AI extracts concepts from your PDFs in 5-page batches and renders them as a force-directed graph (Fruchterman-Reingold) with semantic zoom levels: document → chapter → concept → entity
-- **Bidirectional Sync** — Scroll the PDF and the active concept lights up on the map. Click a map node and the PDF jumps to the source passage with a color-matched pulse highlight
-- **Cross-Document Correlations** — Add multiple PDFs to a project. Atlas merges shared concepts across documents using fuzzy matching and optional LLM-powered semantic merge proposals
-- **OCR Fallback** — Scanned PDFs with no embedded text are automatically detected; Vision OCR extracts text page-by-page so the AI pipeline can still analyze them
-- **Pluggable AI** — Bring your own API key for Claude, OpenAI, Gemini, or run locally via Ollama. API keys stored in macOS Keychain
-- **Projects** — Organize PDFs into projects with per-document and batch extraction, correlation stats, and a project-level sidebar showing processing state
-- **Export** — Export your knowledge graph to Obsidian (wikilinks), Markdown, or JSON
-- **Session Restore** — Persisted graphs load automatically when you reopen a document. Window state and split-pane layout are restored across launches
+- **PDF Viewer** - Full-featured reader with text-selection highlights, area annotations, search, bookmarks, thumbnails, multi-tab, comparison mode, print, and undo/redo
+- **Knowledge Map** - AI extracts concepts from your PDFs in 5-page batches and renders them as a force-directed graph (Fruchterman-Reingold) with semantic zoom levels: document → chapter → concept → entity
+- **Bidirectional Sync** - Scroll the PDF and the active concept lights up on the map. Click a map node and the PDF jumps to the source passage with a color-matched pulse highlight
+- **Cross-Document Correlations** - Add multiple PDFs to a project. Atlas merges shared concepts across documents using fuzzy matching and optional LLM-powered semantic merge proposals
+- **OCR Fallback** - Scanned PDFs with no embedded text are automatically detected; Vision OCR extracts text page-by-page so the AI pipeline can still analyze them
+- **Pluggable AI** - Bring your own API key for Claude, OpenAI, Gemini, or run locally via Ollama. API keys stored in macOS Keychain
+- **Projects** - Organize PDFs into projects with per-document and batch extraction, correlation stats, and a project-level sidebar showing processing state
+- **Export** - Export your knowledge graph to Obsidian (wikilinks), Markdown, or JSON
+- **Session Restore** - Persisted graphs load automatically when you reopen a document. Window state and split-pane layout are restored across launches
 
 ## Requirements
 
 - macOS 13.0 (Ventura) or later
 - Xcode 16.0 or later
-- No external dependencies — uses only Apple system frameworks (PDFKit, SwiftUI, AppKit, CryptoKit, Security, Vision)
+- No external dependencies - uses only Apple system frameworks (PDFKit, SwiftUI, AppKit, CryptoKit, Security, Vision)
 
 ## Getting Started
 
@@ -64,7 +64,7 @@ ollama pull llama3.1
 1. Open a PDF via the sidebar, Cmd+T, or drag-and-drop
 2. The split view shows the PDF on the left and the knowledge map on the right
 3. Click **Analyze Document** (brain icon) to start concept extraction
-4. Watch the progress bar as concepts appear — cancel anytime
+4. Watch the progress bar as concepts appear - cancel anytime
 5. Scroll the PDF to see the active node highlighted; click a node to jump to its source
 
 ## Keyboard Shortcuts
@@ -74,7 +74,7 @@ ollama pull llama3.1
 | Cmd+1 | PDF only |
 | Cmd+2 | Map only |
 | Cmd+3 | Split view (default) |
-| Cmd+K | Command palette — jump to any concept or page |
+| Cmd+K | Command palette - jump to any concept or page |
 | Cmd+F | Search (context-aware: searches whichever pane has focus) |
 | Cmd+T | New tab / open file |
 | Cmd+W | Close tab |
@@ -83,14 +83,14 @@ ollama pull llama3.1
 
 ## How It Works
 
-1. **Text Extraction** — PDFKit extracts text with bounding-box coordinates per block. For scanned PDFs, Vision OCR renders each page at 300 DPI and extracts text
-2. **Layout Analysis** — Heuristics classify blocks as headings, body, captions, footnotes, or equations
-3. **AI Concept Extraction** — Text (with ±2 pages context) is sent to the configured LLM in 5-page batches, which returns structured JSON with concepts, entities, source quotes, and typed relationships
-4. **JSON Repair** — LLM responses are cleaned (markdown fences stripped, truncated JSON repaired) before parsing
-5. **Source Anchoring** — Each concept's text span is mapped back to a PDF bounding box. Concepts without valid anchors are rejected (hallucination mitigation)
-6. **Graph Rendering** — Force-directed layout (Fruchterman-Reingold) with hierarchical grouping positions nodes. Entities are attracted 3x toward parent concepts. SwiftUI Canvas renders with frustum culling and zoom-dependent LOD (dots → boxes → labels → summaries)
-7. **Bidirectional Sync** — PDF scroll events update the active node; node clicks navigate the PDF with an 800ms pulse animation and color-coded highlight
-8. **Cross-Document Merge** — Within a project, shared concepts across PDFs are identified via Levenshtein similarity (>0.5) with optional LLM semantic matching, and presented as merge proposals
+1. **Text Extraction** - PDFKit extracts text with bounding-box coordinates per block. For scanned PDFs, Vision OCR renders each page at 300 DPI and extracts text
+2. **Layout Analysis** - Heuristics classify blocks as headings, body, captions, footnotes, or equations
+3. **AI Concept Extraction** - Text (with ±2 pages context) is sent to the configured LLM in 5-page batches, which returns structured JSON with concepts, entities, source quotes, and typed relationships
+4. **JSON Repair** - LLM responses are cleaned (markdown fences stripped, truncated JSON repaired) before parsing
+5. **Source Anchoring** - Each concept's text span is mapped back to a PDF bounding box. Concepts without valid anchors are rejected (hallucination mitigation)
+6. **Graph Rendering** - Force-directed layout (Fruchterman-Reingold) with hierarchical grouping positions nodes. Entities are attracted 3x toward parent concepts. SwiftUI Canvas renders with frustum culling and zoom-dependent LOD (dots → boxes → labels → summaries)
+7. **Bidirectional Sync** - PDF scroll events update the active node; node clicks navigate the PDF with an 800ms pulse animation and color-coded highlight
+8. **Cross-Document Merge** - Within a project, shared concepts across PDFs are identified via Levenshtein similarity (>0.5) with optional LLM semantic matching, and presented as merge proposals
 
 ## Project Structure
 
@@ -159,10 +159,10 @@ pdf_app1/pdf_app1/
 
 ## Data & Privacy
 
-- **Local-first** — All graphs, annotations, and settings are stored on your Mac
-- **API keys in Keychain** — Never stored in plain text or UserDefaults
-- **Minimal data sent** — Only the text of pages being analyzed is sent to the AI provider (5-page batches)
-- **No Atlas cloud** — There is no server component. Your documents stay on your machine
+- **Local-first** - All graphs, annotations, and settings are stored on your Mac
+- **API keys in Keychain** - Never stored in plain text or UserDefaults
+- **Minimal data sent** - Only the text of pages being analyzed is sent to the AI provider (5-page batches)
+- **No Atlas cloud** - There is no server component. Your documents stay on your machine
 
 ## License
 
