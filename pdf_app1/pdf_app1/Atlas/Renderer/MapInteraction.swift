@@ -20,12 +20,24 @@ class MapInteraction {
     private(set) var isDraggingNode: Bool = false
     private var draggingNodeID: UUID?
     private var dragStartNodePosition: CGPoint = .zero
+    private var magnificationStartScale: CGFloat = 1.0
+    private var isMagnifying: Bool = false
 
     // MARK: - Zoom
 
-    func handleMagnification(_ value: CGFloat, anchor: CGPoint) {
-        let newScale = max(0.1, min(5.0, viewScale * value))
-        viewScale = newScale
+    /// Apply a pinch magnification. `magnification` is the cumulative factor since
+    /// the gesture started (1.0 = unchanged), so we anchor against the scale
+    /// captured on gesture start to avoid exponential compounding.
+    func handleMagnificationChanged(_ magnification: CGFloat) {
+        if !isMagnifying {
+            magnificationStartScale = viewScale
+            isMagnifying = true
+        }
+        viewScale = max(0.1, min(5.0, magnificationStartScale * magnification))
+    }
+
+    func handleMagnificationEnded() {
+        isMagnifying = false
     }
 
     func zoomIn() {

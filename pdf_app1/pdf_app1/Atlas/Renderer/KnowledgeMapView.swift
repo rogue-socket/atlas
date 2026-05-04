@@ -76,7 +76,10 @@ struct KnowledgeMapView: View {
                     .gesture(
                         MagnifyGesture()
                             .onChanged { value in
-                                interaction.handleMagnification(value.magnification, anchor: .zero)
+                                interaction.handleMagnificationChanged(value.magnification)
+                            }
+                            .onEnded { _ in
+                                interaction.handleMagnificationEnded()
                             }
                     )
                     .gesture(
