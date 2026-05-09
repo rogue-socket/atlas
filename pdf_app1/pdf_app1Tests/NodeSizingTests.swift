@@ -120,4 +120,47 @@ final class NodeSizingTests: XCTestCase {
         let node = try JSONDecoder().decode(ConceptNode.self, from: Data(json.utf8))
         XCTAssertEqual(node.hierarchyLevel, 2, "explicit hierarchyLevel should be preserved")
     }
+
+    // MARK: - isDocumentSummary round-trip & legacy decode
+
+    func testDecodingWithoutIsDocumentSummaryDefaultsFalse() throws {
+        let json = """
+        {
+            "id": "00000000-0000-0000-0000-000000000004",
+            "label": "Pre-field Node",
+            "type": "concept",
+            "sourceAnchors": [],
+            "readingState": "unseen",
+            "expansionState": "collapsed",
+            "confidence": 1.0,
+            "isPinned": false,
+            "level": "concept",
+            "hierarchyLevel": 0
+        }
+        """
+        let node = try JSONDecoder().decode(ConceptNode.self, from: Data(json.utf8))
+        XCTAssertFalse(node.isDocumentSummary, "legacy JSON without isDocumentSummary should decode to false")
+    }
+
+    func testIsDocumentSummaryRoundTripsThroughCodable() throws {
+        let summaryNode = ConceptNode(
+            label: "Document Summary",
+            type: .concept,
+            hierarchyLevel: -1,
+            isDocumentSummary: true
+        )
+        let regularNode = ConceptNode(
+            label: "Regular Concept",
+            type: .concept
+        )
+
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+
+        let summaryDecoded = try decoder.decode(ConceptNode.self, from: encoder.encode(summaryNode))
+        XCTAssertTrue(summaryDecoded.isDocumentSummary, "isDocumentSummary=true should survive round-trip")
+
+        let regularDecoded = try decoder.decode(ConceptNode.self, from: encoder.encode(regularNode))
+        XCTAssertFalse(regularDecoded.isDocumentSummary, "default isDocumentSummary=false should survive round-trip")
+    }
 }
