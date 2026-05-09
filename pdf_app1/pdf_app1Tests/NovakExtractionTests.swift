@@ -182,8 +182,10 @@ final class NovakExtractionTests: XCTestCase {
         XCTAssertEqual(decoded.label, "Cellular respiration")
     }
 
-    func test_conceptNode_hierarchyLevel_legacyJSON_defaultsTo1() throws {
-        // Simulate a graph file saved before hierarchyLevel existed
+    func test_conceptNode_hierarchyLevel_legacyJSON_defaultsByLevel() throws {
+        // Simulate a graph file saved before hierarchyLevel existed.
+        // Default is level-aware: concept → 0 (root), entity → 1 (sub).
+        // Full coverage lives in NodeSizingTests.testDecodingWithoutHierarchyLevelDefaultsFromNodeLevel.
         let legacyJSON = """
         {
             "id": "550e8400-e29b-41d4-a716-446655440000",
@@ -199,7 +201,7 @@ final class NovakExtractionTests: XCTestCase {
         """.data(using: .utf8)!
 
         let node = try JSONDecoder().decode(ConceptNode.self, from: legacyJSON)
-        XCTAssertEqual(node.hierarchyLevel, 1, "Legacy nodes without hierarchyLevel should default to 1")
+        XCTAssertEqual(node.hierarchyLevel, 0, "Legacy concept-level nodes should default to hierarchyLevel 0")
     }
 
     // MARK: - GraphEdge: subtopicOf type + label

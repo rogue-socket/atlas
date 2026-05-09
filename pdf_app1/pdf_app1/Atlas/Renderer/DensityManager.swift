@@ -26,13 +26,23 @@ class DensityManager {
 
         switch zoomLevel {
         case .document:
-            // One node per source document
-            var seen = Set<String>()
-            return allNodes.filter { node in
-                guard let doc = node.sourceAnchors.first?.documentURL.lastPathComponent else { return false }
-                if seen.contains(doc) { return false }
-                seen.insert(doc)
-                return true
+            // One representative node per source document. Prefer the LLM-generated
+            // document-summary node; fall back to the highest-degree root concept
+            // (legacy graphs without a summary node still get a sensible pick).
+            var byDoc: [String: [ConceptNode]] = [:]
+            for node in allNodes {
+                guard let doc = node.sourceAnchors.first?.documentURL.lastPathComponent else { continue }
+                byDoc[doc, default: []].append(node)
+            }
+            return byDoc.values.compactMap { candidates in
+                if let summary = candidates.first(where: { $0.isDocumentSummary }) {
+                    return summary
+                }
+                let roots = candidates.filter { $0.hierarchyLevel == 0 && $0.level == .concept }
+                if let best = roots.max(by: { graph.edges(for: $0.id).count < graph.edges(for: $1.id).count }) {
+                    return best
+                }
+                return candidates.first
             }
 
         case .chapter:

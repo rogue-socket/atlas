@@ -133,15 +133,20 @@ class ExtractionPipeline {
             pageIndex = batchEnd
         }
 
-        isProcessing = false
         if Task.isCancelled {
+            isProcessing = false
             graph.documentProcessingState[documentURL] = .unprocessed
             log.info("=== Extraction cancelled for \(documentURL.lastPathComponent) ===")
-        } else {
-            statusMessage = "Done — \(graph.nodeCount) concepts extracted"
-            graph.documentProcessingState[documentURL] = .complete
-            log.info("=== Extraction complete: \(graph.nodeCount) nodes, \(graph.edgeCount) edges ===")
+            return
         }
+
+        statusMessage = "Generating document summary..."
+        await Self.appendDocumentSummary(graph: graph, documentURL: documentURL, backend: backend)
+
+        isProcessing = false
+        statusMessage = "Done — \(graph.nodeCount) concepts extracted"
+        graph.documentProcessingState[documentURL] = .complete
+        log.info("=== Extraction complete: \(graph.nodeCount) nodes, \(graph.edgeCount) edges ===")
     }
 
     func processFullDocument(
@@ -540,5 +545,92 @@ class ExtractionPipeline {
         }
 
         return nil
+    }
+}
+
+// MARK: - Document Summary Generation
+
+extension ExtractionPipeline {
+    /// Generate (or replace) a per-document summary node by feeding the top root
+    /// concepts to the backend's existing `summarizeConcept` method.
+    /// Inserted with `isDocumentSummary = true` and `hierarchyLevel = -1` so the
+    /// `.document` semantic-zoom level can find it.
+    static func appendDocumentSummary(
+        graph: KnowledgeGraph,
+        documentURL: URL,
+        backend: any AtlasModel
+    ) async {
+        let docFilename = documentURL.lastPathComponent
+
+        let rootConcepts = graph.allNodes
+            .filter { node in
+                node.level == .concept &&
+                node.hierarchyLevel == 0 &&
+                !node.isDocumentSummary &&
+                node.sourceAnchors.contains { $0.documentURL == documentURL }
+            }
+            .sorted { graph.edges(for: $0.id).count > graph.edges(for: $1.id).count }
+            .prefix(8)
+
+        guard !rootConcepts.isEmpty else {
+            log.info("[Summary] No root concepts for \(docFilename), skipping doc summary")
+            return
+        }
+
+        let bullets = rootConcepts.map { node -> String in
+            if let s = node.summary, !s.isEmpty { return "- \(node.label): \(s)" }
+            return "- \(node.label)"
+        }.joined(separator: "\n")
+
+        let sourceText = """
+        Document: \(docFilename)
+
+        Key concepts extracted from this document:
+        \(bullets)
+        """
+
+        let summaryText: String
+        do {
+            summaryText = try await backend.summarizeConcept(docFilename, sourceText: sourceText)
+        } catch {
+            log.error("[Summary] LLM call failed for \(docFilename): \(error.localizedDescription)")
+            return
+        }
+
+        let trimmed = summaryText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            log.warning("[Summary] LLM returned empty summary for \(docFilename)")
+            return
+        }
+
+        if let existing = graph.allNodes.first(where: {
+            $0.isDocumentSummary && $0.sourceAnchors.contains { $0.documentURL == documentURL }
+        }) {
+            var updated = existing
+            updated.label = docFilename
+            updated.summary = trimmed
+            graph.updateNode(updated)
+            log.info("[Summary] Replaced doc summary node for \(docFilename)")
+            return
+        }
+
+        let anchor = SourceAnchor(
+            documentURL: documentURL,
+            pageIndex: 0,
+            boundingBox: .zero,
+            textSnippet: ""
+        )
+        let node = ConceptNode(
+            label: docFilename,
+            type: .concept,
+            summary: trimmed,
+            sourceAnchors: [anchor],
+            confidence: 1.0,
+            level: .concept,
+            hierarchyLevel: -1,
+            isDocumentSummary: true
+        )
+        graph.addNode(node)
+        log.info("[Summary] Added doc summary node for \(docFilename)")
     }
 }

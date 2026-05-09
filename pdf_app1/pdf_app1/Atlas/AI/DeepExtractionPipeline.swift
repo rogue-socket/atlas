@@ -205,6 +205,9 @@ class DeepExtractionPipeline {
             log.error("[Deep] Pass 3 error: \(error)")
         }
 
+        statusMessage = "Generating document summary..."
+        await ExtractionPipeline.appendDocumentSummary(graph: graph, documentURL: documentURL, backend: backend)
+
         isProcessing = false
         statusMessage = "Done — \(graph.nodeCount) concepts, \(graph.edgeCount) edges (Deep)"
         log.info("[Deep] Complete: \(graph.nodeCount) nodes, \(graph.edgeCount) edges")

@@ -42,9 +42,27 @@ class GraphStore {
 
     // MARK: - Save / Load per Document
 
+    private struct StoredGraph: Codable {
+        let mtime: TimeInterval?
+        let size: Int?
+        let payload: Data
+    }
+
+    private func currentMtimeAndSize(for documentURL: URL) -> (TimeInterval?, Int?) {
+        guard let attrs = try? fileManager.attributesOfItem(atPath: documentURL.path) else {
+            return (nil, nil)
+        }
+        let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970
+        let size = attrs[.size] as? Int
+        return (mtime, size)
+    }
+
     func save(_ graph: KnowledgeGraph, for documentURL: URL) {
         do {
-            let data = try graph.encode()
+            let payload = try graph.encode()
+            let (mtime, size) = currentMtimeAndSize(for: documentURL)
+            let stored = StoredGraph(mtime: mtime, size: size, payload: payload)
+            let data = try JSONEncoder().encode(stored)
             let fileURL = graphFileURL(for: documentURL)
             try data.write(to: fileURL, options: .atomic)
             log.info("[GraphStore] Saved graph for \(documentURL.lastPathComponent): \(graph.nodeCount) nodes, \(graph.edgeCount) edges (\(data.count) bytes)")
@@ -62,9 +80,28 @@ class GraphStore {
 
         do {
             let data = try Data(contentsOf: fileURL)
+
+            // New format: invalidate when source mtime or size changed since save.
+            if let stored = try? JSONDecoder().decode(StoredGraph.self, from: data) {
+                let (currentMtime, currentSize) = currentMtimeAndSize(for: documentURL)
+                if let saved = stored.mtime, let cur = currentMtime, abs(saved - cur) > 1.0 {
+                    log.info("[GraphStore] Stale graph (mtime changed) for \(documentURL.lastPathComponent), invalidating")
+                    return nil
+                }
+                if let saved = stored.size, let cur = currentSize, saved != cur {
+                    log.info("[GraphStore] Stale graph (size changed) for \(documentURL.lastPathComponent), invalidating")
+                    return nil
+                }
+                let graph = KnowledgeGraph()
+                try graph.decode(from: stored.payload)
+                log.info("[GraphStore] Loaded graph for \(documentURL.lastPathComponent): \(graph.nodeCount) nodes, \(graph.edgeCount) edges")
+                return graph
+            }
+
+            // Legacy format (pre-StoredGraph): no mtime check available.
             let graph = KnowledgeGraph()
             try graph.decode(from: data)
-            log.info("[GraphStore] Loaded graph for \(documentURL.lastPathComponent): \(graph.nodeCount) nodes, \(graph.edgeCount) edges")
+            log.info("[GraphStore] Loaded legacy graph for \(documentURL.lastPathComponent) (no mtime check)")
             return graph
         } catch {
             log.error("[GraphStore] Failed to load graph for \(documentURL.lastPathComponent): \(error)")

@@ -195,6 +195,14 @@ final class ProjectsManager: ObservableObject {
     }
 
     func deleteProject(_ projectID: UUID) {
+        if let project = projects.first(where: { $0.id == projectID }) {
+            for file in project.files {
+                if let url = resolveURL(for: projectID, fileID: file.id) {
+                    GraphStore.shared.deleteGraph(for: url)
+                }
+            }
+            GraphStore.shared.deleteProjectGraph(projectID: projectID)
+        }
         projects.removeAll { $0.id == projectID }
         if selectedProjectID == projectID {
             selectedProjectID = projects.first?.id

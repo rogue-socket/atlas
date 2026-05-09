@@ -46,6 +46,7 @@ struct ConceptNode: Identifiable, Hashable {
     var parentConceptID: UUID?
     var highlightColorIndex: Int?
     var hierarchyLevel: Int
+    var isDocumentSummary: Bool
 
     init(
         id: UUID = UUID(),
@@ -62,7 +63,8 @@ struct ConceptNode: Identifiable, Hashable {
         level: NodeLevel = .concept,
         parentConceptID: UUID? = nil,
         highlightColorIndex: Int? = nil,
-        hierarchyLevel: Int = 1
+        hierarchyLevel: Int = 1,
+        isDocumentSummary: Bool = false
     ) {
         self.id = id
         self.label = label
@@ -79,6 +81,7 @@ struct ConceptNode: Identifiable, Hashable {
         self.parentConceptID = parentConceptID
         self.highlightColorIndex = highlightColorIndex
         self.hierarchyLevel = hierarchyLevel
+        self.isDocumentSummary = isDocumentSummary
     }
 }
 
@@ -88,6 +91,7 @@ extension ConceptNode: Codable {
         case id, label, type, summary, sourceAnchors, readingState, expansionState
         case confidence, isPinned, position, parentChapterID
         case level, parentConceptID, highlightColorIndex, hierarchyLevel
+        case isDocumentSummary
     }
 
     init(from decoder: Decoder) throws {
@@ -106,7 +110,8 @@ extension ConceptNode: Codable {
         level = try c.decodeIfPresent(NodeLevel.self, forKey: .level) ?? .concept
         parentConceptID = try c.decodeIfPresent(UUID.self, forKey: .parentConceptID)
         highlightColorIndex = try c.decodeIfPresent(Int.self, forKey: .highlightColorIndex)
-        hierarchyLevel = try c.decodeIfPresent(Int.self, forKey: .hierarchyLevel) ?? 1
+        hierarchyLevel = try c.decodeIfPresent(Int.self, forKey: .hierarchyLevel) ?? (level == .concept ? 0 : 1)
+        isDocumentSummary = try c.decodeIfPresent(Bool.self, forKey: .isDocumentSummary) ?? false
     }
 }
 

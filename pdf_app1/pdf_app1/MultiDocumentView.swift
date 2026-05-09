@@ -264,6 +264,10 @@ struct MultiDocumentView: View {
     @Environment(AIServiceManager.self) var aiService
 
     @State private var projectPipeline = ExtractionPipeline()
+    @AppStorage("atlas.extraction.mode") private var selectedModeRaw: String = ExtractionMode.fast.rawValue
+    private var selectedMode: ExtractionMode {
+        ExtractionMode(rawValue: selectedModeRaw) ?? .fast
+    }
     @State private var selectedPDF: PDFDocument?
     @State private var selectedPDFURL: URL?
     @State private var annotationMode: AnnotationMode = .none
@@ -639,6 +643,10 @@ struct MultiDocumentView: View {
                 showingRenameProject = true
             }
             Button("Delete", role: .destructive) {
+                let openDocsInProject = documentManager.documents.filter { $0.projectID == project.id }
+                for doc in openDocsInProject {
+                    documentManager.closeDocument(doc)
+                }
                 projectsManager.deleteProject(project.id)
             }
         }
@@ -1109,7 +1117,8 @@ struct MultiDocumentView: View {
         guard let document = PDFDocument(url: url) else { return }
         projectPipeline.processFullDocument(
             document: document, documentURL: url,
-            graph: knowledgeGraph, aiService: aiService
+            graph: knowledgeGraph, aiService: aiService,
+            mode: selectedMode
         )
     }
 
@@ -1125,7 +1134,8 @@ struct MultiDocumentView: View {
                 guard let document = PDFDocument(url: url) else { continue }
                 projectPipeline.processFullDocument(
                     document: document, documentURL: url,
-                    graph: knowledgeGraph, aiService: aiService
+                    graph: knowledgeGraph, aiService: aiService,
+                    mode: selectedMode
                 )
                 while projectPipeline.isProcessing {
                     try? await Task.sleep(for: .milliseconds(500))
@@ -1136,7 +1146,7 @@ struct MultiDocumentView: View {
 
     // MARK: - Graph Persistence
 
-    /// Load the persisted graph for a document if the current graph has no data for it.
+    /// Load the persisted graph for a document, replacing any in-memory graph from a previously-active document.
     private func loadGraphIfNeeded(for documentURL: URL) {
         let alreadyHasNodes = knowledgeGraph.allNodes.contains { node in
             node.sourceAnchors.contains { $0.documentURL == documentURL }
@@ -1145,6 +1155,8 @@ struct MultiDocumentView: View {
 
         if let saved = GraphStore.shared.load(for: documentURL) {
             try? knowledgeGraph.decode(from: saved.encode())
+        } else {
+            knowledgeGraph.clear()
         }
     }
 
