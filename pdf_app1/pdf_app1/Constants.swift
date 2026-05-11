@@ -10,6 +10,7 @@ import SwiftUI
 
 enum AnnotationMode: Equatable {
     case none
+    case select
     case highlightText
     case highlightArea
     case text
