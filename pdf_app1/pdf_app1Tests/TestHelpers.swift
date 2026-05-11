@@ -25,3 +25,15 @@ func makeTempDirectory() throws -> URL {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
 }
+
+extension XCTestCase {
+    /// Fence both `RecentFilesManager.fileCheckQueue` and the main queue so
+    /// any pending file-existence checks and their `inaccessibleFiles`
+    /// mutations have completed before the next assertion.
+    func waitForFileChecks(_ manager: RecentFilesManager, timeout: TimeInterval = 1.0) {
+        manager.fileCheckQueue.sync { }
+        let exp = expectation(description: "drain main after file checks")
+        DispatchQueue.main.async { exp.fulfill() }
+        wait(for: [exp], timeout: timeout)
+    }
+}

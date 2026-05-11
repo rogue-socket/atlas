@@ -7,7 +7,7 @@ Durable "someday/maybe" items — distinct from session-level Unresolved (which 
 
 ## Bugs
 
-- `[bug 2026-05-11]` **`RecentFilesManager.autoRemoveStaleFiles()` never fires.** Called from `init` at line 58, immediately after `loadRecentFiles()` — but `inaccessibleFiles` is populated *asynchronously* by `fileCheckQueue.async` (line 161-167) that hasn't run yet by the time `autoRemoveStaleFiles` reads it. `inaccessibleFiles` also isn't persisted to disk across launches, so nothing carries over from a prior session either. Net: the "auto-remove a recent-files entry after it's been seen stale 3 times" mechanism is dead code. Fix options: (a) make the file-existence check synchronous before `autoRemoveStaleFiles` runs, (b) persist `inaccessibleFiles` paths and check them on init, (c) restructure so `autoRemoveStaleFiles` runs as a continuation after the async checks. Discovered while planning TDD coverage for cross-reboot bookmark persistence.
+<!-- Fixed 2026-05-11: RecentFilesManager.autoRemoveStaleFiles never fired (init's sync call read inaccessibleFiles before the async file-check populated it). Restructured init to dispatch autoRemoveStaleFiles as a barrier on fileCheckQueue → main, so it runs as a continuation after async checks. Coverage: testInaccessibleFileMarkedAfterAsyncCheck (tracer), testInaccessibleFileAutoRemovedAfterThreeStaleLaunches (the bug), testRemoveInaccessibleFileResetsStaleCounter (counter-reset on manual remove). -->
 
 <!-- Fixed 2026-05-07 (on wip/feature-cherry-pick, not yet committed):
   - Shared in-memory graph leaks across documents → MultiDocumentView.loadGraphIfNeeded clears when no saved graph

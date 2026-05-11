@@ -46,7 +46,7 @@ class RecentFilesManager: ObservableObject {
     private let staleLaunchCounterKey = "RecentFiles.staleLaunchCounter"
     private let userDefaults: UserDefaults
     private let bookmarker: RecentFilesBookmarking
-    private let fileCheckQueue = DispatchQueue(label: "file.check", qos: .utility)
+    let fileCheckQueue = DispatchQueue(label: "file.check", qos: .utility)
     private var fileCheckWorkItem: DispatchWorkItem?
     private var lastFileCheckTime: Date = Date.distantPast
     private let fileCheckThrottleInterval: TimeInterval = 5.0
@@ -55,7 +55,16 @@ class RecentFilesManager: ObservableObject {
         self.userDefaults = userDefaults
         self.bookmarker = bookmarker
         loadRecentFiles()
-        autoRemoveStaleFiles()
+        // autoRemoveStaleFiles must run AFTER the async file-existence checks
+        // queued by loadRecentFiles populate `inaccessibleFiles`. fileCheckQueue
+        // is serial, so this trailing dispatch acts as a barrier; the inner
+        // main.async then runs after the per-file `inaccessibleFiles.insert`
+        // hops (also queued on main).
+        fileCheckQueue.async { [weak self] in
+            DispatchQueue.main.async {
+                self?.autoRemoveStaleFiles()
+            }
+        }
     }
     
     /// Add a file to recent files list using security-scoped bookmark
