@@ -195,6 +195,7 @@ struct PDFViewerView: View {
     @Binding var annotationMode: AnnotationMode
     @Binding var highlightColor: Color
     let notificationManager: NotificationManager
+    let toolbarBridge: PDFToolbarBridge
     @EnvironmentObject var alertManager: AlertManager
 
     @StateObject private var undoRedoManager = UndoRedoManager()
@@ -203,7 +204,6 @@ struct PDFViewerView: View {
     @State private var pdfView = HighlightingPDFView()
     @State private var currentPage: PDFPage?
     @State private var isSaving = false
-    @State private var toolbarIsCompact = false
     @State private var autoSaveWorkItem: DispatchWorkItem?
     @State private var showingSearch = false
     @State private var isFullscreen = false
@@ -228,282 +228,10 @@ struct PDFViewerView: View {
 
     @State private var inkStrokeWidth: CGFloat = 2.0
 
-    private var toolbarDivider: some View {
-        Divider()
-            .frame(height: 16)
-            .padding(.horizontal, 2)
-    }
-
-    // MARK: - Compact Toolbar (categorized burger menus)
-
-    private var compactToolbarMenus: some View {
-        HStack(spacing: 2) {
-            // View menu
-            Menu {
-                Section("Display Mode") {
-                    Button("Single Page") { setDisplayMode(.singlePage) }
-                    Button("Continuous") { setDisplayMode(.singlePageContinuous) }
-                    Button("Two Pages") { setDisplayMode(.twoUp) }
-                    Button("Two Pages Continuous") { setDisplayMode(.twoUpContinuous) }
-                }
-                Section("Rotation") {
-                    Button("Rotate Left") { rotatePageCCW() }
-                    Button("Rotate Right") { rotatePageCW() }
-                }
-                Section("Reading Mode") {
-                    Button("Normal") { setReadingMode(.normal) }
-                    Button("Sepia") { setReadingMode(.sepia) }
-                    Button("Dark") { setReadingMode(.dark) }
-                }
-                Section("Panels") {
-                    Button("Thumbnails") { sidebarPanel = sidebarPanel == .thumbnails ? nil : .thumbnails }
-                    Button("Table of Contents") { sidebarPanel = sidebarPanel == .outline ? nil : .outline }
-                    Button("Annotations") { sidebarPanel = sidebarPanel == .annotations ? nil : .annotations }
-                }
-            } label: {
-                Image(systemName: "rectangle.split.2x1")
-            }
-            .help("View")
-
-            // Markup menu
-            Menu {
-                Section("Markup") {
-                    Button("None") { annotationMode = .none }
-                    Button("Highlight") { annotationMode = .highlightText }
-                    Button("Underline") { annotationMode = .underline }
-                    Button("Strikethrough") { annotationMode = .strikethrough }
-                    Button("Area Highlight") { annotationMode = .highlightArea }
-                }
-                Section("Shapes") {
-                    Button("Rectangle") { annotationMode = .rectangle }
-                    Button("Circle") { annotationMode = .circle }
-                    Button("Line") { annotationMode = .line }
-                    Button("Arrow") { annotationMode = .arrow }
-                }
-                Section("Other") {
-                    Button("Text") { annotationMode = .text }
-                    Button("Sticky Note") { annotationMode = .stickyNote }
-                    Button("Ink") { annotationMode = .ink }
-                }
-            } label: {
-                Image(systemName: annotationModeLabel.icon)
-            }
-            .help("Markup")
-
-            if annotationUsesColor {
-                ColorPicker("", selection: $highlightColor)
-                    .labelsHidden()
-            }
-
-            // Tools menu
-            Menu {
-                Button("Search") { showingSearch.toggle() }
-                Button("Undo") { performUndo() }
-                    .disabled(!undoRedoManager.canUndo)
-                Button("Redo") { performRedo() }
-                    .disabled(!undoRedoManager.canRedo)
-                Divider()
-                Button(bookmarkManager.isBookmarked(currentPageIndex) ? "Remove Bookmark" : "Add Bookmark") {
-                    bookmarkManager.toggle(currentPageIndex)
-                }
-                if !bookmarkManager.bookmarks.isEmpty {
-                    Divider()
-                    ForEach(bookmarkManager.bookmarks, id: \.self) { index in
-                        Button("Page \(index + 1)") { goToPage(index) }
-                    }
-                }
-                Divider()
-                Button("Fullscreen") { toggleFullscreen() }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-            }
-            .help("Tools")
-        }
-        .buttonStyle(.borderless)
-        // Keep hidden keyboard shortcuts active
-        .background(
-            Group {
-                Button("") { showingSearch.toggle() }
-                    .keyboardShortcut("f", modifiers: .command)
-                Button("") { performUndo() }
-                    .keyboardShortcut("z", modifiers: .command)
-                Button("") { performRedo() }
-                    .keyboardShortcut("z", modifiers: [.command, .shift])
-                Button("") { toggleFullscreen() }
-                    .keyboardShortcut("f", modifiers: [.command, .control])
-            }
-            .frame(width: 0, height: 0).opacity(0)
-        )
-    }
-
-    // MARK: - Expanded Toolbar (full controls)
-
-    private var expandedToolbarControls: some View {
-        HStack(spacing: 4) {
-            // Display & Reading
-            Menu {
-                Section("Display Mode") {
-                    Button("Single Page") { setDisplayMode(.singlePage) }
-                    Button("Continuous") { setDisplayMode(.singlePageContinuous) }
-                    Button("Two Pages") { setDisplayMode(.twoUp) }
-                    Button("Two Pages Continuous") { setDisplayMode(.twoUpContinuous) }
-                }
-                Section("Rotation") {
-                    Button("Rotate Left") { rotatePageCCW() }
-                    Button("Rotate Right") { rotatePageCW() }
-                }
-                Section("Reading Mode") {
-                    Button("Normal") { setReadingMode(.normal) }
-                    Button("Sepia") { setReadingMode(.sepia) }
-                    Button("Dark") { setReadingMode(.dark) }
-                }
-            } label: {
-                Image(systemName: "rectangle.split.2x1")
-            }
-            .help("Display & Reading")
-
-            toolbarDivider
-
-            // Search
-            Button(action: { showingSearch.toggle() }) {
-                Image(systemName: "magnifyingglass")
-            }
-            .help("Search (⌘F)")
-            .keyboardShortcut("f", modifiers: .command)
-
-            // Annotation
-            Menu {
-                Section("Markup") {
-                    Button("None") { annotationMode = .none }
-                    Button("Highlight") { annotationMode = .highlightText }
-                    Button("Underline") { annotationMode = .underline }
-                    Button("Strikethrough") { annotationMode = .strikethrough }
-                    Button("Area Highlight") { annotationMode = .highlightArea }
-                }
-                Section("Shapes") {
-                    Button("Rectangle") { annotationMode = .rectangle }
-                    Button("Circle") { annotationMode = .circle }
-                    Button("Line") { annotationMode = .line }
-                    Button("Arrow") { annotationMode = .arrow }
-                }
-                Section("Other") {
-                    Button("Text") { annotationMode = .text }
-                    Button("Sticky Note") { annotationMode = .stickyNote }
-                    Button("Ink") { annotationMode = .ink }
-                }
-            } label: {
-                Label(annotationModeLabel.title, systemImage: annotationModeLabel.icon)
-                    .labelStyle(.titleAndIcon)
-            }
-            .help("Annotation")
-            .fixedSize()
-
-            if annotationUsesColor {
-                ColorPicker("", selection: $highlightColor)
-                    .labelsHidden()
-            }
-
-            toolbarDivider
-
-            // Panels
-            HStack(spacing: 1) {
-                Button(action: { sidebarPanel = sidebarPanel == .thumbnails ? nil : .thumbnails }) {
-                    Image(systemName: "square.grid.2x2")
-                }
-                .help("Thumbnails")
-                Button(action: { sidebarPanel = sidebarPanel == .outline ? nil : .outline }) {
-                    Image(systemName: "list.bullet")
-                }
-                .help("Table of Contents")
-                Button(action: { sidebarPanel = sidebarPanel == .annotations ? nil : .annotations }) {
-                    Image(systemName: "note.text")
-                }
-                .help("Annotations")
-            }
-
-            // Undo / Redo
-            HStack(spacing: 1) {
-                Button(action: performUndo) { Image(systemName: "arrow.uturn.backward") }
-                    .help("Undo (⌘Z)")
-                    .keyboardShortcut("z", modifiers: .command)
-                    .disabled(!undoRedoManager.canUndo)
-                Button(action: performRedo) { Image(systemName: "arrow.uturn.forward") }
-                    .help("Redo (⌘⇧Z)")
-                    .keyboardShortcut("z", modifiers: [.command, .shift])
-                    .disabled(!undoRedoManager.canRedo)
-            }
-
-            toolbarDivider
-
-            // Fullscreen + Bookmarks
-            Button(action: toggleFullscreen) {
-                Image(systemName: isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-            }
-            .help("Fullscreen (⌘⌃F)")
-            .keyboardShortcut("f", modifiers: [.command, .control])
-
-            Menu {
-                Button(bookmarkManager.isBookmarked(currentPageIndex) ? "Remove Bookmark" : "Add Bookmark") {
-                    bookmarkManager.toggle(currentPageIndex)
-                }
-                .disabled(pdfDocument.pageCount == 0)
-                if !bookmarkManager.bookmarks.isEmpty {
-                    Divider()
-                    ForEach(bookmarkManager.bookmarks, id: \.self) { index in
-                        Button("Page \(index + 1)") { goToPage(index) }
-                    }
-                    Divider()
-                    Button("Clear Bookmarks") { bookmarkManager.clear() }
-                }
-            } label: {
-                Image(systemName: bookmarkManager.isBookmarked(currentPageIndex) ? "bookmark.fill" : "bookmark")
-            }
-            .help("Bookmarks")
-
-            if isFullscreen {
-                Button(action: { hideToolbarInFullscreen.toggle() }) {
-                    Image(systemName: hideToolbarInFullscreen ? "pin.slash" : "pin")
-                }
-                .help("Pin Toolbar")
-            }
-        }
-        .buttonStyle(.borderless)
-    }
-
-    // MARK: - File Toolbar Actions (always visible)
-
-    private var fileToolbarActions: some View {
-        HStack(spacing: 2) {
-            if let url = pdfURL {
-                Button(action: { savePDF(to: url, showNotifications: true) }) {
-                    if isSaving {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: "square.and.arrow.down")
-                    }
-                }
-                .disabled(isSaving)
-                .help("Save (⌘S)")
-                .keyboardShortcut("s", modifiers: .command)
-
-                Menu {
-                    Button("Save As...") { saveAs() }
-                        .keyboardShortcut("s", modifiers: [.command, .shift])
-                    Button("Print...") { printPDF() }
-                        .keyboardShortcut("p", modifiers: .command)
-                } label: {
-                    Image(systemName: "ellipsis")
-                }
-                .help("More")
-            }
-        }
-        .buttonStyle(.borderless)
-    }
-
     private var annotationModeLabel: (title: String, icon: String) {
         switch annotationMode {
         case .none: return ("None", "hand.point.up.left")
+        case .select: return ("Move", "arrow.up.and.down.and.arrow.left.and.right")
         case .highlightText: return ("Highlight", "highlighter")
         case .highlightArea: return ("Area", "rectangle.dashed")
         case .text: return ("Text", "text.bubble")
@@ -520,7 +248,7 @@ struct PDFViewerView: View {
 
     private var annotationUsesColor: Bool {
         switch annotationMode {
-        case .none, .text, .stickyNote: return false
+        case .none, .select, .text, .stickyNote: return false
         default: return true
         }
     }
@@ -529,145 +257,39 @@ struct PDFViewerView: View {
     @State private var textAnnotationContent = ""
     @State private var textAnnotationPoint: CGPoint = .zero
     
+
     var body: some View {
-        VStack(spacing: 0) {
-            // Toolbar
-            if !(isFullscreen && hideToolbarInFullscreen) {
-                HStack(spacing: toolbarIsCompact ? 2 : 4) {
-                        // ── Navigation (always visible) ──
-                        HStack(spacing: 1) {
-                            Button(action: goBack) { Image(systemName: "chevron.left") }
-                                .help("Previous Page (⌘←)")
-                                .disabled(!pdfView.canGoBack)
-                                .keyboardShortcut(.leftArrow, modifiers: [.command])
-                            Button(action: goForward) { Image(systemName: "chevron.right") }
-                                .help("Next Page (⌘→)")
-                                .disabled(!pdfView.canGoForward)
-                                .keyboardShortcut(.rightArrow, modifiers: [.command])
-                        }
-                        .buttonStyle(.borderless)
-
-                        // Hidden shortcuts for first/last page
-                        Button("") { goToFirstPage() }
-                            .keyboardShortcut(.upArrow, modifiers: [.command])
-                            .frame(width: 0, height: 0).opacity(0)
-                        Button("") { goToLastPage() }
-                            .keyboardShortcut(.downArrow, modifiers: [.command])
-                            .frame(width: 0, height: 0).opacity(0)
-
-                        // Page indicator
-                        Text("\(currentPageIndex + 1)/\(pdfDocument.pageCount)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .fixedSize()
-
-                        if !toolbarIsCompact {
-                            TextField("", text: $pageNumberText)
-                                .frame(width: 36)
-                                .textFieldStyle(.roundedBorder)
-                                .onSubmit(goToPageFromField)
-                                .help("Go to Page")
-                        }
-
-                        toolbarDivider
-
-                        // ── Zoom (always visible, compact adjusts) ──
-                        HStack(spacing: 1) {
-                            Button(action: zoomOut) { Image(systemName: "minus.magnifyingglass") }
-                                .help("Zoom Out")
-                            if !toolbarIsCompact {
-                                TextField("", text: $zoomText)
-                                    .frame(width: 40)
-                                    .textFieldStyle(.roundedBorder)
-                                    .onSubmit(applyZoomFromField)
-                            }
-                            Button(action: zoomIn) { Image(systemName: "plus.magnifyingglass") }
-                                .help("Zoom In")
-                            Button(action: fitToPage) { Image(systemName: "arrow.down.right.and.arrow.up.left") }
-                                .help("Fit to Page")
-                        }
-                        .buttonStyle(.borderless)
-
-                        toolbarDivider
-
-                        if toolbarIsCompact {
-                            // ── COMPACT: everything else in categorized menus ──
-                            compactToolbarMenus
-                        } else {
-                            // ── EXPANDED: individual controls ──
-                            expandedToolbarControls
-                        }
-
-                        Spacer(minLength: 0)
-
-                        // ── File actions (always visible) ──
-                        fileToolbarActions
-                    }
-                .padding(.horizontal, 8)
-                .frame(height: 36)
-                .background(Color(NSColor.windowBackgroundColor))
-                .background(
-                    GeometryReader { geo in
-                        Color.clear
-                            .onAppear { toolbarIsCompact = geo.size.width < 580 }
-                            .onChange(of: geo.size.width) { _, w in
-                                let shouldBeCompact = w < 580
-                                if toolbarIsCompact != shouldBeCompact {
-                                    toolbarIsCompact = shouldBeCompact
-                                }
-                            }
-                    }
-                )
-            } else {
-                HStack {
-                    Spacer()
-                    Button(action: { hideToolbarInFullscreen = false }) {
-                        Image(systemName: "chevron.down")
-                            .padding(6)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Show Toolbar")
+        HStack(spacing: 0) {
+            if let panel = sidebarPanel {
+                switch panel {
+                case .thumbnails:
+                    PDFThumbnailViewRepresentable(pdfView: pdfView)
+                        .frame(width: 140)
+                case .outline:
+                    PDFOutlinePanel(pdfDocument: pdfDocument, pdfView: pdfView)
+                        .frame(width: 220)
+                case .annotations:
+                    AnnotationListPanel(
+                        pdfDocument: pdfDocument,
+                        pdfView: pdfView,
+                        undoRedoManager: undoRedoManager,
+                        onAnnotationsChanged: { scheduleAutoSave() }
+                    )
+                    .frame(width: 250)
+                case .projectCorrelations:
+                    EmptyView()
                 }
-                .padding(.horizontal)
-                .padding(.vertical, 4)
+                Divider()
             }
-            
-            Divider()
-            
-            // PDF View
-            HStack(spacing: 0) {
-                if let panel = sidebarPanel {
-                    switch panel {
-                    case .thumbnails:
-                        PDFThumbnailViewRepresentable(pdfView: pdfView)
-                            .frame(width: 140)
-                    case .outline:
-                        PDFOutlinePanel(pdfDocument: pdfDocument, pdfView: pdfView)
-                            .frame(width: 220)
-                    case .annotations:
-                        AnnotationListPanel(
-                            pdfDocument: pdfDocument,
-                            pdfView: pdfView,
-                            undoRedoManager: undoRedoManager,
-                            onAnnotationsChanged: { scheduleAutoSave() }
-                        )
-                        .frame(width: 250)
-                    case .projectCorrelations:
-                        EmptyView() // Handled in MultiDocumentView
-                    }
-                    Divider()
-                }
 
-                ZStack {
-                    PDFViewRepresentable(
+            ZStack {
+                PDFViewRepresentable(
                     pdfView: $pdfView,
                     pdfDocument: pdfDocument,
                     annotationMode: annotationMode,
                     highlightColor: highlightColor,
                     undoRedoManager: undoRedoManager,
-                    onAnnotationsChanged: {
-                        scheduleAutoSave()
-                    },
+                    onAnnotationsChanged: { scheduleAutoSave() },
                     onTextAnnotationRequest: { point in
                         textAnnotationPoint = point
                         showingTextAnnotationDialog = true
@@ -688,21 +310,27 @@ struct PDFViewerView: View {
                         notificationManager.showError(errorMessage)
                     }
                 )
-                .onAppear {
-                    setupPDFView()
-                }
+                .onAppear { setupPDFView() }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                    // Reading mode overlay
-                    if readingMode == .sepia {
-                        Color(red: 0.94, green: 0.87, blue: 0.74)
-                            .opacity(0.15)
-                            .blendMode(.multiply)
-                            .allowsHitTesting(false)
-                    }
-                } // ZStack
+                if readingMode == .sepia {
+                    Color(red: 0.94, green: 0.87, blue: 0.74)
+                        .opacity(0.15)
+                        .blendMode(.multiply)
+                        .allowsHitTesting(false)
+                }
             }
         }
+        .ignoresSafeArea(.container, edges: .top)
+        .background(
+            Group {
+                Button("") { goToFirstPage() }
+                    .keyboardShortcut(.upArrow, modifiers: [.command])
+                Button("") { goToLastPage() }
+                    .keyboardShortcut(.downArrow, modifiers: [.command])
+            }
+            .frame(width: 0, height: 0).opacity(0)
+        )
         .onAppear {
             searchManager.setDocument(pdfDocument)
             if let url = pdfURL {
@@ -712,7 +340,15 @@ struct PDFViewerView: View {
             }
             pageNumberText = "\(currentPageIndex + 1)"
             syncZoomText()
+            wireToolbarBridge()
         }
+        .onChange(of: currentPageIndex) { _, _ in refreshToolbarBridge() }
+        .onChange(of: undoRedoManager.canUndo) { _, _ in refreshToolbarBridge() }
+        .onChange(of: undoRedoManager.canRedo) { _, _ in refreshToolbarBridge() }
+        .onChange(of: sidebarPanel) { _, new in toolbarBridge.sidebarPanel = new }
+        .onChange(of: isFullscreen) { _, new in toolbarBridge.isFullscreen = new }
+        .onChange(of: isSaving) { _, new in toolbarBridge.isSaving = new }
+        .onChange(of: bookmarkManager.bookmarks) { _, _ in refreshToolbarBridge() }
         .onReceive(NotificationCenter.default.publisher(for: .PDFViewScaleChanged, object: pdfView)) { _ in
             syncZoomText()
         }
@@ -779,9 +415,8 @@ struct PDFViewerView: View {
                 .zIndex(1000)
             }
         }
-        .ignoresSafeArea(.container, edges: .top)
     }
-    
+
     private func toggleFullscreen() {
         if let window = NSApplication.shared.windows.first {
             window.toggleFullScreen(nil)
@@ -814,6 +449,52 @@ struct PDFViewerView: View {
         pageNumberText = "\(clamped + 1)"
     }
     
+    private func refreshToolbarBridge() {
+        toolbarBridge.currentPageIndex = currentPageIndex
+        toolbarBridge.pageCount = pdfDocument.pageCount
+        toolbarBridge.canGoBack = pdfView.canGoBack
+        toolbarBridge.canGoForward = pdfView.canGoForward
+        toolbarBridge.canUndo = undoRedoManager.canUndo
+        toolbarBridge.canRedo = undoRedoManager.canRedo
+        toolbarBridge.bookmarks = bookmarkManager.bookmarks
+        toolbarBridge.currentPageBookmarked = bookmarkManager.isBookmarked(currentPageIndex)
+        toolbarBridge.hasURL = pdfURL != nil
+    }
+
+    private func wireToolbarBridge() {
+        refreshToolbarBridge()
+        toolbarBridge.sidebarPanel = sidebarPanel
+        toolbarBridge.isFullscreen = isFullscreen
+        toolbarBridge.isSaving = isSaving
+
+        toolbarBridge.onGoBack = { goBack() }
+        toolbarBridge.onGoForward = { goForward() }
+        toolbarBridge.onGoToFirstPage = { goToFirstPage() }
+        toolbarBridge.onGoToLastPage = { goToLastPage() }
+        toolbarBridge.onGoToPage = { goToPage($0) }
+        toolbarBridge.onZoomIn = { zoomIn() }
+        toolbarBridge.onZoomOut = { zoomOut() }
+        toolbarBridge.onFitToPage = { fitToPage() }
+        toolbarBridge.onSetDisplayMode = { setDisplayMode($0) }
+        toolbarBridge.onRotateCW = { rotatePageCW() }
+        toolbarBridge.onRotateCCW = { rotatePageCCW() }
+        toolbarBridge.onSetReadingMode = { setReadingMode($0) }
+        toolbarBridge.onToggleSearch = { showingSearch.toggle() }
+        toolbarBridge.onTogglePanel = { panel in
+            sidebarPanel = sidebarPanel == panel ? nil : panel
+        }
+        toolbarBridge.onUndo = { performUndo() }
+        toolbarBridge.onRedo = { performRedo() }
+        toolbarBridge.onToggleFullscreen = { toggleFullscreen() }
+        toolbarBridge.onToggleBookmark = { bookmarkManager.toggle(currentPageIndex) }
+        toolbarBridge.onClearBookmarks = { bookmarkManager.clear() }
+        toolbarBridge.onSave = {
+            if let url = pdfURL { savePDF(to: url, showNotifications: true) }
+        }
+        toolbarBridge.onSaveAs = { saveAs() }
+        toolbarBridge.onPrint = { printPDF() }
+    }
+
     private func setupPDFView() {
         pdfView.document = pdfDocument
         pdfView.displayMode = .singlePageContinuous
@@ -1180,7 +861,7 @@ struct PDFViewRepresentable: NSViewRepresentable {
         )
         
         context.coordinator.clickGesture.isEnabled = [.text, .stickyNote].contains(annotationMode)
-        context.coordinator.panGesture.isEnabled = [.highlightArea, .ink, .rectangle, .circle, .line, .arrow].contains(annotationMode)
+        context.coordinator.panGesture.isEnabled = [.select, .highlightArea, .ink, .rectangle, .circle, .line, .arrow].contains(annotationMode)
         
         return pdfView
     }
@@ -1202,7 +883,7 @@ struct PDFViewRepresentable: NSViewRepresentable {
         if previousMode != annotationMode {
             // Update gesture recognizer state only when mode changes
             context.coordinator.clickGesture.isEnabled = [.text, .stickyNote].contains(annotationMode)
-            context.coordinator.panGesture.isEnabled = [.highlightArea, .ink, .rectangle, .circle, .line, .arrow].contains(annotationMode)
+            context.coordinator.panGesture.isEnabled = [.select, .highlightArea, .ink, .rectangle, .circle, .line, .arrow].contains(annotationMode)
 
             // Clear selection when leaving text-selection modes
             if ![AnnotationMode.highlightText, .underline, .strikethrough].contains(annotationMode) {
@@ -1214,6 +895,8 @@ struct PDFViewRepresentable: NSViewRepresentable {
                 switch annotationMode {
                 case .none:
                     NSCursor.arrow.set()
+                case .select:
+                    NSCursor.openHand.set()
                 case .highlightText, .underline, .strikethrough:
                     NSCursor.iBeam.set()
                 case .highlightArea, .text, .stickyNote, .ink, .rectangle, .circle, .line, .arrow:
@@ -1419,6 +1102,11 @@ struct PDFViewRepresentable: NSViewRepresentable {
 
             let location = gesture.location(in: pdfView)
 
+            if annotationMode == .select {
+                handleSelectPan(gesture, location: location)
+                return
+            }
+
             if annotationMode == .ink {
                 handleInkPan(gesture, location: location)
                 return
@@ -1493,6 +1181,58 @@ struct PDFViewRepresentable: NSViewRepresentable {
                 }
                 currentHighlight = nil
                 highlightStartPoint = nil
+            default:
+                break
+            }
+        }
+
+        // MARK: - Select / Move Drag
+        private var dragAnnotation: PDFAnnotation?
+        private var dragPage: PDFPage?
+        private var dragOriginalBounds: CGRect = .zero
+        private var dragStartPagePoint: CGPoint = .zero
+
+        private func handleSelectPan(_ gesture: NSPanGestureRecognizer, location: CGPoint) {
+            switch gesture.state {
+            case .began:
+                guard let page = pdfView.page(for: location, nearest: false) else { return }
+                let pagePoint = pdfView.convert(location, to: page)
+                guard let annotation = page.annotation(at: pagePoint) else { return }
+                dragAnnotation = annotation
+                dragPage = page
+                dragOriginalBounds = annotation.bounds
+                dragStartPagePoint = pagePoint
+                NSCursor.closedHand.set()
+
+            case .changed:
+                guard let annotation = dragAnnotation, let page = dragPage else { return }
+                let pagePoint = pdfView.convert(location, to: page)
+                let delta = CGVector(dx: pagePoint.x - dragStartPagePoint.x,
+                                     dy: pagePoint.y - dragStartPagePoint.y)
+                let newBounds = AnnotationGeometry.translated(
+                    rect: dragOriginalBounds, by: delta,
+                    in: page.bounds(for: .mediaBox))
+                annotation.bounds = newBounds
+                pdfView.setNeedsDisplay(pdfView.bounds)
+
+            case .ended, .cancelled:
+                NSCursor.openHand.set()
+                defer {
+                    dragAnnotation = nil
+                    dragPage = nil
+                    dragOriginalBounds = .zero
+                    dragStartPagePoint = .zero
+                }
+                guard let annotation = dragAnnotation, let page = dragPage else { return }
+                let newBounds = annotation.bounds
+                guard newBounds != dragOriginalBounds else { return }
+                undoRedoManager.addOperation(.modify(
+                    annotation: annotation,
+                    oldBounds: dragOriginalBounds,
+                    newBounds: newBounds,
+                    page: page))
+                onAnnotationsChanged()
+
             default:
                 break
             }
