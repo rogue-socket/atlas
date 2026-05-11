@@ -143,6 +143,7 @@ nonisolated class HighlightSyncBridge {
     // MARK: - Source Pulse (temporary emphasis)
 
     /// Pulse an existing persistent highlight or create a temporary one
+    @MainActor
     func showSourcePulse(
         on pdfView: PDFView,
         page: PDFPage,
@@ -184,6 +185,7 @@ nonisolated class HighlightSyncBridge {
     }
 
     /// Navigate the PDF view to a source anchor and pulse with the node's color
+    @MainActor
     func navigateAndPulse(
         pdfView: PDFView,
         anchor: SourceAnchor,

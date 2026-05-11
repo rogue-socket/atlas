@@ -111,9 +111,12 @@ final class ProjectsManager: ObservableObject {
         self.storageURL = storageURL
         self.bookmarker = bookmarker
         load()
-        saveCancellable = Publishers.CombineLatest3($projects.dropFirst(), $selectedProjectID.dropFirst(), $projectsSortMode.dropFirst())
+        // objectWillChange fires on any @Published mutation; debounce coalesces bursts.
+        // Replaces a prior CombineLatest3 over $projects/$selectedProjectID/$projectsSortMode
+        // that never emitted when projectsSortMode was untouched.
+        saveCancellable = objectWillChange
             .debounce(for: .milliseconds(350), scheduler: DispatchQueue.main)
-            .sink { [weak self] _, _, _ in
+            .sink { [weak self] _ in
                 self?.save()
             }
     }
@@ -334,18 +337,17 @@ final class ProjectsManager: ObservableObject {
     private func load() {
         let url = storageURL
         DispatchQueue.global(qos: .utility).async {
-            let data = try? Data(contentsOf: url)
+            // No file (or unreadable) → leave the freshly-initialized defaults in place.
+            // Previously this branch overwrote whatever the caller had set between init
+            // and the async hop, racing post-init mutations.
+            guard let data = try? Data(contentsOf: url),
+                  let storage = try? JSONDecoder().decode(ProjectsStorage.self, from: data) else {
+                return
+            }
             DispatchQueue.main.async {
-                let decoded = data.flatMap { try? JSONDecoder().decode(ProjectsStorage.self, from: $0) }
-                if let storage = decoded {
-                    self.projects = storage.projects
-                    self.selectedProjectID = storage.selectedProjectID ?? storage.projects.first?.id
-                    self.projectsSortMode = storage.projectsSortMode
-                } else {
-                    self.projects = []
-                    self.selectedProjectID = nil
-                    self.projectsSortMode = .manual
-                }
+                self.projects = storage.projects
+                self.selectedProjectID = storage.selectedProjectID ?? storage.projects.first?.id
+                self.projectsSortMode = storage.projectsSortMode
             }
         }
     }

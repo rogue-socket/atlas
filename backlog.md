@@ -7,7 +7,7 @@ Durable "someday/maybe" items — distinct from session-level Unresolved (which 
 
 ## Bugs
 
-(no open bugs — `.document` summary node implementation landed 2026-05-08, pending test verification; see active items below)
+- `[bug 2026-05-11]` **`RecentFilesManager.autoRemoveStaleFiles()` never fires.** Called from `init` at line 58, immediately after `loadRecentFiles()` — but `inaccessibleFiles` is populated *asynchronously* by `fileCheckQueue.async` (line 161-167) that hasn't run yet by the time `autoRemoveStaleFiles` reads it. `inaccessibleFiles` also isn't persisted to disk across launches, so nothing carries over from a prior session either. Net: the "auto-remove a recent-files entry after it's been seen stale 3 times" mechanism is dead code. Fix options: (a) make the file-existence check synchronous before `autoRemoveStaleFiles` runs, (b) persist `inaccessibleFiles` paths and check them on init, (c) restructure so `autoRemoveStaleFiles` runs as a continuation after the async checks. Discovered while planning TDD coverage for cross-reboot bookmark persistence.
 
 <!-- Fixed 2026-05-07 (on wip/feature-cherry-pick, not yet committed):
   - Shared in-memory graph leaks across documents → MultiDocumentView.loadGraphIfNeeded clears when no saved graph
@@ -23,7 +23,7 @@ Durable "someday/maybe" items — distinct from session-level Unresolved (which 
 
 ## Active / Next (2026-05-09)
 
-- `[active 2026-05-09]` **Pattern A — 5 sparse single-test crashes still incomplete.** After fixing `QuadTreeNode`, `HighlightSyncBridge`, and `KnowledgeGraph` (2026-05-11), full suite is 58 pass / 0 fail / 5 incomplete (down from 19 on 05-08). Remaining: `PDFSearchManagerTests.testClearHistory` + `testHistoryDedupesCaseInsensitiveAndTrims`, `ProjectsManagerTests.testPersistsAndLoadsProjects`, `RecentFilesManagerTests.testAddRecentFileDedupesAndKeepsMostRecentFirst`, `UndoRedoManagerTests.testUndoRedoStackTogglesAvailability`. All 5 are `@Published` `ObservableObject` managers used as `@StateObject`/`@ObservedObject`/`@EnvironmentObject` — surgical `nonisolated` on these risks breaking SwiftUI binding (publisher-on-main contract). The structural fix — remove `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` from build settings, then add explicit `@MainActor` only to UI classes that need it — is the right long-term answer. Tests do pass when not scheduled first in their host (sparse, not class-uniform), so app correctness is verified.
+<!-- Pattern A resolved 2026-05-11 via structural fix: removed `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` from project.pbxproj (4 occurrences). Only fallout was 2 PDFKit-touching methods in HighlightSyncBridge needing explicit @MainActor. Full suite: 58/6-incomplete → 64/0-incomplete. Side-effect: exposed and fixed a long-standing ProjectsManager save/load race (CombineLatest3 never emitted without projectsSortMode change; load() overwrote in-memory state when file missing). -->
 - Optionally swap `summarizeConcept` for `generateRawResponse` + custom doc-summary prompt if "Summarize the concept '<filename>'" wording produces awkward output once a real run happens. Low priority; only if observed.
 
 <!-- Done 2026-05-09:
