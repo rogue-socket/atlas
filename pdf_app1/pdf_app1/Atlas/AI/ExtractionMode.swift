@@ -21,7 +21,7 @@ enum ExtractionMode: String, CaseIterable {
     var isAvailable: Bool {
         switch self {
         case .fast: true
-        case .deep: false
+        case .deep: true
         }
     }
 }
