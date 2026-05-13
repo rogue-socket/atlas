@@ -23,33 +23,21 @@ struct MapCanvasRenderer: View {
             let transform = CGAffineTransform(translationX: viewOffset.x, y: viewOffset.y)
                 .scaledBy(x: viewScale, y: viewScale)
 
-            let allNodes = graph.allNodes
-            let allEdges = graph.allEdges
-            var conceptNodes: [ConceptNode] = []
-            var entitiesByParent: [UUID: [ConceptNode]] = [:]
-            for n in allNodes {
-                if n.level == .concept {
-                    conceptNodes.append(n)
-                } else if n.level == .entity, let pid = n.parentConceptID {
-                    entitiesByParent[pid, default: []].append(n)
-                }
-            }
-            let sortedNodes = allNodes.sorted { $0.hierarchyLevel > $1.hierarchyLevel }
-
-            drawGroupBackgrounds(context: context, transform: transform, size: size,
-                                 conceptNodes: conceptNodes, entitiesByParent: entitiesByParent)
-            drawEdges(context: context, transform: transform, size: size, allEdges: allEdges)
-            drawNodes(context: context, transform: transform, size: size,
-                      sortedNodes: sortedNodes, entitiesByParent: entitiesByParent)
+            drawGroupBackgrounds(context: context, transform: transform, size: size)
+            drawEdges(context: context, transform: transform, size: size)
+            drawNodes(context: context, transform: transform, size: size)
         }
     }
 
     // MARK: - Group Backgrounds (hierarchy-based)
 
-    private func drawGroupBackgrounds(context: GraphicsContext, transform: CGAffineTransform, size: CGSize, conceptNodes: [ConceptNode], entitiesByParent: [UUID: [ConceptNode]]) {
+    private func drawGroupBackgrounds(context: GraphicsContext, transform: CGAffineTransform, size: CGSize) {
+        // Group by concept node: each concept + its entities form a cluster
+        let conceptNodes = graph.allNodes.filter { $0.level == .concept }
+
         for conceptNode in conceptNodes {
             // Collect concept + its visible entities
-            let entityNodes = entitiesByParent[conceptNode.id] ?? []
+            let entityNodes = graph.entities(for: conceptNode.id)
             let clusterNodes = [conceptNode] + entityNodes
             let groupPoints = clusterNodes.compactMap { layout.point(for: $0.id)?.applying(transform) }
             guard groupPoints.count >= 1 else { continue }
@@ -81,8 +69,8 @@ struct MapCanvasRenderer: View {
 
     // MARK: - Edges
 
-    private func drawEdges(context: GraphicsContext, transform: CGAffineTransform, size: CGSize, allEdges: [GraphEdge]) {
-        for edge in allEdges {
+    private func drawEdges(context: GraphicsContext, transform: CGAffineTransform, size: CGSize) {
+        for edge in graph.allEdges {
             guard let srcPos = layout.point(for: edge.sourceNodeID),
                   let tgtPos = layout.point(for: edge.targetNodeID) else { continue }
             let src = srcPos.applying(transform)
@@ -119,7 +107,20 @@ struct MapCanvasRenderer: View {
 
     // MARK: - Nodes
 
-    private func drawNodes(context: GraphicsContext, transform: CGAffineTransform, size: CGSize, sortedNodes: [ConceptNode], entitiesByParent: [UUID: [ConceptNode]]) {
+    private func drawNodes(context: GraphicsContext, transform: CGAffineTransform, size: CGSize) {
+        // Draw deeper hierarchy levels first, top themes on top
+        let sortedNodes = graph.allNodes.sorted { a, b in
+            a.hierarchyLevel > b.hierarchyLevel
+        }
+
+        // Precompute entity counts per concept to avoid O(n) filter per node per frame
+        var entityCountByParent: [UUID: Int] = [:]
+        for n in graph.allNodes where n.level == .entity {
+            if let pid = n.parentConceptID {
+                entityCountByParent[pid, default: 0] += 1
+            }
+        }
+
         for node in sortedNodes {
             guard let pos = layout.point(for: node.id) else { continue }
             let tp = pos.applying(transform)
@@ -194,7 +195,7 @@ struct MapCanvasRenderer: View {
 
             // Entity count badge for concept nodes
             if isConcept && viewScale >= 0.5 {
-                let entityCount = entitiesByParent[node.id]?.count ?? 0
+                let entityCount = entityCountByParent[node.id] ?? 0
                 if entityCount > 0 {
                     let badge = Text("\(entityCount)")
                         .font(.system(size: max(7, 8 * viewScale), weight: .medium))

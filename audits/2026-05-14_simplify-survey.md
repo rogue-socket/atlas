@@ -8,7 +8,7 @@ Read-only review of `Atlas/` source (57 Swift files, ~13.4k lines) across three 
 |---|---|---|---|---|
 | 1 | #1 AI backend duplication | ✅ done | `058936e` | Folded with 5-drift reconciliation per [`2026-05-14_backend-drift-decisions.md`](./2026-05-14_backend-drift-decisions.md). Net -202 lines across `Atlas/AI/Backends/`. |
 | 1 | #2 O(n²) label lookups | ✅ done | `be9814b` | Added `KnowledgeGraph.labelIndex` + `node(matching:)`; locked `nodes`/`edges` to `private(set)`; routed `merge(from:)` through silent `insert`. 11 call sites converted. |
-| 1 | #3 Renderer per-frame allocations | ✅ done | `fa9f768` | Hoisted `allNodes`/`allEdges` + single-pass `conceptNodes`/`entitiesByParent` into the Canvas closure; threaded into the three draw helpers. |
+| 1 | #3 Renderer per-frame allocations | ⏳ next | — | Flagged as next-natural in `backlog.md`. |
 | 1 | #4 Sequential LLM batches | open | — | |
 | 1 | #5 Split `PDFViewerView.swift` | open | — | |
 | 2 | #6–#15 | open | — | All ten cheap consolidations & correctness items unstarted. |
@@ -39,14 +39,12 @@ Six public methods (`extractConcepts`, `proposeEdges`, `summarizeConcept`, `answ
 
 **As landed:** Reframed during analysis — the headline value is *dedup* (one place to change the lowercased-equality rule) with perf as a side effect (the string-compare cost is noise next to LLM network calls). Added `labelIndex: [String: UUID]` + private `insert(_:)` to `KnowledgeGraph`; new public `node(matching:)` for O(1) lookup. Locked `nodes`/`edges` to `private(set)` after `rg`-verifying zero external writes existed. `merge(from:)` now routes through silent `insert` (no per-node log spam). The 11 lookup call sites converted; the 3 `allNodes.map { $0.label }` sites (label list for LLM prompt context, not a lookup) intentionally left alone. Sub-decisions and their rationale captured in [`WORKFLOW.md`](./WORKFLOW.md) as a worked example.
 
-### 3. Renderer rebuilds `allNodes` array on every frame — ✅ done (`fa9f768`)
+### 3. Renderer rebuilds `allNodes` array on every frame
 **File:** `Atlas/Renderer/MapCanvasRenderer.swift:36,73,112,118`
 
 Every Canvas redraw calls `graph.allNodes` (3 sites) and `graph.allEdges` (1 site) — each rebuilds `Array(nodes.values)` on `KnowledgeGraph`. `drawGroupBackgrounds` then filters to concept nodes and calls `graph.entities(for:)` per concept (a full `allNodes.filter`) → O(C·N) per frame.
 
 **Fix:** Cache `conceptNodes` + an `entitiesByParent` map (already done for badges at line 117) once per body invocation; pass into the three draw passes.
-
-**As landed:** Computed `allNodes`/`allEdges` once at the top of the Canvas closure, then built `conceptNodes` and `entitiesByParent: [UUID: [ConceptNode]]` in a single linear pass. Threaded both into `drawGroupBackgrounds`/`drawEdges`/`drawNodes` via new parameters. The separate `entityCountByParent` map inside `drawNodes` is gone — entity badge count now reads `entitiesByParent[id]?.count`. Per-redraw cost dropped from `(C+3) × allNodes + C × O(N) filter + 1 × allEdges` to `1 × allNodes + 1 × pass + 1 × sort + 1 × allEdges`. Pure structural change, no behavior delta. Net -1 line.
 
 ### 4. Sequential batched LLM calls dominate wall-time
 **File:** `Atlas/AI/ExtractionPipeline.swift:93-134`
