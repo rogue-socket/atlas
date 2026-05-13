@@ -1,22 +1,43 @@
 # Atlas Simplify Survey — 2026-05-14
 
-Read-only review of `Atlas/` source (57 Swift files, ~13.4k lines) across three lenses: code reuse, code quality, efficiency. No fixes applied. Findings prioritized by impact.
+Read-only review of `Atlas/` source (57 Swift files, ~13.4k lines) across three lenses: code reuse, code quality, efficiency. Findings prioritized by impact.
+
+## Status
+
+| Tier | Finding | Status | Commit | Notes |
+|---|---|---|---|---|
+| 1 | #1 AI backend duplication | ✅ done | `058936e` | Folded with 5-drift reconciliation per [`2026-05-14_backend-drift-decisions.md`](./2026-05-14_backend-drift-decisions.md). Net -202 lines across `Atlas/AI/Backends/`. |
+| 1 | #2 O(n²) label lookups | ✅ done | `be9814b` | Added `KnowledgeGraph.labelIndex` + `node(matching:)`; locked `nodes`/`edges` to `private(set)`; routed `merge(from:)` through silent `insert`. 11 call sites converted. |
+| 1 | #3 Renderer per-frame allocations | ⏳ next | — | Flagged as next-natural in `backlog.md`. |
+| 1 | #4 Sequential LLM batches | open | — | |
+| 1 | #5 Split `PDFViewerView.swift` | open | — | |
+| 2 | #6–#15 | open | — | All ten cheap consolidations & correctness items unstarted. |
+| 3 | #24 `addNode` `.info` log per node | partial | `be9814b` | `merge(from:)` is now silent (routed through a private `insert(_:)`). Extraction/decode paths still emit `.info` per node. Demoting globally was not approved this session. |
+| 3 | All other Tier-3 items | open | — | |
+
+Also closed as side effects of #2 (not in this survey but flagged by an upstream agent before consolidation): `KnowledgeGraph.merge(from:)` previously bypassed `addNode` and wrote to `nodes[id]` directly — the same `be9814b` commit fixes that by routing through the new private `insert(_:)` helper.
+
+Sign-off rationale for the work that landed lives in [`2026-05-14_backend-drift-decisions.md`](./2026-05-14_backend-drift-decisions.md). The shape of the process used today is documented in [`WORKFLOW.md`](./WORKFLOW.md).
 
 ## Tier 1 — Highest impact
 
-### 1. AI backend duplication (~300-400 lines removable)
+### 1. AI backend duplication (~300-400 lines removable) — ✅ done (`058936e`)
 **Files:** `Atlas/AI/Backends/ClaudeBackend.swift:31-99`, `OpenAIBackend.swift:37-104`, `GeminiBackend.swift:35-94`
 
 Six public methods (`extractConcepts`, `proposeEdges`, `summarizeConcept`, `answerQuestion`, `proposeMerges`, `generateRawResponse`) plus three parse helpers (`parseExtractionResponse`, `parseEdgesResponse`, `parseAnswerResponse`) plus the `extractJSON` wrapper are near-byte-identical across all three backends, varying only by log tag and HTTP transport call. The parse helpers have already drifted: Claude's `parseExtractionResponse` has retry-via-`ExtractionResponse` that OpenAI lacks; `parseAnswerResponse` error-handling differs between Claude (throws) and OpenAI/Gemini (swallow).
 
 **Fix:** Extract a `BaseLLMBackend` (class or protocol extension) implementing everything except `func send(prompt:) async throws -> String`. Drop the `extractJSON` forwarders — call `JSONRepair.cleanAndRepair` directly (already done at `DeepExtractionPipeline.swift:46,75,171`).
 
-### 2. O(n²) label lookups across extraction hot path
+**As landed:** Introduced `LLMBackend` protocol with `var logTag: String` + `func transport(prompt:)` as the only requirements; default implementations of all six public methods live on a protocol extension; new `LLMResponseParser` enum holds the four unified parsers. Each concrete backend now only carries vendor identity + the transport body. Step-1 drift reconciliation (5 numbered decisions, all signed off in [`2026-05-14_backend-drift-decisions.md`](./2026-05-14_backend-drift-decisions.md)) was folded into the same commit since the intermediate file shape no longer exists in the working tree.
+
+### 2. O(n²) label lookups across extraction hot path — ✅ done (`be9814b`)
 **Files:** `Atlas/AI/ExtractionPipeline.swift:86,121,304,335,373,415,424-425,431,606`; `DeepExtractionPipeline.swift:96,128,181-182`; `Atlas/Persistence/GraphMergeEngine.swift:144-145`
 
 ~10 sites do `graph.allNodes.first { $0.label.lowercased() == X.lowercased() }` inside per-concept and per-batch loops. Each is O(N); cumulative cost grows quadratically with graph size during extraction.
 
 **Fix:** Add `KnowledgeGraph.node(matching label: String) -> ConceptNode?` backed by a `[String: UUID]` lowercased-label index, updated on add/update/remove.
+
+**As landed:** Reframed during analysis — the headline value is *dedup* (one place to change the lowercased-equality rule) with perf as a side effect (the string-compare cost is noise next to LLM network calls). Added `labelIndex: [String: UUID]` + private `insert(_:)` to `KnowledgeGraph`; new public `node(matching:)` for O(1) lookup. Locked `nodes`/`edges` to `private(set)` after `rg`-verifying zero external writes existed. `merge(from:)` now routes through silent `insert` (no per-node log spam). The 11 lookup call sites converted; the 3 `allNodes.map { $0.label }` sites (label list for LLM prompt context, not a lookup) intentionally left alone. Sub-decisions and their rationale captured in [`WORKFLOW.md`](./WORKFLOW.md) as a worked example.
 
 ### 3. Renderer rebuilds `allNodes` array on every frame
 **File:** `Atlas/Renderer/MapCanvasRenderer.swift:36,73,112,118`
@@ -97,8 +118,10 @@ Manual `DispatchWorkItem + asyncAfter`: `GraphStore.swift:146-156`, `RecentFiles
 ### 23. `applyPersistentHighlights` rebuilds all annotations
 `Atlas/Sync/HighlightSyncBridge.swift:38-63` — scans `graph.allNodes` and re-adds an annotation per anchor on every refresh. Diff against `activeAnnotations`; add/remove only the delta.
 
-### 24. `KnowledgeGraph.addNode` emits `.info` log per node
+### 24. `KnowledgeGraph.addNode` emits `.info` log per node — partial (`be9814b`)
 `Atlas/Models/KnowledgeGraph.swift:178` — 100-node batch ⇒ 100 log lines. Demote to `.debug`.
+
+**Partially addressed:** `merge(from:)` now routes through a private silent `insert(_:)` helper (no per-node logs during cross-document merges). The extraction and decode paths still call `addNode` and emit `.info` per node. Full demotion to `.debug` was not approved this session — flag remains open.
 
 ### 25. `RecentFilesManager` re-resolves all bookmarks on each add/remove
 `RecentFilesManager.swift:105,121` — full reload after every mutation. Mutate the in-memory list; resolve only the new URL.
