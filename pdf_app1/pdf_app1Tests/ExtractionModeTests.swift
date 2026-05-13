@@ -37,7 +37,7 @@ final class ExtractionModeTests: XCTestCase {
         XCTAssertTrue(ExtractionMode.fast.isAvailable)
     }
 
-    func testDeepModeIsUnavailable() {
-        XCTAssertFalse(ExtractionMode.deep.isAvailable)
+    func testDeepModeIsAvailable() {
+        XCTAssertTrue(ExtractionMode.deep.isAvailable)
     }
 }

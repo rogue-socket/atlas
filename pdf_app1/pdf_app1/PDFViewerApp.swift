@@ -10,12 +10,18 @@ import AppKit
 
 @main
 struct PDFViewerApp: App {
-    @StateObject private var recentFilesManager = RecentFilesManager()
+    @StateObject private var recentFilesManager: RecentFilesManager
     @StateObject private var projectsManager = ProjectsManager()
-    @StateObject private var documentManager = DocumentManager()
+    @StateObject private var documentManager: DocumentManager
     @State private var knowledgeGraph = KnowledgeGraph()
     @State private var aiServiceManager = AIServiceManager()
-    
+
+    init() {
+        let recent = RecentFilesManager()
+        _recentFilesManager = StateObject(wrappedValue: recent)
+        _documentManager = StateObject(wrappedValue: DocumentManager(recentFilesManager: recent))
+    }
+
     var body: some Scene {
         WindowGroup {
             MultiDocumentView()
@@ -26,7 +32,6 @@ struct PDFViewerApp: App {
                 .environment(aiServiceManager)
                 .frame(minWidth: AppConstants.minWindowWidth, minHeight: AppConstants.minWindowHeight)
                 .onAppear {
-                    documentManager.recentFilesManager = recentFilesManager
                     documentManager.restoreOpenSession()
                     configureWindow()
                 }

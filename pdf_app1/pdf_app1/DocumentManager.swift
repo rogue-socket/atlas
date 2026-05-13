@@ -60,7 +60,11 @@ class DocumentManager: ObservableObject {
     @Published var comparisonDocuments: (left: PDFDocumentItem?, right: PDFDocumentItem?) = (nil, nil)
     
     private var maxOpenDocuments = 10
-    weak var recentFilesManager: RecentFilesManager?
+    let recentFilesManager: RecentFilesManager
+
+    init(recentFilesManager: RecentFilesManager) {
+        self.recentFilesManager = recentFilesManager
+    }
 
     var selectedDocument: PDFDocumentItem? {
         documents.first { $0.id == selectedDocumentID }
@@ -97,7 +101,7 @@ class DocumentManager: ObservableObject {
         let pdfDoc = PDFDocumentItem(url: url, document: document, projectID: projectID)
         documents.append(pdfDoc)
         selectedDocumentID = pdfDoc.id
-        recentFilesManager?.addRecentFile(url)
+        recentFilesManager.addRecentFile(url)
 
         log.info("[DocManager] openDocument: \(url.lastPathComponent), \(document.pageCount) pages, tab \(self.documents.count)/\(self.maxOpenDocuments)")
         return .success
@@ -239,7 +243,7 @@ class DocumentManager: ObservableObject {
             let pdfDoc = PDFDocumentItem(url: url, document: document, projectID: nil)
             documents.append(pdfDoc)
             selectedDocumentID = pdfDoc.id
-            recentFilesManager?.addRecentFile(url)
+            recentFilesManager.addRecentFile(url)
             restoredCount += 1
         }
         log.info("[DocManager] restoreOpenSession: restored \(restoredCount)/\(bookmarks.count) tab(s)")
