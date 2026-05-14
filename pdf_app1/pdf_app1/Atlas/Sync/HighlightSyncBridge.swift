@@ -81,6 +81,20 @@ nonisolated class HighlightSyncBridge {
             }
         }
 
+        // Drop tracked entries for this URL whose annotation is no longer
+        // attached to the passed-in document instance — i.e. the prior
+        // PDFDocument was released (close+reopen) or the annotation was
+        // stripped externally. Without this, the diff would land all
+        // desired keys in `kept` and silently reuse the stale annotations,
+        // so the fresh document gets no highlights.
+        let staleKeys = activeAnnotationMap.compactMap { (key, annotation) -> AnchorKey? in
+            guard key.documentURL == documentURL else { return nil }
+            return annotation.page?.document === document ? nil : key
+        }
+        for key in staleKeys {
+            activeAnnotationMap.removeValue(forKey: key)
+        }
+
         // Restrict the diff to keys for THIS document — annotations for
         // other documents (if the bridge is ever shared) stay put.
         let existingKeys = Set(activeAnnotationMap.keys.filter { $0.documentURL == documentURL })

@@ -101,4 +101,66 @@ final class HighlightSyncBridgeTests: XCTestCase {
 
         XCTAssertNotNil(rects, "Case-insensitive search should find the snippet")
     }
+
+    // MARK: - Apply highlights against fresh document instance
+
+    private func makePDFDocument(text: String = "Sample test content for highlights.") -> PDFDocument? {
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 540, height: 720))
+        textView.string = text
+        guard let pdfData = textView.dataWithPDF(inside: textView.bounds) as Data? else { return nil }
+        return PDFDocument(data: pdfData)
+    }
+
+    private func makeGraphWithNodes(url: URL, count: Int) -> KnowledgeGraph {
+        let graph = KnowledgeGraph()
+        for i in 0..<count {
+            let anchor = SourceAnchor(
+                documentURL: url,
+                pageIndex: 0,
+                boundingBox: CGRect(x: 10 + CGFloat(i) * 50, y: 10, width: 40, height: 20),
+                textSnippet: "snippet \(i)"
+            )
+            let node = ConceptNode(
+                label: "concept \(i)",
+                sourceAnchors: [anchor],
+                highlightColorIndex: 0
+            )
+            graph.addNode(node)
+        }
+        return graph
+    }
+
+    // Reopen silent-failure repro: when the user closes a doc and reopens
+    // it (or any flow that yields a fresh PDFDocument instance for the
+    // same URL), the bridge's `activeAnnotationMap` still holds entries
+    // whose annotations are attached to the prior (released) document.
+    // The diff puts all desired keys in `kept`, no new annotations are
+    // added, and highlights silently fail to appear on the new document.
+    @MainActor
+    func testApplyPersistentHighlights_freshDocumentInstance_attachesAnnotationsToNewDocument() {
+        let bridge = HighlightSyncBridge()
+        let url = URL(fileURLWithPath: "/test/doc-\(UUID().uuidString).pdf")
+        let graph = makeGraphWithNodes(url: url, count: 3)
+
+        guard let doc1 = makePDFDocument() else {
+            XCTFail("Could not create first PDFDocument")
+            return
+        }
+        let result1 = bridge.applyPersistentHighlights(document: doc1, graph: graph, documentURL: url)
+        XCTAssertEqual(result1.values.flatMap { $0 }.count, 3, "Initial apply should attach 3 annotations")
+
+        guard let doc2 = makePDFDocument() else {
+            XCTFail("Could not create second PDFDocument")
+            return
+        }
+        let result2 = bridge.applyPersistentHighlights(document: doc2, graph: graph, documentURL: url)
+        let annotationsOnDoc2 = result2.values.flatMap { $0 }
+
+        XCTAssertEqual(annotationsOnDoc2.count, 3, "Re-apply on fresh document should attach 3 annotations")
+        for annotation in annotationsOnDoc2 {
+            XCTAssertNotNil(annotation.page, "Annotation should have an attached page")
+            XCTAssertTrue(annotation.page?.document === doc2,
+                          "Annotation should be attached to the new document, not the stale one")
+        }
+    }
 }
