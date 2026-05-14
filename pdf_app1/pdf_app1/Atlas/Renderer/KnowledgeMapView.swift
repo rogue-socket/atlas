@@ -31,8 +31,14 @@ struct KnowledgeMapView: View {
         ExtractionMode(rawValue: selectedModeRaw) ?? .fast
     }
 
-    // Search
+    // Search — `searchQuery` is bound to the TextField (immediate).
+    // `debouncedSearchQuery` lags by 250ms (or applies instantly when
+    // the field is cleared) and drives the actual filter computation.
+    // `filteredNodeIDs` is recomputed only when the debounced query
+    // or the graph changes, not on every body evaluation.
     @State private var searchQuery = ""
+    @State private var debouncedSearchQuery = ""
+    @State private var filteredNodeIDs: Set<UUID> = []
     @State private var showSearch = false
 
     // Node detail popover
@@ -46,10 +52,13 @@ struct KnowledgeMapView: View {
     // Active node from bidirectional sync (set by parent)
     var activeNodeID: UUID?
 
-    private var filteredNodeIDs: Set<UUID> {
-        guard !searchQuery.isEmpty else { return [] }
-        let q = searchQuery.lowercased()
-        return Set(graph.allNodes.filter {
+    private func rerunSearchFilter() {
+        guard !debouncedSearchQuery.isEmpty else {
+            if !filteredNodeIDs.isEmpty { filteredNodeIDs = [] }
+            return
+        }
+        let q = debouncedSearchQuery.lowercased()
+        filteredNodeIDs = Set(graph.allNodes.filter {
             $0.label.lowercased().contains(q) ||
             ($0.summary?.lowercased().contains(q) ?? false) ||
             $0.type.displayName.lowercased().contains(q)
@@ -147,6 +156,21 @@ struct KnowledgeMapView: View {
                 if newCount > 0 && !interaction.isDragging {
                     recomputeLayout(canvasSize: geometry.size)
                 }
+                if !debouncedSearchQuery.isEmpty {
+                    rerunSearchFilter()
+                }
+            }
+            .task(id: searchQuery) {
+                if searchQuery.isEmpty {
+                    debouncedSearchQuery = ""
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+                debouncedSearchQuery = searchQuery
+            }
+            .onChange(of: debouncedSearchQuery) { _, _ in
+                rerunSearchFilter()
             }
             .onChange(of: zoomLevel) { _, _ in
                 if !interaction.isDragging {
