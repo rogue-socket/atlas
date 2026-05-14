@@ -21,19 +21,50 @@ nonisolated class HighlightSyncBridge {
     /// Prefix for annotation contents to identify Atlas-managed highlights
     static let atlasContentsPrefix = "atlas:"
 
-    /// Active persistent annotations keyed by node ID
-    private var activeAnnotations: [UUID: [PDFAnnotation]] = [:]
+    // Anchor-level identity for an in-PDF annotation: which document,
+    // which node, which page, which bounds. Bounds are decomposed to
+    // CGFloat components so the struct can synthesize Hashable
+    // (CGRect itself isn't Hashable in stdlib).
+    private struct AnchorKey: Hashable {
+        let documentURL: URL
+        let nodeID: UUID
+        let pageIndex: Int
+        let x: CGFloat
+        let y: CGFloat
+        let width: CGFloat
+        let height: CGFloat
+
+        init(documentURL: URL, nodeID: UUID, pageIndex: Int, bounds: CGRect) {
+            self.documentURL = documentURL
+            self.nodeID = nodeID
+            self.pageIndex = pageIndex
+            self.x = bounds.origin.x
+            self.y = bounds.origin.y
+            self.width = bounds.size.width
+            self.height = bounds.size.height
+        }
+
+        var bounds: CGRect { CGRect(x: x, y: y, width: width, height: height) }
+    }
+
+    /// Active persistent annotations keyed by anchor identity
+    private var activeAnnotationMap: [AnchorKey: PDFAnnotation] = [:]
 
     // MARK: - Persistent Source Highlights
 
-    /// Apply persistent color-coded highlights for all graph nodes in a document
+    /// Apply persistent color-coded highlights for all graph nodes in a
+    /// document. Diffs against `activeAnnotationMap` and applies only the
+    /// delta — important during extraction where nodeCount changes on each
+    /// batch and the wipe-then-readd pattern was O(N²) PDFKit operations.
     @MainActor
     func applyPersistentHighlights(
         document: PDFDocument,
         graph: KnowledgeGraph,
         documentURL: URL
     ) -> [UUID: [PDFAnnotation]] {
-        var result: [UUID: [PDFAnnotation]] = [:]
+        // Build desired set + per-key color
+        var desiredKeys: Set<AnchorKey> = []
+        var desiredColors: [AnchorKey: NSColor] = [:]
 
         let nodesInDoc = graph.allNodes.filter { node in
             node.sourceAnchors.contains { $0.documentURL == documentURL }
@@ -42,37 +73,70 @@ nonisolated class HighlightSyncBridge {
         for node in nodesInDoc {
             let colorIndex = node.highlightColorIndex ?? 0
             let color = SourceHighlightPalette.color(for: colorIndex).withAlphaComponent(0.25)
-
             for anchor in node.sourceAnchors where anchor.documentURL == documentURL {
-                guard anchor.pageIndex < document.pageCount,
-                      let page = document.page(at: anchor.pageIndex) else { continue }
-
-                let annotation = PDFAnnotation(bounds: anchor.boundingBox, forType: .highlight, withProperties: nil)
-                annotation.color = color
-                annotation.setValue(node.id.uuidString, forAnnotationKey: PDFAnnotationKey(rawValue: Self.atlasNodeIDKey))
-                // Also store in contents for easier retrieval
-                annotation.contents = "\(Self.atlasContentsPrefix)\(node.id.uuidString)"
-
-                page.addAnnotation(annotation)
-                result[node.id, default: []].append(annotation)
+                guard anchor.pageIndex < document.pageCount else { continue }
+                let key = AnchorKey(documentURL: documentURL, nodeID: node.id, pageIndex: anchor.pageIndex, bounds: anchor.boundingBox)
+                desiredKeys.insert(key)
+                desiredColors[key] = color
             }
         }
 
-        activeAnnotations = result
+        // Restrict the diff to keys for THIS document — annotations for
+        // other documents (if the bridge is ever shared) stay put.
+        let existingKeys = Set(activeAnnotationMap.keys.filter { $0.documentURL == documentURL })
+        let toRemove = existingKeys.subtracting(desiredKeys)
+        let toAdd = desiredKeys.subtracting(existingKeys)
+        let kept = existingKeys.intersection(desiredKeys)
+
+        // Apply removals
+        for key in toRemove {
+            if let annotation = activeAnnotationMap.removeValue(forKey: key) {
+                annotation.page?.removeAnnotation(annotation)
+            }
+        }
+
+        // Apply additions
+        for key in toAdd {
+            guard let page = document.page(at: key.pageIndex),
+                  let color = desiredColors[key] else { continue }
+            let annotation = PDFAnnotation(bounds: key.bounds, forType: .highlight, withProperties: nil)
+            annotation.color = color
+            annotation.setValue(key.nodeID.uuidString, forAnnotationKey: PDFAnnotationKey(rawValue: Self.atlasNodeIDKey))
+            annotation.contents = "\(Self.atlasContentsPrefix)\(key.nodeID.uuidString)"
+            page.addAnnotation(annotation)
+            activeAnnotationMap[key] = annotation
+        }
+
+        // Update color on kept keys if it drifted (e.g., cross-doc merge
+        // reassigned `highlightColorIndex` for an existing node)
+        for key in kept {
+            if let annotation = activeAnnotationMap[key],
+               let color = desiredColors[key],
+               annotation.color != color {
+                annotation.color = color
+            }
+        }
+
+        // Build the legacy [UUID: [PDFAnnotation]] return shape
+        var result: [UUID: [PDFAnnotation]] = [:]
+        for key in desiredKeys {
+            if let annotation = activeAnnotationMap[key] {
+                result[key.nodeID, default: []].append(annotation)
+            }
+        }
         return result
     }
 
     /// Remove all Atlas-managed highlights from a document
     @MainActor
     func removeAllAtlasHighlights(from document: PDFDocument) {
-        if !activeAnnotations.isEmpty {
-            // Fast path: remove only tracked annotations
-            for annotations in activeAnnotations.values {
-                for annotation in annotations {
-                    annotation.page?.removeAnnotation(annotation)
-                }
+        let trackedForDoc = activeAnnotationMap.filter { $0.key.documentURL.path == document.documentURL?.path }
+        if !trackedForDoc.isEmpty {
+            // Fast path: remove only tracked annotations for this document
+            for (key, annotation) in trackedForDoc {
+                annotation.page?.removeAnnotation(annotation)
+                activeAnnotationMap.removeValue(forKey: key)
             }
-            activeAnnotations.removeAll()
         } else {
             // Fallback: scan pages (e.g., first load with pre-existing annotations)
             for pageIndex in 0..<document.pageCount {
@@ -87,14 +151,15 @@ nonisolated class HighlightSyncBridge {
         }
     }
 
-    /// Refresh highlights: remove old ones and apply new ones
+    /// Refresh highlights against the current graph state. With the
+    /// diff-based `applyPersistentHighlights`, this is now a thin alias —
+    /// no more wipe-then-readd churn.
     @MainActor
     func refreshHighlights(
         document: PDFDocument,
         graph: KnowledgeGraph,
         documentURL: URL
     ) {
-        removeAllAtlasHighlights(from: document)
         _ = applyPersistentHighlights(document: document, graph: graph, documentURL: documentURL)
     }
 
