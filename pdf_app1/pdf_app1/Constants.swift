@@ -107,3 +107,14 @@ struct AppConstants {
     /// UserDefaults key for open session tab bookmarks
     static let openSessionBookmarksKey = "OpenSessionBookmarks"
 }
+
+// MARK: - Notification Names
+
+extension Notification.Name {
+    static let openNewDocument = Notification.Name("OpenNewDocument")
+    static let openDocumentInNewWindow = Notification.Name("OpenDocumentInNewWindow")
+    static let navigateToPage = Notification.Name("NavigateToPage")
+    static let closeCurrentTab = Notification.Name("CloseCurrentTab")
+    static let closeOtherTabs = Notification.Name("CloseOtherTabs")
+    static let setPaneMode = Notification.Name("SetPaneMode")
+}

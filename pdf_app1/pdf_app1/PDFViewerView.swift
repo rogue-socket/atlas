@@ -251,7 +251,7 @@ struct PDFViewerView: View {
         .onReceive(NotificationCenter.default.publisher(for: .PDFViewScaleChanged, object: pdfView)) { _ in
             syncZoomText()
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NavigateToPage"))) { notification in
+        .onReceive(NotificationCenter.default.publisher(for: .navigateToPage)) { notification in
             if let pageIndex = notification.object as? Int {
                 goToPage(pageIndex)
                 guard let document = pdfView.document,

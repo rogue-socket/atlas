@@ -45,12 +45,12 @@ struct PDFViewerApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Tab") {
-                    NotificationCenter.default.post(name: NSNotification.Name("OpenNewDocument"), object: nil)
+                    NotificationCenter.default.post(name: .openNewDocument, object: nil)
                 }
                 .keyboardShortcut("t", modifiers: [.command])
                 
                 Button("Close Tab") {
-                    NotificationCenter.default.post(name: NSNotification.Name("CloseCurrentTab"), object: nil)
+                    NotificationCenter.default.post(name: .closeCurrentTab, object: nil)
                 }
                 .keyboardShortcut("w", modifiers: [.command])
                 
@@ -67,17 +67,17 @@ struct PDFViewerApp: App {
 
             CommandMenu("View") {
                 Button("PDF Only") {
-                    NotificationCenter.default.post(name: NSNotification.Name("SetPaneMode"), object: PaneMode.pdfOnly)
+                    NotificationCenter.default.post(name: .setPaneMode, object: PaneMode.pdfOnly)
                 }
                 .keyboardShortcut("1", modifiers: [.command])
 
                 Button("Map Only") {
-                    NotificationCenter.default.post(name: NSNotification.Name("SetPaneMode"), object: PaneMode.mapOnly)
+                    NotificationCenter.default.post(name: .setPaneMode, object: PaneMode.mapOnly)
                 }
                 .keyboardShortcut("2", modifiers: [.command])
 
                 Button("Split View") {
-                    NotificationCenter.default.post(name: NSNotification.Name("SetPaneMode"), object: PaneMode.split)
+                    NotificationCenter.default.post(name: .setPaneMode, object: PaneMode.split)
                 }
                 .keyboardShortcut("3", modifiers: [.command])
             }

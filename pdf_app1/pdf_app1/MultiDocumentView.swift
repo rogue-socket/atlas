@@ -30,7 +30,7 @@ struct DocumentVerticalTabBar: View {
                 // New tab button
                 Button(action: {
                     NotificationCenter.default.post(
-                        name: NSNotification.Name("OpenNewDocument"),
+                        name: .openNewDocument,
                         object: nil
                     )
                 }) {
@@ -153,14 +153,14 @@ struct DocumentVerticalTabItem: View {
             
             Button("Close Other Tabs") {
                 NotificationCenter.default.post(
-                    name: NSNotification.Name("CloseOtherTabs"),
+                    name: .closeOtherTabs,
                     object: document
                 )
             }
             
             Button("Open in New Window") {
                 NotificationCenter.default.post(
-                    name: NSNotification.Name("OpenDocumentInNewWindow"),
+                    name: .openDocumentInNewWindow,
                     object: document
                 )
             }
@@ -324,7 +324,7 @@ struct MultiDocumentView: View {
                         },
                         onNavigateToPage: { page in
                             NotificationCenter.default.post(
-                                name: NSNotification.Name("NavigateToPage"),
+                                name: .navigateToPage,
                                 object: page
                             )
                         }
@@ -349,12 +349,7 @@ struct MultiDocumentView: View {
         .environmentObject(alertManager)
         .environmentObject(notificationManager)
         .environmentObject(loadingManager)
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("OpenDocuments"))) { notification in
-            if let urls = notification.object as? [URL] {
-                documentManager.openDocuments(urls, projectID: projectsManager.selectedProjectID)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("OpenNewDocument"))) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .openNewDocument)) { _ in
             // Trigger file picker
             let panel = NSOpenPanel()
             panel.title = "Open PDF Document"
@@ -366,12 +361,12 @@ struct MultiDocumentView: View {
                 }
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CloseCurrentTab"))) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .closeCurrentTab)) { _ in
             if let document = documentManager.selectedDocument {
                 documentManager.closeDocument(document)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CloseOtherTabs"))) { notification in
+        .onReceive(NotificationCenter.default.publisher(for: .closeOtherTabs)) { notification in
             if let currentDocument = notification.object as? PDFDocumentItem {
                 documentManager.documents.removeAll { $0.id != currentDocument.id }
                 documentManager.selectedDocumentID = currentDocument.id
@@ -605,7 +600,7 @@ struct MultiDocumentView: View {
                             .textCase(.uppercase)
                         Spacer()
                         Button(action: {
-                            NotificationCenter.default.post(name: NSNotification.Name("OpenNewDocument"), object: nil)
+                            NotificationCenter.default.post(name: .openNewDocument, object: nil)
                         }) {
                             Image(systemName: "plus")
                                 .font(.caption)
@@ -715,7 +710,7 @@ struct MultiDocumentView: View {
             }
             Button("Close Tab") { documentManager.closeDocument(document) }
             Button("Close Other Tabs") {
-                NotificationCenter.default.post(name: NSNotification.Name("CloseOtherTabs"), object: document)
+                NotificationCenter.default.post(name: .closeOtherTabs, object: document)
             }
         }
     }
@@ -846,7 +841,7 @@ struct MultiDocumentView: View {
                         .font(.callout)
                         .foregroundColor(.secondary)
                     Button("Open PDF") {
-                        NotificationCenter.default.post(name: NSNotification.Name("OpenNewDocument"), object: nil)
+                        NotificationCenter.default.post(name: .openNewDocument, object: nil)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -952,7 +947,7 @@ struct MultiDocumentView: View {
                                     if let bb = boundingBox { info["boundingBox"] = bb }
                                     if let ts = textSnippet, !ts.isEmpty { info["textSnippet"] = ts }
                                     NotificationCenter.default.post(
-                                        name: NSNotification.Name("NavigateToPage"),
+                                        name: .navigateToPage,
                                         object: pageIndex,
                                         userInfo: info.isEmpty ? nil : info
                                     )
@@ -1290,7 +1285,7 @@ struct MultiDocumentView: View {
 
             HStack(spacing: 12) {
                 Button {
-                    NotificationCenter.default.post(name: NSNotification.Name("OpenNewDocument"), object: nil)
+                    NotificationCenter.default.post(name: .openNewDocument, object: nil)
                 } label: {
                     Label("Open PDF", systemImage: "doc.badge.plus")
                 }

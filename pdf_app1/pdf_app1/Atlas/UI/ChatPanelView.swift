@@ -52,7 +52,7 @@ struct ChatPanelView: View {
                             guard let pageIndex = citation.pageIndex else { return }
                             let anchor = viewModel.resolveCitationAnchor(citation)
                             NotificationCenter.default.post(
-                                name: NSNotification.Name("NavigateToPage"),
+                                name: .navigateToPage,
                                 object: pageIndex,
                                 userInfo: anchor.map { ["boundingBox": $0.boundingBox] }
                             )
