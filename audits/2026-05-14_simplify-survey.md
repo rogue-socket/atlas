@@ -14,8 +14,8 @@ Read-only review of `Atlas/` source (57 Swift files, ~13.4k lines) across three 
 | 2 | #6 Stringly-typed PDF annotation kinds | ✅ done | `940e414` | New `PDFAnnotation+Kind.swift` shim normalizes PDFKit's read/write slash asymmetry. 5 read sites + `typeIcon` switch converted to typed `PDFAnnotationSubtype` constants. |
 | 2 | #7 `Notification.Name` literals duplicated | ✅ done | `6447ba9` | Typed extension in `Constants.swift`; ~20 sites converted. Surfaced `OpenDocuments` as dead code (zero posters anywhere — no Swift, no plist, no AppDelegate). Observer deleted. |
 | 2 | #8 `findSourceAnchor` per-page decode | open | — | Held — wider blast radius; would benefit from profile data, like Tier 1 #3. |
-| 2 | #9 `GraphStore.scheduleSave` race + retention | open | — | Latent bug, not cleanup — needs decision doc + sign-off. Separate track. |
-| 2 | #10 TOCTOU + sync I/O on document open | open | — | Latent bug, same track as #9. |
+| 2 | #9 `GraphStore.scheduleSave` race + retention | ✅ done | `42fe76c` | Encode moved to caller; work item now captures `Data` payload instead of `KnowledgeGraph` reference. Eliminates the concurrent dict read/write on `nodes`/`edges` between debounced save (background) and ongoing extraction (main). Retention concern resolved as side effect. |
+| 2 | #10 TOCTOU + sync I/O on document open | won't-fix | — | The `fileExists` precheck is not redundant — it differentiates "no saved graph yet" (info log) from "load failed" (error log), which matters during debugging. The TOCTOU window is benign (no concurrent writers in this app; same nil-return outcome either way). Sync I/O is fine in practice — KB-MB files, local disk, once per document-open, not in a hot loop. The audit's framing ignored why the precheck exists. |
 | 2 | #11 Levenshtein + dup similarity util | open | — | Held — wider blast radius; profile-first. |
 | 2 | #12 `.pdf` strip via `replacingOccurrences` | ✅ done | `ae78939` | `URL.deletingPathExtension()` — fixes case-insensitive (`.PDF`) and double-extension (`v1.pdf.pdf`) edge cases. |
 | 2 | #13 `resolveOverlaps` O(n²) | open | — | Renderer perf, profile-first (same reasoning as Tier 1 #3). |
@@ -96,11 +96,15 @@ Contains: main `PDFViewerView`, `PDFViewRepresentable` + Coordinator (683-1271, 
 ### 8. `findSourceAnchor` re-decodes every PDF page per concept
 `ExtractionPipeline.swift:533-545` — loops `0..<document.pageCount` calling `page.string` (PDFKit decodes per call) and `.lowercased().contains(prefix)` for each unmatched concept. Cache `pageTexts: [Int: String]` for the batch; short-circuit by searching the batch's page range first.
 
-### 9. `GraphStore.scheduleSave` race + strong-graph retention
+### 9. `GraphStore.scheduleSave` race + strong-graph retention — ✅ done (`42fe76c`)
 `Atlas/Persistence/GraphStore.swift:146-156` — debounced work item captures `graph` strongly (only `self` is weak); `save(_:)` runs on `.utility` queue while main-actor mutates `nodes`/`edges` during `graph.encode()`. Snapshot/encode on caller; debounce only the file write.
 
-### 10. TOCTOU + sync I/O on document-open path
+**As landed:** Reframed during analysis. The race was real (Swift `Dictionary` concurrent read+write is undefined behavior — `KnowledgeGraph` is `@Observable nonisolated class`, chosen for the deinit-crash workaround in `c8cad91`, not thread-safety). Hasn't crashed yet because windows are tight (encode is fast, batches are slow ~10s apart) but could surface with fast local Ollama. The retention concern was technically true but harmless — `DispatchWorkItem.cancel()` doesn't drop already-queued items so cancelled items hold graph refs for up to 1s, but the graph is a class so all refs point to the same instance; no real leak. Fix: encode synchronously on caller, capture `Data` payload (value type) into the work item. Retention falls out as a bonus since the work item no longer references the graph. `save(_:for:)` removed (only caller was the rewritten `scheduleSave` closure). `saveProjectGraph` left alone — different path, out of scope.
+
+### 10. TOCTOU + sync I/O on document-open path — won't-fix
 `GraphStore.swift:82,133`; `AIServiceManager.swift:116` — `fileExists` precheck then `Data(contentsOf:)` synchronously. Drop the precheck, handle the throw. Move callers off main if not already.
+
+**Declined.** The audit missed why the precheck exists. The precheck differentiates two log cases: `info: "No saved graph for X"` (user hasn't extracted this document yet — normal) vs `error: "Failed to load graph for X"` (file exists but read/decode failed — actually broken). Dropping the precheck collapses both into the catch and loses the signal during debugging. Could preserve it by introspecting `NSError.code == NSFileReadNoSuchFileError`, but that's uglier than the current code and observable behavior doesn't change either way — both paths return nil. The TOCTOU race is benign here (no concurrent writers, same nil outcome whichever path runs). Sync I/O is fine in practice — files are KB-MB, on local disk, called once per document-open, not in a hot loop. Current code is correct as-written for this app.
 
 ### 11. Levenshtein with no prefilter; duplicated similarity util
 `GraphMergeEngine.swift:70-91,105-127,268-308` — pairwise O(N·M) Levenshtein with `Set` constructions inside the inner loop. `computeSimilarity` + `levenshteinDistance` are hand-rolled and called from 4 sites in the same file with inconsistent thresholds (0.5 vs 0.7). Length-bucket prefilter (skip if `|len(a) − len(b)| > threshold`); extract to a `StringSimilarity` util.
