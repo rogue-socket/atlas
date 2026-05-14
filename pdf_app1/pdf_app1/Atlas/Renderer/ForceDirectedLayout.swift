@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import CoreGraphics
 import Observation
 
 struct NodePosition {
@@ -159,8 +160,12 @@ class ForceDirectedLayout {
             }
         }
 
-        // Post-process: resolve remaining overlaps
+        // Post-process: resolve remaining overlaps. First per-node (no two
+        // nodes too close); then per-cluster (no two concept-plus-entities
+        // bounding boxes overlap, since the renderer draws each cluster as
+        // a labeled rectangle and overlap there is the most visible mess).
         resolveOverlaps(nodes: nodes)
+        resolveClusterOverlaps(nodes: nodes)
     }
 
     private func runIteration(
@@ -284,6 +289,111 @@ class ForceDirectedLayout {
             }
         }
         return out
+    }
+
+    /// Push apart any concept clusters (concept + its entities, the
+    /// rectangle drawn by `MapCanvasRenderer.drawGroupBackgrounds`)
+    /// whose bounding boxes overlap. Each cluster moves as a rigid
+    /// unit — concept node and entities translate together — so
+    /// intra-cluster structure from FDL is preserved.
+    ///
+    /// Padding matches the renderer's draw padding (40 horizontal,
+    /// 30 top, 50 bottom) so the resolved bboxes correspond to what
+    /// the user actually sees.
+    func resolveClusterOverlaps(nodes: [ConceptNode]) {
+        let conceptNodes = nodes.filter { $0.level == .concept }
+        guard conceptNodes.count >= 2 else { return }
+
+        // entityIDsByParent: for each concept, the IDs of its entities
+        var entityIDsByParent: [UUID: [UUID]] = [:]
+        for node in nodes where node.level == .entity {
+            if let parentID = node.parentConceptID {
+                entityIDsByParent[parentID, default: []].append(node.id)
+            }
+        }
+
+        func memberIDs(of conceptID: UUID) -> [UUID] {
+            [conceptID] + (entityIDsByParent[conceptID] ?? [])
+        }
+
+        func clusterBBox(of conceptID: UUID) -> CGRect? {
+            let members = memberIDs(of: conceptID)
+            let pts = members.compactMap { positions[$0] }
+            guard !pts.isEmpty else { return nil }
+            let xs = pts.map(\.x)
+            let ys = pts.map(\.y)
+            // Padding matches MapCanvasRenderer.drawGroupBackgrounds
+            // before viewScale is applied (we work in virtual coords).
+            let minX = xs.min()! - 40
+            let maxX = xs.max()! + 40
+            let minY = ys.min()! - 30
+            let maxY = ys.max()! + 50
+            return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        }
+
+        func shiftCluster(_ conceptID: UUID, by delta: CGPoint) {
+            for id in memberIDs(of: conceptID) {
+                guard var pos = positions[id], !pos.isFixed else { continue }
+                pos.x += delta.x
+                pos.y += delta.y
+                positions[id] = pos
+            }
+        }
+
+        let conceptIDs = conceptNodes.map(\.id)
+
+        for _ in 0..<30 {
+            var anyOverlap = false
+
+            // Recompute bboxes each iteration since clusters shift
+            var bboxes: [UUID: CGRect] = [:]
+            for id in conceptIDs {
+                if let bbox = clusterBBox(of: id) {
+                    bboxes[id] = bbox
+                }
+            }
+
+            for i in 0..<conceptIDs.count {
+                for j in (i + 1)..<conceptIDs.count {
+                    let idA = conceptIDs[i]
+                    let idB = conceptIDs[j]
+                    guard let bboxA = bboxes[idA], let bboxB = bboxes[idB] else { continue }
+                    guard bboxA.intersects(bboxB) else { continue }
+                    anyOverlap = true
+
+                    // Push along axis from B's center to A's center.
+                    // Magnitude = half the overlap on the dominant axis,
+                    // plus a small gap. Each cluster moves half the distance.
+                    let aCenter = CGPoint(x: bboxA.midX, y: bboxA.midY)
+                    let bCenter = CGPoint(x: bboxB.midX, y: bboxB.midY)
+                    var dx = aCenter.x - bCenter.x
+                    var dy = aCenter.y - bCenter.y
+                    let mag = sqrt(dx * dx + dy * dy)
+                    if mag < 1 {
+                        // Centers coincide — push along an arbitrary axis
+                        dx = 1; dy = 0
+                    } else {
+                        dx /= mag
+                        dy /= mag
+                    }
+
+                    let overlap = bboxA.intersection(bboxB)
+                    let pushAmount = max(overlap.width, overlap.height) / 2 + 10
+                    let pushA = CGPoint(x: dx * pushAmount, y: dy * pushAmount)
+                    let pushB = CGPoint(x: -dx * pushAmount, y: -dy * pushAmount)
+
+                    shiftCluster(idA, by: pushA)
+                    shiftCluster(idB, by: pushB)
+
+                    // Refresh affected bboxes so subsequent comparisons in
+                    // this iteration use up-to-date positions.
+                    if let newA = clusterBBox(of: idA) { bboxes[idA] = newA }
+                    if let newB = clusterBBox(of: idB) { bboxes[idB] = newB }
+                }
+            }
+
+            if !anyOverlap { break }
+        }
     }
 
     /// Push apart any nodes that are still overlapping after layout
