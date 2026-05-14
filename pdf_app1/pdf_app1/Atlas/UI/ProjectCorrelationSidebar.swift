@@ -217,7 +217,7 @@ struct CorrelationPairRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(urlA.lastPathComponent.replacingOccurrences(of: ".pdf", with: ""))
+            Text(urlA.deletingPathExtension().lastPathComponent)
                 .font(.caption)
                 .lineLimit(1)
 
@@ -225,7 +225,7 @@ struct CorrelationPairRow: View {
                 .foregroundColor(.orange)
                 .font(.caption2)
 
-            Text(urlB.lastPathComponent.replacingOccurrences(of: ".pdf", with: ""))
+            Text(urlB.deletingPathExtension().lastPathComponent)
                 .font(.caption)
                 .lineLimit(1)
 

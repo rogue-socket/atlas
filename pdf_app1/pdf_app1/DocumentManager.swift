@@ -23,7 +23,7 @@ struct PDFDocumentItem: Identifiable, Equatable {
     let document: PDFKit.PDFDocument
     let projectID: UUID?  // Track which project this document belongs to
     var title: String {
-        url.lastPathComponent.replacingOccurrences(of: ".pdf", with: "")
+        url.deletingPathExtension().lastPathComponent
     }
     
     static func == (lhs: PDFDocumentItem, rhs: PDFDocumentItem) -> Bool {
