@@ -58,7 +58,7 @@ class AIServiceManager {
             }
             return GeminiBackend(apiKey: apiKey, model: selectedModel)
         case .ollama:
-            let baseURL = UserDefaults.standard.string(forKey: "atlas.ollama.baseURL") ?? "http://localhost:11434"
+            let baseURL = UserDefaults.standard.string(forKey: AppConstants.ollamaBaseURLKey) ?? "http://localhost:11434"
             log.info("[AIService] Using Ollama at \(baseURL)")
             return OpenAIBackend(apiKey: "", model: selectedModel, baseURL: baseURL + "/v1", displayName: "Ollama")
         }
@@ -137,19 +137,19 @@ class AIServiceManager {
     // MARK: - Preferences Persistence
 
     private func loadPreferences() {
-        if let type = UserDefaults.standard.string(forKey: "atlas.ai.backendType"),
+        if let type = UserDefaults.standard.string(forKey: AppConstants.aiBackendTypeKey),
            let backendType = AIBackendType(rawValue: type) {
             selectedBackendType = backendType
         }
-        if let model = UserDefaults.standard.string(forKey: "atlas.ai.model") {
+        if let model = UserDefaults.standard.string(forKey: AppConstants.aiModelKey) {
             selectedModel = model
         }
         updateConfiguredState()
     }
 
     func savePreferences() {
-        UserDefaults.standard.set(selectedBackendType.rawValue, forKey: "atlas.ai.backendType")
-        UserDefaults.standard.set(selectedModel, forKey: "atlas.ai.model")
+        UserDefaults.standard.set(selectedBackendType.rawValue, forKey: AppConstants.aiBackendTypeKey)
+        UserDefaults.standard.set(selectedModel, forKey: AppConstants.aiModelKey)
     }
 
     private func updateConfiguredState() {

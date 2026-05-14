@@ -106,6 +106,12 @@ struct AppConstants {
     static let windowStateKey = "WindowStatePreference"
     /// UserDefaults key for open session tab bookmarks
     static let openSessionBookmarksKey = "OpenSessionBookmarks"
+    /// UserDefaults key for selected AI backend type
+    static let aiBackendTypeKey = "atlas.ai.backendType"
+    /// UserDefaults key for selected AI model identifier
+    static let aiModelKey = "atlas.ai.model"
+    /// UserDefaults key for Ollama base URL override
+    static let ollamaBaseURLKey = "atlas.ollama.baseURL"
 }
 
 // MARK: - Notification Names

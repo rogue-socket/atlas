@@ -92,7 +92,7 @@ struct AISettingsView: View {
                     TextField("Base URL", text: $ollamaBaseURL)
                         .textFieldStyle(.roundedBorder)
                         .onSubmit {
-                            UserDefaults.standard.set(ollamaBaseURL, forKey: "atlas.ollama.baseURL")
+                            UserDefaults.standard.set(ollamaBaseURL, forKey: AppConstants.ollamaBaseURLKey)
                         }
 
                     Text("Make sure Ollama is running locally with the selected model pulled.")
@@ -161,7 +161,7 @@ struct AISettingsView: View {
         .frame(minWidth: 450)
         .onAppear {
             loadAPIKey(for: serviceManager.selectedBackendType)
-            ollamaBaseURL = UserDefaults.standard.string(forKey: "atlas.ollama.baseURL") ?? "http://localhost:11434"
+            ollamaBaseURL = UserDefaults.standard.string(forKey: AppConstants.ollamaBaseURLKey) ?? "http://localhost:11434"
         }
     }
 
