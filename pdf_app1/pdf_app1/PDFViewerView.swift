@@ -194,15 +194,17 @@ struct PDFViewerView: View {
                         showingTextAnnotationDialog = true
                     },
                     onPageChanged: { page in
-                        if let page = page {
-                            let idx = pdfDocument.index(for: page)
-                            if idx >= 0 && idx < pdfDocument.pageCount {
-                                currentPage = page
+                        // PDFKit posts `PDFViewPageChanged` synchronously when
+                        // `pdfView.document` is reassigned during `updateNSView`,
+                        // so this closure can run mid-view-update. Defer the
+                        // `@State` write to avoid "Modifying state during view update".
+                        DispatchQueue.main.async {
+                            if let page {
+                                let idx = pdfDocument.index(for: page)
+                                currentPage = (idx >= 0 && idx < pdfDocument.pageCount) ? page : nil
                             } else {
                                 currentPage = nil
                             }
-                        } else {
-                            currentPage = nil
                         }
                     },
                     onAnnotationError: { errorMessage in
