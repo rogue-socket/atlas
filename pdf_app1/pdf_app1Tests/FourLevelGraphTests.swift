@@ -103,14 +103,22 @@ final class FourLevelGraphTests: XCTestCase {
         XCTAssertEqual(visible.map(\.id), [chap.id])
     }
 
-    func test_densityManager_pinnedNode_visibleAtAllLevels() {
+    func test_densityManager_pinnedNode_notVisibleAtNonMatchingLevels() {
+        // B1: pinned nodes no longer carve out across levels — each tab
+        // strictly shows its own level. The renderer's selection overlay
+        // still calls attention to the active node when it's at the
+        // currently-visible level.
         let graph = KnowledgeGraph()
         var pinned = ConceptNode(label: "P", level: .entity)
         pinned.isPinned = true
         graph.addNode(pinned)
-        for zoom in [SemanticZoomLevel.document, .chapter, .concept, .entity] {
-            let visible = DensityManager().visibleNodes(from: graph, zoomLevel: zoom)
-            XCTAssertTrue(visible.contains { $0.id == pinned.id }, "Pinned node should be visible at \(zoom)")
+
+        let visibleAtEntity = DensityManager().visibleNodes(from: graph, zoomLevel: .entity)
+        XCTAssertTrue(visibleAtEntity.contains { $0.id == pinned.id }, "Pinned entity is visible at its own level")
+
+        for offLevel in [SemanticZoomLevel.document, .chapter, .concept] {
+            let visible = DensityManager().visibleNodes(from: graph, zoomLevel: offLevel)
+            XCTAssertFalse(visible.contains { $0.id == pinned.id }, "Pinned entity must NOT bleed into \(offLevel) tab")
         }
     }
 
