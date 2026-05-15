@@ -18,6 +18,11 @@ final class GeminiBackend: LLMBackend, @unchecked Sendable {
     private let baseURL: String
     private let session: URLSession
 
+    // Updated on every transport(prompt:) call. Reads/writes happen on the
+    // same task that drives the extraction loop (sequential by design), so
+    // no synchronization is needed despite @unchecked Sendable.
+    var lastResponsePromptTokens: Int?
+
     var isAvailable: Bool { !apiKey.isEmpty }
 
     init(
@@ -82,6 +87,7 @@ final class GeminiBackend: LLMBackend, @unchecked Sendable {
             log.error("[Gemini] Could not parse response structure: \(error). Raw (first 500): \(String(raw.prefix(500)))")
             throw AIError.invalidResponse
         }
+        lastResponsePromptTokens = parsed.usageMetadata?.promptTokenCount
         guard let text = parsed.candidates.first?.content.parts.first?.text else {
             let raw = String(data: data, encoding: .utf8) ?? "<binary>"
             log.error("[Gemini] Empty candidates/parts. Raw (first 500): \(String(raw.prefix(500)))")
@@ -96,6 +102,7 @@ final class GeminiBackend: LLMBackend, @unchecked Sendable {
 
 private struct GeminiResponse: Decodable {
     let candidates: [Candidate]
+    let usageMetadata: UsageMetadata?
     struct Candidate: Decodable {
         let content: Content
     }
@@ -104,5 +111,8 @@ private struct GeminiResponse: Decodable {
     }
     struct Part: Decodable {
         let text: String
+    }
+    struct UsageMetadata: Decodable {
+        let promptTokenCount: Int?
     }
 }
