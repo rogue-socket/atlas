@@ -71,7 +71,7 @@ struct KnowledgeMapView: View {
     }
 
     private var visibleNodes: [ConceptNode] {
-        densityManager.visibleNodes(from: graph, zoomLevel: zoomLevel, activeNodeID: interaction.selectedNodeID)
+        densityManager.visibleNodes(from: graph, zoomLevel: zoomLevel)
     }
 
     var body: some View {
