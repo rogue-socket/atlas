@@ -66,101 +66,28 @@ final class NodeSizingTests: XCTestCase {
         }
     }
 
-    // MARK: - Backward-compatible decoding
+    // MARK: - NodeSizing.forNodeLevel (4-level mapping)
 
-    func testDecodingWithoutHierarchyLevelDefaultsFromNodeLevel() throws {
-        let json = """
-        {
-            "id": "00000000-0000-0000-0000-000000000001",
-            "label": "Test Concept",
-            "type": "concept",
-            "sourceAnchors": [],
-            "readingState": "unseen",
-            "expansionState": "collapsed",
-            "confidence": 1.0,
-            "isPinned": false,
-            "level": "concept"
-        }
-        """
-        let conceptNode = try JSONDecoder().decode(ConceptNode.self, from: Data(json.utf8))
-        XCTAssertEqual(conceptNode.hierarchyLevel, 0, "concept level should default to hierarchyLevel 0")
+    func testForNodeLevel_documentAndChapterMatchTier0() {
+        let doc = NodeSizing.forNodeLevel(.document)
+        let chap = NodeSizing.forNodeLevel(.chapter)
+        let tier0 = NodeSizing.forLevel(0)
 
-        let entityJson = """
-        {
-            "id": "00000000-0000-0000-0000-000000000002",
-            "label": "Test Entity",
-            "type": "definition",
-            "sourceAnchors": [],
-            "readingState": "unseen",
-            "expansionState": "collapsed",
-            "confidence": 1.0,
-            "isPinned": false,
-            "level": "entity"
-        }
-        """
-        let entityNode = try JSONDecoder().decode(ConceptNode.self, from: Data(entityJson.utf8))
-        XCTAssertEqual(entityNode.hierarchyLevel, 1, "entity level should default to hierarchyLevel 1")
+        XCTAssertEqual(doc.baseWidth, tier0.baseWidth)
+        XCTAssertEqual(chap.baseWidth, tier0.baseWidth)
     }
 
-    func testDecodingWithExplicitHierarchyLevel() throws {
-        let json = """
-        {
-            "id": "00000000-0000-0000-0000-000000000003",
-            "label": "Deep Node",
-            "type": "example",
-            "sourceAnchors": [],
-            "readingState": "unseen",
-            "expansionState": "collapsed",
-            "confidence": 1.0,
-            "isPinned": false,
-            "level": "entity",
-            "hierarchyLevel": 2
-        }
-        """
-        let node = try JSONDecoder().decode(ConceptNode.self, from: Data(json.utf8))
-        XCTAssertEqual(node.hierarchyLevel, 2, "explicit hierarchyLevel should be preserved")
+    func testForNodeLevel_conceptMatchesTier1() {
+        let concept = NodeSizing.forNodeLevel(.concept)
+        let tier1 = NodeSizing.forLevel(1)
+        XCTAssertEqual(concept.baseWidth, tier1.baseWidth)
+        XCTAssertEqual(concept.fontSize, tier1.fontSize)
     }
 
-    // MARK: - isDocumentSummary round-trip & legacy decode
-
-    func testDecodingWithoutIsDocumentSummaryDefaultsFalse() throws {
-        let json = """
-        {
-            "id": "00000000-0000-0000-0000-000000000004",
-            "label": "Pre-field Node",
-            "type": "concept",
-            "sourceAnchors": [],
-            "readingState": "unseen",
-            "expansionState": "collapsed",
-            "confidence": 1.0,
-            "isPinned": false,
-            "level": "concept",
-            "hierarchyLevel": 0
-        }
-        """
-        let node = try JSONDecoder().decode(ConceptNode.self, from: Data(json.utf8))
-        XCTAssertFalse(node.isDocumentSummary, "legacy JSON without isDocumentSummary should decode to false")
-    }
-
-    func testIsDocumentSummaryRoundTripsThroughCodable() throws {
-        let summaryNode = ConceptNode(
-            label: "Document Summary",
-            type: .concept,
-            hierarchyLevel: -1,
-            isDocumentSummary: true
-        )
-        let regularNode = ConceptNode(
-            label: "Regular Concept",
-            type: .concept
-        )
-
-        let encoder = JSONEncoder()
-        let decoder = JSONDecoder()
-
-        let summaryDecoded = try decoder.decode(ConceptNode.self, from: encoder.encode(summaryNode))
-        XCTAssertTrue(summaryDecoded.isDocumentSummary, "isDocumentSummary=true should survive round-trip")
-
-        let regularDecoded = try decoder.decode(ConceptNode.self, from: encoder.encode(regularNode))
-        XCTAssertFalse(regularDecoded.isDocumentSummary, "default isDocumentSummary=false should survive round-trip")
+    func testForNodeLevel_entityMatchesTier2() {
+        let entity = NodeSizing.forNodeLevel(.entity)
+        let tier2 = NodeSizing.forLevel(2)
+        XCTAssertEqual(entity.baseWidth, tier2.baseWidth)
+        XCTAssertEqual(entity.fontSize, tier2.fontSize)
     }
 }

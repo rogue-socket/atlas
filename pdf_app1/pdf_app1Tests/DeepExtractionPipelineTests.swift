@@ -110,7 +110,15 @@ final class DeepExtractionPipelineTests: XCTestCase {
         let helicaseNode = graph.allNodes.first { $0.label == "Helicase" }
         XCTAssertNotNil(helicaseNode, "Should have Helicase entity")
         XCTAssertEqual(helicaseNode?.level, .entity)
-        XCTAssertEqual(helicaseNode?.parentConceptID, dnaNode?.id)
+
+        // Parent-concept relationship is now expressed as a containsEntity edge
+        // from concept → entity (replaces the old parentConceptID field).
+        let hasContainsEdge = graph.allEdges.contains { e in
+            e.type == .containsEntity &&
+            e.sourceNodeID == dnaNode?.id &&
+            e.targetNodeID == helicaseNode?.id
+        }
+        XCTAssertTrue(hasContainsEdge, "DNA Replication should contain Helicase via containsEntity edge")
     }
 
     // MARK: - Slice 2: Cross-page deduplication
@@ -196,9 +204,9 @@ final class DeepExtractionPipelineTests: XCTestCase {
         XCTAssertTrue(pipeline.statusMessage.contains("Done"), "Status should indicate completion")
     }
 
-    // MARK: - Slice 4: subtopicOf edges from Pass 3
+    // MARK: - Slice 4: cross-reference edges from Pass 3 (dependsOn, etc.)
 
-    func testSubtopicOfEdgesFromCrossReference() async {
+    func testCrossReferenceEdgesFromPass3() async {
         let backend = MockDeepBackend()
         let graph = KnowledgeGraph()
         let pipeline = DeepExtractionPipeline()
@@ -218,8 +226,10 @@ final class DeepExtractionPipelineTests: XCTestCase {
         ]}
         """
 
+        // subtopicOf is retired under the 4-level model; pass 3 now emits
+        // cross-concept relationships like dependsOn / sameTopic.
         backend.responsesForPass[3] = """
-        [{"sourceLabel": "DNA Replication", "targetLabel": "Genetics", "type": "subtopicOf", "confidence": 0.9}]
+        [{"sourceLabel": "DNA Replication", "targetLabel": "Genetics", "type": "dependsOn", "confidence": 0.9}]
         """
 
         let chunks = [
@@ -228,10 +238,10 @@ final class DeepExtractionPipelineTests: XCTestCase {
 
         await pipeline.processChunks(chunks, backend: backend, graph: graph, documentURL: docURL)
 
-        let subtopicEdges = graph.allEdges.filter { $0.type == .subtopicOf }
-        XCTAssertEqual(subtopicEdges.count, 1, "Should have one subtopicOf edge")
+        let dependsEdges = graph.allEdges.filter { $0.type == .dependsOn }
+        XCTAssertEqual(dependsEdges.count, 1, "Should have one dependsOn edge from cross-reference")
 
-        let edge = subtopicEdges.first!
+        let edge = dependsEdges.first!
         let source = graph.node(for: edge.sourceNodeID)
         let target = graph.node(for: edge.targetNodeID)
         XCTAssertEqual(source?.label, "DNA Replication")

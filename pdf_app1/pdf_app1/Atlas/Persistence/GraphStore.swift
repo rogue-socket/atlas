@@ -121,6 +121,41 @@ class GraphStore {
         }
     }
 
+    // MARK: - Project-Wide Load (multi-anchor reconciliation)
+
+    /// Loads every per-document graph for the given URLs and merges them
+    /// into one `KnowledgeGraph`. On UUID collision (the same node appears
+    /// in multiple per-doc files because cross-doc merging has shared
+    /// entities across documents), the entry with the latest
+    /// `lastModified` stamp wins — see `KnowledgeGraph.merge(from:)`.
+    /// Edges are deduped by tuple identity.
+    ///
+    /// Used by callers that want the full project graph in memory rather
+    /// than one doc at a time (e.g. the future Document tab that shows
+    /// cross-doc connections).
+    func loadProjectWideGraph(documentURLs: [URL]) -> KnowledgeGraph {
+        let merged = KnowledgeGraph()
+        var loaded = 0
+        var skipped = 0
+        for url in documentURLs {
+            guard let payload = loadPayload(for: url) else {
+                skipped += 1
+                continue
+            }
+            let docGraph = KnowledgeGraph()
+            do {
+                try docGraph.decode(from: payload)
+                merged.merge(from: docGraph)
+                loaded += 1
+            } catch {
+                log.error("[GraphStore] loadProjectWideGraph: decode failed for \(url.lastPathComponent): \(error)")
+                skipped += 1
+            }
+        }
+        log.info("[GraphStore] loadProjectWideGraph: merged \(loaded)/\(documentURLs.count) doc graph(s), \(skipped) skipped → \(merged.nodeCount) nodes, \(merged.edgeCount) edges")
+        return merged
+    }
+
     // MARK: - Save / Load per Project
 
     func saveProjectGraph(_ graph: KnowledgeGraph, projectID: UUID) {

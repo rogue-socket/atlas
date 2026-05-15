@@ -28,7 +28,9 @@ class ForceDirectedLayout {
     /// Entity → parent-concept lookup derived from `containsEntity` edges at
     /// the start of `computeLayout`. Cached so `iterate` and
     /// `resolveClusterOverlaps` can read it without re-scanning edges.
-    private var parentConceptByEntity: [UUID: UUID] = [:]
+    /// Internal (not private) so tests that call `resolveClusterOverlaps`
+    /// directly can seed the map without running full FDL.
+    var parentConceptByEntity: [UUID: UUID] = [:]
 
     // Tuned for readability — nodes stay well-separated
     private let repulsionConstant: Double = 25000

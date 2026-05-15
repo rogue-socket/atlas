@@ -375,12 +375,36 @@ nonisolated class KnowledgeGraph {
         highlightColorCounter = 0
     }
 
+    /// Merges `other` into `self`. On UUID collision the entry with the
+    /// later `lastModified` wins (per design doc decision #10:
+    /// last-modified-stamp reconciliation for multi-anchor cross-doc
+    /// nodes). Edges are deduped by tuple identity
+    /// `(sourceNodeID, targetNodeID, type)`.
     func merge(from other: KnowledgeGraph) {
-        for node in other.nodes.values {
-            insert(node)
+        for incoming in other.nodes.values {
+            if let existing = nodes[incoming.id] {
+                if incoming.lastModified > existing.lastModified {
+                    // Newer version wins; preserve labelIndex correctness on rename.
+                    if existing.label != incoming.label {
+                        labelIndex.removeValue(forKey: existing.label.lowercased())
+                    }
+                    nodes[incoming.id] = incoming
+                    labelIndex[incoming.label.lowercased()] = incoming.id
+                }
+                // Same or older: keep existing.
+            } else {
+                insert(incoming)
+            }
         }
         for edge in other.edges.values {
-            addEdge(edge)
+            let duplicate = edges.values.contains { existing in
+                existing.sourceNodeID == edge.sourceNodeID &&
+                existing.targetNodeID == edge.targetNodeID &&
+                existing.type == edge.type
+            }
+            if !duplicate {
+                addEdge(edge)
+            }
         }
         for (url, state) in other.documentProcessingState {
             documentProcessingState[url] = state

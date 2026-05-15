@@ -11,9 +11,18 @@ final class ClusterOverlapTests: XCTestCase {
         ConceptNode(id: id, label: label, level: .concept)
     }
 
-    private func entity(under parent: UUID, id: UUID = UUID()) -> ConceptNode {
-        ConceptNode(id: id, label: "entity-\(id.uuidString.prefix(4))",
-                    level: .entity, parentConceptID: parent)
+    private func entity(id: UUID = UUID()) -> ConceptNode {
+        ConceptNode(id: id, label: "entity-\(id.uuidString.prefix(4))", level: .entity)
+    }
+
+    /// Seed the layout's parent-concept map for entities so
+    /// `resolveClusterOverlaps` can treat them as a cluster. Under the
+    /// 4-level model this association lives in `containsEntity` edges
+    /// (built by `computeLayout`); for unit tests we seed it directly.
+    private func setParents(_ layout: ForceDirectedLayout, entities: [UUID: UUID]) {
+        for (entityID, conceptID) in entities {
+            layout.parentConceptByEntity[entityID] = conceptID
+        }
     }
 
     /// Compute the cluster bbox the renderer would draw — same padding
@@ -41,20 +50,24 @@ final class ClusterOverlapTests: XCTestCase {
 
         // Cluster A: concept at (100,100), entities nearby
         let cA = concept("A")
-        let aE1 = entity(under: cA.id)
-        let aE2 = entity(under: cA.id)
+        let aE1 = entity()
+        let aE2 = entity()
         layout.positions[cA.id] = NodePosition(x: 100, y: 100)
         layout.positions[aE1.id] = NodePosition(x: 130, y: 120)
         layout.positions[aE2.id] = NodePosition(x: 90, y: 130)
 
         // Cluster B: concept at (140,110), entities nearby — overlaps A
         let cB = concept("B")
-        let bE1 = entity(under: cB.id)
-        let bE2 = entity(under: cB.id)
+        let bE1 = entity()
+        let bE2 = entity()
         layout.positions[cB.id] = NodePosition(x: 140, y: 110)
         layout.positions[bE1.id] = NodePosition(x: 170, y: 130)
         layout.positions[bE2.id] = NodePosition(x: 130, y: 140)
 
+        setParents(layout, entities: [
+            aE1.id: cA.id, aE2.id: cA.id,
+            bE1.id: cB.id, bE2.id: cB.id
+        ])
         let nodes = [cA, aE1, aE2, cB, bE1, bE2]
 
         // Sanity: pre-resolve, bboxes overlap
@@ -75,8 +88,8 @@ final class ClusterOverlapTests: XCTestCase {
         let layout = ForceDirectedLayout(maxIterations: 1)
 
         let cA = concept("A")
-        let aE1 = entity(under: cA.id)
-        let aE2 = entity(under: cA.id)
+        let aE1 = entity()
+        let aE2 = entity()
         layout.positions[cA.id] = NodePosition(x: 100, y: 100)
         layout.positions[aE1.id] = NodePosition(x: 130, y: 120) // offset (+30, +20)
         layout.positions[aE2.id] = NodePosition(x: 90, y: 130)  // offset (-10, +30)
@@ -84,6 +97,7 @@ final class ClusterOverlapTests: XCTestCase {
         let cB = concept("B")
         layout.positions[cB.id] = NodePosition(x: 140, y: 110)
 
+        setParents(layout, entities: [aE1.id: cA.id, aE2.id: cA.id])
         layout.resolveClusterOverlaps(nodes: [cA, aE1, aE2, cB])
 
         let cAPos = layout.point(for: cA.id)!
