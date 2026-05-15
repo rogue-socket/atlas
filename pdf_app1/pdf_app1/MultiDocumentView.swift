@@ -11,6 +11,7 @@
 import SwiftUI
 import PDFKit
 import UniformTypeIdentifiers
+import os.log
 
 // MARK: - Vertical Tab Bar View
 struct DocumentVerticalTabBar: View {
@@ -1418,11 +1419,21 @@ struct MultiDocumentView: View {
         let alreadyHasNodes = knowledgeGraph.allNodes.contains { node in
             node.sourceAnchors.contains { $0.documentURL == documentURL }
         }
-        guard !alreadyHasNodes else { return }
+        if alreadyHasNodes {
+            AtlasLogger.graph.info("[MultiDocView] loadGraphIfNeeded: \(documentURL.lastPathComponent) already in-memory (\(knowledgeGraph.nodeCount) nodes), no-op")
+            return
+        }
 
-        if let saved = GraphStore.shared.load(for: documentURL) {
-            try? knowledgeGraph.decode(from: saved.encode())
+        if let payload = GraphStore.shared.loadPayload(for: documentURL) {
+            do {
+                try knowledgeGraph.decode(from: payload)
+                AtlasLogger.graph.info("[MultiDocView] loadGraphIfNeeded: hydrated graph for \(documentURL.lastPathComponent) (\(knowledgeGraph.nodeCount) nodes, \(knowledgeGraph.edgeCount) edges)")
+            } catch {
+                AtlasLogger.graph.error("[MultiDocView] loadGraphIfNeeded: decode failed for \(documentURL.lastPathComponent): \(error)")
+                knowledgeGraph.clear()
+            }
         } else {
+            AtlasLogger.graph.info("[MultiDocView] loadGraphIfNeeded: no saved graph for \(documentURL.lastPathComponent) — clearing in-memory graph")
             knowledgeGraph.clear()
         }
     }

@@ -69,40 +69,54 @@ class GraphStore {
         }
     }
 
-    func load(for documentURL: URL) -> KnowledgeGraph? {
+    /// Returns the raw graph payload bytes for the given document URL — the
+    /// same bytes that should be passed to `KnowledgeGraph.decode(from:)`. Nil
+    /// if no fresh graph exists or the cached file is stale. Lets callers that
+    /// already hold a `KnowledgeGraph` (e.g. an `@Environment`-injected one)
+    /// decode directly, avoiding the decode-then-encode-then-decode round trip
+    /// that an intermediate `KnowledgeGraph` would require.
+    func loadPayload(for documentURL: URL) -> Data? {
         let fileURL = graphFileURL(for: documentURL)
         guard fileManager.fileExists(atPath: fileURL.path) else {
             log.info("[GraphStore] No saved graph for \(documentURL.lastPathComponent)")
             return nil
         }
 
+        let data: Data
         do {
-            let data = try Data(contentsOf: fileURL)
+            data = try Data(contentsOf: fileURL)
+        } catch {
+            log.error("[GraphStore] Failed to read graph file for \(documentURL.lastPathComponent): \(error)")
+            return nil
+        }
 
-            // New format: invalidate when source mtime or size changed since save.
-            if let stored = try? JSONDecoder().decode(StoredGraph.self, from: data) {
-                let (currentMtime, currentSize) = currentMtimeAndSize(for: documentURL)
-                if let saved = stored.mtime, let cur = currentMtime, abs(saved - cur) > 1.0 {
-                    log.info("[GraphStore] Stale graph (mtime changed) for \(documentURL.lastPathComponent), invalidating")
-                    return nil
-                }
-                if let saved = stored.size, let cur = currentSize, saved != cur {
-                    log.info("[GraphStore] Stale graph (size changed) for \(documentURL.lastPathComponent), invalidating")
-                    return nil
-                }
-                let graph = KnowledgeGraph()
-                try graph.decode(from: stored.payload)
-                log.info("[GraphStore] Loaded graph for \(documentURL.lastPathComponent): \(graph.nodeCount) nodes, \(graph.edgeCount) edges")
-                return graph
+        // New format: invalidate when source mtime or size changed since save.
+        if let stored = try? JSONDecoder().decode(StoredGraph.self, from: data) {
+            let (currentMtime, currentSize) = currentMtimeAndSize(for: documentURL)
+            if let saved = stored.mtime, let cur = currentMtime, abs(saved - cur) > 1.0 {
+                log.info("[GraphStore] Stale graph (mtime changed) for \(documentURL.lastPathComponent), invalidating")
+                return nil
             }
+            if let saved = stored.size, let cur = currentSize, saved != cur {
+                log.info("[GraphStore] Stale graph (size changed) for \(documentURL.lastPathComponent), invalidating")
+                return nil
+            }
+            return stored.payload
+        }
 
-            // Legacy format (pre-StoredGraph): no mtime check available.
-            let graph = KnowledgeGraph()
-            try graph.decode(from: data)
-            log.info("[GraphStore] Loaded legacy graph for \(documentURL.lastPathComponent) (no mtime check)")
+        // Legacy format (pre-StoredGraph): the file IS the payload.
+        return data
+    }
+
+    func load(for documentURL: URL) -> KnowledgeGraph? {
+        guard let payload = loadPayload(for: documentURL) else { return nil }
+        let graph = KnowledgeGraph()
+        do {
+            try graph.decode(from: payload)
+            log.info("[GraphStore] Loaded graph for \(documentURL.lastPathComponent): \(graph.nodeCount) nodes, \(graph.edgeCount) edges")
             return graph
         } catch {
-            log.error("[GraphStore] Failed to load graph for \(documentURL.lastPathComponent): \(error)")
+            log.error("[GraphStore] Failed to decode graph for \(documentURL.lastPathComponent): \(error)")
             return nil
         }
     }
