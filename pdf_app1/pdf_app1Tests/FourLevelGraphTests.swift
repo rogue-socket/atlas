@@ -167,6 +167,36 @@ final class FourLevelGraphTests: XCTestCase {
         XCTAssertEqual(containsEdges.count, 1, "Duplicate containsEntity edge should be deduped")
     }
 
+    // MARK: - Lossy edge decode (B5)
+
+    func test_decode_skipsEdgesWithRetiredEdgeType_keepsNodesAndOtherEdges() throws {
+        // Simulate a legacy on-disk graph containing a retired EdgeType
+        // (`subtopicOf`, removed in the 4-level migration). Old behavior:
+        // the whole decode threw and the caller's catch ran `clear()`,
+        // wiping every doc's graph in memory. New behavior: keep nodes and
+        // known edges, drop only the unknown edge.
+        let a = ConceptNode(label: "A", level: .concept)
+        let b = ConceptNode(label: "B", level: .concept)
+
+        let g = KnowledgeGraph()
+        g.addNode(a)
+        g.addNode(b)
+        g.addEdge(GraphEdge(sourceNodeID: a.id, targetNodeID: b.id, type: .dependsOn, confidence: 0.9))
+        g.addEdge(GraphEdge(sourceNodeID: a.id, targetNodeID: b.id, type: .sameTopic, confidence: 0.8))
+
+        // Rewrite one edge's type to a string that's no longer in EdgeType.
+        let encoded = try g.encode()
+        let json = String(data: encoded, encoding: .utf8)!
+        let legacy = json.replacingOccurrences(of: "\"sameTopic\"", with: "\"subtopicOf\"")
+        let legacyData = legacy.data(using: .utf8)!
+
+        let restored = KnowledgeGraph()
+        XCTAssertNoThrow(try restored.decode(from: legacyData))
+        XCTAssertEqual(restored.nodeCount, 2, "Both nodes should survive the lossy decode")
+        XCTAssertEqual(restored.edgeCount, 1, "Only the dependsOn edge should remain; the subtopicOf entry is dropped")
+        XCTAssertEqual(restored.allEdges.first?.type, .dependsOn)
+    }
+
     // MARK: - EdgeType.isContainment
 
     func test_edgeType_isContainment_trueForAllContainmentEdges() {
