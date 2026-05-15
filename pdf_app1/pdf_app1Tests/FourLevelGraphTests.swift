@@ -167,6 +167,46 @@ final class FourLevelGraphTests: XCTestCase {
         XCTAssertEqual(containsEdges.count, 1, "Duplicate containsEntity edge should be deduped")
     }
 
+    // MARK: - Per-doc subgraph encode (B4)
+
+    func test_encodeSubgraph_filtersNodesAnchoredInOtherDocuments() throws {
+        let urlA = docURL("a.pdf")
+        let urlB = docURL("b.pdf")
+        let nodeA = ConceptNode(label: "A-node", sourceAnchors: [anchor(urlA)], level: .concept)
+        let nodeB = ConceptNode(label: "B-node", sourceAnchors: [anchor(urlB)], level: .concept)
+
+        let g = KnowledgeGraph()
+        g.addNode(nodeA)
+        g.addNode(nodeB)
+
+        let snapshot = try g.encodeSubgraph(for: urlA)
+        XCTAssertEqual(snapshot.nodeCount, 1, "Only the A-anchored node should be in A's subgraph")
+
+        let restored = KnowledgeGraph()
+        try restored.decode(from: snapshot.data)
+        XCTAssertEqual(restored.allNodes.map(\.label), ["A-node"])
+    }
+
+    func test_encodeSubgraph_dropsEdgesWhoseEndpointsStraddleScope() throws {
+        let urlA = docURL("a.pdf")
+        let urlB = docURL("b.pdf")
+        let a1 = ConceptNode(label: "A1", sourceAnchors: [anchor(urlA)], level: .concept)
+        let a2 = ConceptNode(label: "A2", sourceAnchors: [anchor(urlA)], level: .concept)
+        let b1 = ConceptNode(label: "B1", sourceAnchors: [anchor(urlB)], level: .concept)
+
+        let g = KnowledgeGraph()
+        g.addNode(a1); g.addNode(a2); g.addNode(b1)
+        g.addEdge(GraphEdge(sourceNodeID: a1.id, targetNodeID: a2.id, type: .dependsOn))
+        g.addEdge(GraphEdge(sourceNodeID: a1.id, targetNodeID: b1.id, type: .sameTopic))
+
+        let snapshot = try g.encodeSubgraph(for: urlA)
+        XCTAssertEqual(snapshot.edgeCount, 1, "Cross-document edge should be excluded from A's subgraph")
+
+        let restored = KnowledgeGraph()
+        try restored.decode(from: snapshot.data)
+        XCTAssertEqual(restored.allEdges.map(\.type), [.dependsOn])
+    }
+
     // MARK: - Lossy edge decode (B5)
 
     func test_decode_skipsEdgesWithRetiredEdgeType_keepsNodesAndOtherEdges() throws {

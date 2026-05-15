@@ -475,6 +475,33 @@ extension KnowledgeGraph {
         return try encoder.encode(rep)
     }
 
+    /// Encode a per-document subgraph: only nodes anchored in `documentURL`
+    /// plus edges whose endpoints both survive that filter. Used by
+    /// `GraphStore.scheduleSave` so per-doc files don't denormalize every
+    /// other doc's nodes under multi-doc memory (4-level model).
+    func encodeSubgraph(for documentURL: URL) throws -> (data: Data, nodeCount: Int, edgeCount: Int) {
+        let scopedNodes = allNodes.filter { node in
+            node.sourceAnchors.contains { $0.documentURL == documentURL }
+        }
+        let scopedIDs = Set(scopedNodes.map(\.id))
+        let scopedEdges = allEdges.filter { edge in
+            scopedIDs.contains(edge.sourceNodeID) && scopedIDs.contains(edge.targetNodeID)
+        }
+        var scopedState: [String: ProcessingState] = [:]
+        if let state = documentProcessingState[documentURL] {
+            scopedState[documentURL.absoluteString] = state
+        }
+        let rep = CodableRepresentation(
+            nodes: scopedNodes,
+            edges: scopedEdges,
+            documentProcessingState: scopedState
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(rep)
+        return (data, scopedNodes.count, scopedEdges.count)
+    }
+
     func decode(from data: Data) throws {
         let decoder = JSONDecoder()
         let rep = try decoder.decode(CodableRepresentation.self, from: data)
