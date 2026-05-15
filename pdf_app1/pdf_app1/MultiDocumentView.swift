@@ -989,15 +989,51 @@ struct MultiDocumentView: View {
                                 graph: knowledgeGraph,
                                 zoomLevel: $mapZoomLevel,
                                 documentURL: document.url,
-                                onNavigateToPage: { pageIndex, boundingBox, textSnippet in
-                                    var info: [String: Any] = [:]
+                                onNavigateToPage: { sourceURL, pageIndex, boundingBox, textSnippet in
+                                    var info: [String: Any] = ["sourceDocumentURL": sourceURL]
                                     if let bb = boundingBox { info["boundingBox"] = bb }
                                     if let ts = textSnippet, !ts.isEmpty { info["textSnippet"] = ts }
-                                    NotificationCenter.default.post(
-                                        name: .navigateToPage,
-                                        object: pageIndex,
-                                        userInfo: info.isEmpty ? nil : info
+                                    let post = {
+                                        NotificationCenter.default.post(
+                                            name: .navigateToPage,
+                                            object: pageIndex,
+                                            userInfo: info
+                                        )
+                                    }
+
+                                    // Same tab — scroll immediately.
+                                    if sourceURL == documentManager.selectedDocument?.url {
+                                        post()
+                                        return
+                                    }
+
+                                    // Different tab or not yet open. openDocument
+                                    // handles both: returns .alreadyOpen (and
+                                    // selects) for an open tab, .success for a
+                                    // new one. Dispatch the post on the next
+                                    // runloop so the destination PDFViewerView
+                                    // has mounted + subscribed to the
+                                    // notification.
+                                    let result = documentManager.openDocument(
+                                        sourceURL,
+                                        projectID: projectsManager.selectedProjectID
                                     )
+                                    switch result {
+                                    case .success, .alreadyOpen:
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                            post()
+                                        }
+                                    case .tooManyTabs:
+                                        alertManager.showAlert(
+                                            title: "Too Many Tabs",
+                                            message: "Close a tab to follow the source link to \(sourceURL.lastPathComponent)."
+                                        )
+                                    case .fileNotReadable, .invalidPDF:
+                                        alertManager.showAlert(
+                                            title: "Source Unavailable",
+                                            message: "The source PDF '\(sourceURL.lastPathComponent)' is no longer accessible."
+                                        )
+                                    }
                                 },
                                 activeNodeID: syncManager.activeNodeID
                             )

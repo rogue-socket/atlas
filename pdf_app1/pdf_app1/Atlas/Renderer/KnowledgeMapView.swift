@@ -52,8 +52,10 @@ struct KnowledgeMapView: View {
     // Cached filtered graph to avoid recomputation on every body evaluation
     @State private var cachedFilteredGraph: KnowledgeGraph?
 
-    // Callback to navigate PDF (set by parent)
-    var onNavigateToPage: ((Int, CGRect?, String?) -> Void)?
+    // Callback to navigate PDF (set by parent). Source document URL is
+    // first so the parent can route to the right tab when the clicked
+    // node's source isn't the currently-visible PDF.
+    var onNavigateToPage: ((URL, Int, CGRect?, String?) -> Void)?
     // Active node from bidirectional sync (set by parent)
     var activeNodeID: UUID?
 
@@ -368,7 +370,7 @@ struct KnowledgeMapView: View {
                 ForEach(node.sourceAnchors.prefix(3)) { anchor in
                     Button(action: {
                         log.info("[MapView] Navigate to page \(anchor.pageIndex + 1)")
-                        onNavigateToPage?(anchor.pageIndex, anchor.boundingBox, anchor.textSnippet)
+                        onNavigateToPage?(anchor.documentURL, anchor.pageIndex, anchor.boundingBox, anchor.textSnippet)
                     }) {
                         HStack(spacing: 4) {
                             Image(systemName: "arrow.right.doc")
