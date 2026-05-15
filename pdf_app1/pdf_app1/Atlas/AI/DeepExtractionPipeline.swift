@@ -218,9 +218,10 @@ class DeepExtractionPipeline {
             log.error("[Deep] Pass 3 error: \(error)")
         }
 
-        statusMessage = "Generating document summary..."
-        await ExtractionPipeline.appendDocumentSummary(graph: graph, documentURL: documentURL, backend: backend)
-
+        // Chapter extraction, concept-to-chapter attachment, and Document
+        // node creation are now handled uniformly in `ExtractionPipeline`
+        // after `processChunks` returns. The deep pipeline only produces
+        // concepts and entities; the 4-level fold is built one layer up.
         isProcessing = false
         statusMessage = "Done — \(graph.nodeCount) concepts, \(graph.edgeCount) edges (Deep)"
         log.info("[Deep] Complete: \(graph.nodeCount) nodes, \(graph.edgeCount) edges")

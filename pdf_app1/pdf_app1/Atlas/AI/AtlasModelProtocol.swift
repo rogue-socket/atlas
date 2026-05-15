@@ -60,6 +60,23 @@ struct ExtractionResponse: Codable {
     let edges: [RawEdge]
 }
 
+// MARK: - Raw Chapter (from AI, or synthesized from PDF outline)
+
+/// A chapter boundary the LLM (or the PDF outline) identified.
+/// `pageStart` / `pageEnd` are 0-indexed and inclusive on both ends.
+struct RawChapter: Codable, Hashable {
+    let title: String
+    let pageStart: Int
+    let pageEnd: Int
+    /// Optional one-line description; populated by LLM chapter pass, nil
+    /// when the chapter came from the PDF outline (no description there).
+    let summary: String?
+}
+
+struct ChapterExtractionResponse: Codable {
+    let chapters: [RawChapter]
+}
+
 // MARK: - Raw Merge Proposal (from AI)
 
 struct RawMergeProposal: Codable {

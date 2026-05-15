@@ -74,6 +74,21 @@ class ExtractionPipeline {
 
             await deepPipeline.processChunks(chunks, backend: backend, graph: graph, documentURL: documentURL)
 
+            // Same 4-level fold construction as the fast pipeline:
+            // chapters → concept-to-chapter attachment → Document node.
+            statusMessage = "Identifying chapters..."
+            await ChapterExtraction.extract(
+                document: document,
+                documentURL: documentURL,
+                graph: graph,
+                backend: backend,
+                textExtractor: textExtractor,
+                layoutAnalyzer: layoutAnalyzer
+            )
+            ChapterExtraction.attachConceptsToChapters(graph: graph, documentURL: documentURL)
+            statusMessage = "Generating document summary..."
+            await Self.appendDocumentSummary(graph: graph, documentURL: documentURL, backend: backend)
+
             statusMessage = deepPipeline.statusMessage
             isProcessing = false
             graph.documentProcessingState[documentURL] = .complete
@@ -140,6 +155,22 @@ class ExtractionPipeline {
             return
         }
 
+        // Chapter extraction (PDF outline if present, else LLM).
+        statusMessage = "Identifying chapters..."
+        await ChapterExtraction.extract(
+            document: document,
+            documentURL: documentURL,
+            graph: graph,
+            backend: backend,
+            textExtractor: textExtractor,
+            layoutAnalyzer: layoutAnalyzer
+        )
+
+        // Attach concepts to their containing chapter(s) by page-range overlap.
+        ChapterExtraction.attachConceptsToChapters(graph: graph, documentURL: documentURL)
+
+        // Final step: create the Document node (top fold) and link it to
+        // its chapters via containsChapter edges.
         statusMessage = "Generating document summary..."
         await Self.appendDocumentSummary(graph: graph, documentURL: documentURL, backend: backend)
 

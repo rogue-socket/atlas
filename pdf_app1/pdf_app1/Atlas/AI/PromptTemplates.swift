@@ -304,6 +304,59 @@ enum PromptTemplates {
 
     // MARK: - Question Answering
 
+    // MARK: - Chapter Extraction
+
+    /// Asks the LLM to identify chapter / section boundaries in a document.
+    /// Fed the full text with `=== Page N ===` separators so the LLM can
+    /// reference page indices in its output.
+    ///
+    /// Falls back to PDF outline (`LayoutAnalyzer.extractOutline`) when one
+    /// exists — author-embedded TOC is treated as authoritative and skips
+    /// this prompt entirely. Used only when no outline is available, or as
+    /// a supplement.
+    static func chapterExtraction(
+        documentTitle: String,
+        totalPages: Int,
+        text: String
+    ) -> String {
+        return """
+        You are identifying chapter / section structure in the document "\(documentTitle)" (\(totalPages) pages).
+
+        The text below is the full document, with `=== Page N ===` markers between pages. Page indices are 0-based — page 0 is the first page.
+
+        ## Task
+
+        Identify the chapter or section structure. A chapter is a coherent unit of the document — typically a labeled section in a textbook, a major heading in an article, or a logical grouping of pages in an unstructured PDF. Each chapter has a title, a contiguous page range, and a short description.
+
+        Guidelines:
+        - Prefer real chapter titles when the document has them ("Chapter 3: DNA Replication", "Methods", "Results").
+        - For documents without explicit structure (essays, novels, slide decks), group pages into 3-10 coherent sections by topic shift.
+        - Chapter page ranges MUST be contiguous and MUST NOT overlap. Together they should cover the full document.
+        - Aim for chapters of 2-30 pages each. Avoid 1-page chapters unless the document is genuinely structured that way (cover page, abstract, etc.).
+        - Title: 2-8 readable words, no chapter numbering ("DNA Replication" not "Chapter 3: DNA Replication").
+        - Summary: one sentence (under 20 words) describing what the chapter covers.
+
+        ## Output
+
+        Return ONLY a JSON object with this exact structure:
+        {
+          "chapters": [
+            {
+              "title": "Short Title",
+              "pageStart": 0,
+              "pageEnd": 4,
+              "summary": "One sentence about this chapter."
+            }
+          ]
+        }
+
+        Return valid JSON only, no markdown formatting.
+
+        DOCUMENT:
+        \(text)
+        """
+    }
+
     static func questionAnswer(question: String, context: String) -> String {
         return """
         Answer the following question based on the provided document context. Cite specific passages.
