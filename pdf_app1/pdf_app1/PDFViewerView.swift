@@ -255,12 +255,22 @@ struct PDFViewerView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToPage)) { notification in
             if let pageIndex = notification.object as? Int {
+                let userInfo = notification.userInfo
+                // When a notification carries a sourceDocumentURL, only the
+                // PDFViewerView whose document matches it should handle it —
+                // otherwise clicking a map source-link routes to the wrong
+                // tab's PDFView. Notifications from Command Palette / Chat
+                // (no sourceDocumentURL) still hit the active tab as before.
+                if let sourceURL = userInfo?["sourceDocumentURL"] as? URL,
+                   sourceURL != pdfDocument.documentURL {
+                    return
+                }
+
                 goToPage(pageIndex)
                 guard let document = pdfView.document,
                       pageIndex < document.pageCount,
                       let page = document.page(at: pageIndex) else { return }
 
-                let userInfo = notification.userInfo
                 let boundingBox = userInfo?["boundingBox"] as? CGRect
                 let textSnippet = userInfo?["textSnippet"] as? String
 
