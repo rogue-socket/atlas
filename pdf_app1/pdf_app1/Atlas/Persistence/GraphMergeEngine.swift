@@ -206,12 +206,27 @@ class GraphMergeEngine {
             graph.addEdge(newEdge)
         }
 
-        // Re-parent child entities of the source under the target
+        // Re-parent child entities of the source under the target by
+        // redirecting the source's containsEntity edges to originate from
+        // the target node. Multi-parent semantics: if the target already
+        // contains the entity, the duplicate edge is suppressed; otherwise
+        // a fresh containsEntity edge from target → entity is added.
         if sourceNode.level == .concept {
             for entity in graph.entities(for: sourceNodeID) {
-                var updated = entity
-                updated.parentConceptID = targetNodeID
-                graph.updateNode(updated)
+                let alreadyLinked = graph.allEdges.contains { e in
+                    e.type == .containsEntity &&
+                    e.sourceNodeID == targetNodeID &&
+                    e.targetNodeID == entity.id
+                }
+                if !alreadyLinked {
+                    let newEdge = GraphEdge(
+                        sourceNodeID: targetNodeID,
+                        targetNodeID: entity.id,
+                        type: .containsEntity,
+                        confidence: 1.0
+                    )
+                    graph.addEdge(newEdge)
+                }
             }
         }
 

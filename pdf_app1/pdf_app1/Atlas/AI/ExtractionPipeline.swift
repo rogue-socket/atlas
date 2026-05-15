@@ -143,12 +143,6 @@ class ExtractionPipeline {
         statusMessage = "Generating document summary..."
         await Self.appendDocumentSummary(graph: graph, documentURL: documentURL, backend: backend)
 
-        // Ensure the graph has navigable hierarchy. No-op when the LLM
-        // produced a usable subtopicOf forest; synthesizes themes +
-        // subtopicOf edges from graph topology otherwise.
-        statusMessage = "Organizing concepts..."
-        HierarchySynthesis.synthesize(graph: graph)
-
         isProcessing = false
         statusMessage = "Done — \(graph.nodeCount) concepts extracted"
         graph.documentProcessingState[documentURL] = .complete
@@ -302,7 +296,6 @@ class ExtractionPipeline {
             // Top-level items are always concept-level. Only nested items (inner loop) are entities.
             // This prevents orphan entities when the LLM returns a flat list.
             let effectiveLevel: NodeLevel = .concept
-            let effectiveHierarchyLevel = rawConcept.hierarchyLevel ?? 1
 
             // Check for existing concept node with same label
             let existingNode = graph.node(matching: rawConcept.label)
@@ -313,7 +306,7 @@ class ExtractionPipeline {
                 if let summary = rawConcept.summary, existing.summary == nil {
                     existing.summary = summary
                 }
-                existing.hierarchyLevel = effectiveHierarchyLevel
+                existing.lastModified = Date()
                 graph.updateNode(existing)
                 conceptNodeID = existing.id
                 log.debug("[Step 5] Updated existing concept: \"\(existing.label)\"")
@@ -326,32 +319,17 @@ class ExtractionPipeline {
                     sourceAnchors: [conceptAnchor],
                     confidence: rawConcept.confidence ?? 0.8,
                     level: effectiveLevel,
-                    highlightColorIndex: colorIndex,
-                    hierarchyLevel: effectiveHierarchyLevel
+                    highlightColorIndex: colorIndex
                 )
                 graph.addNode(node)
                 conceptNodeID = node.id
-                log.debug("[Step 5] Added concept: \"\(node.label)\" hierarchy=\(effectiveHierarchyLevel)")
+                log.debug("[Step 5] Added concept: \"\(node.label)\"")
             }
 
-            // Create subtopicOf edge if parent theme specified
-            if let parentLabel = rawConcept.subtopicOf,
-               let parentNode = graph.node(matching: parentLabel) {
-                let alreadyLinked = graph.allEdges.contains {
-                    $0.sourceNodeID == conceptNodeID && $0.targetNodeID == parentNode.id && $0.type == .subtopicOf
-                }
-                if !alreadyLinked {
-                    let subtopicEdge = GraphEdge(
-                        sourceNodeID: conceptNodeID,
-                        targetNodeID: parentNode.id,
-                        type: .subtopicOf,
-                        confidence: 1.0,
-                        label: "is a subtopic of"
-                    )
-                    graph.addEdge(subtopicEdge)
-                    log.debug("[Step 5] Added subtopicOf edge: \"\(rawConcept.label)\" → \"\(parentLabel)\"")
-                }
-            }
+            // Note: `rawConcept.subtopicOf` is ignored under the 4-level model.
+            // Concept→Chapter relationships are recorded via `containsConcept`
+            // edges originating from Chapter nodes — created in the post-
+            // extraction Concept-to-Chapter attachment pass, not here.
 
             // Process nested entities
             guard let entities = rawConcept.entities, !entities.isEmpty else { continue }
@@ -374,15 +352,15 @@ class ExtractionPipeline {
                 // Check if entity already exists
                 let existingEntity = graph.node(matching: rawEntity.label)
 
+                let entityNodeID: UUID
                 if var existing = existingEntity {
                     existing.sourceAnchors.append(entityAnchor)
-                    if existing.parentConceptID == nil {
-                        existing.parentConceptID = conceptNodeID
-                    }
                     if let summary = rawEntity.summary, existing.summary == nil {
                         existing.summary = summary
                     }
+                    existing.lastModified = Date()
                     graph.updateNode(existing)
+                    entityNodeID = existing.id
                     log.debug("[Step 5] Updated existing entity: \"\(existing.label)\"")
                 } else {
                     // Inherit highlight color from parent concept
@@ -394,20 +372,27 @@ class ExtractionPipeline {
                         sourceAnchors: [entityAnchor],
                         confidence: rawEntity.confidence ?? 0.8,
                         level: .entity,
-                        parentConceptID: conceptNodeID,
                         highlightColorIndex: parentColor
                     )
                     graph.addNode(entity)
+                    entityNodeID = entity.id
+                    log.debug("[Step 5] Added entity: \"\(entity.label)\" under \"\(rawConcept.label)\"")
+                }
 
-                    // Create containsEntity edge
+                // Ensure containsEntity edge exists (concept → entity).
+                let alreadyLinked = graph.allEdges.contains { e in
+                    e.type == .containsEntity &&
+                    e.sourceNodeID == conceptNodeID &&
+                    e.targetNodeID == entityNodeID
+                }
+                if !alreadyLinked {
                     let containsEdge = GraphEdge(
                         sourceNodeID: conceptNodeID,
-                        targetNodeID: entity.id,
+                        targetNodeID: entityNodeID,
                         type: .containsEntity,
                         confidence: 1.0
                     )
                     graph.addEdge(containsEdge)
-                    log.debug("[Step 5] Added entity: \"\(entity.label)\" under \"\(rawConcept.label)\"")
                 }
             }
         }
@@ -553,10 +538,17 @@ class ExtractionPipeline {
 // MARK: - Document Summary Generation
 
 extension ExtractionPipeline {
-    /// Generate (or replace) a per-document summary node by feeding the top root
-    /// concepts to the backend's existing `summarizeConcept` method.
-    /// Inserted with `isDocumentSummary = true` and `hierarchyLevel = -1` so the
-    /// `.document` semantic-zoom level can find it.
+    /// Final extraction step: produces the `.document`-level node for this
+    /// PDF and links it to its `.chapter` children via `containsChapter`
+    /// edges. Under the 4-level model the Document node is the top fold of
+    /// what extraction produces — same status as Chapter/Concept/Entity, just
+    /// the most abstract level.
+    ///
+    /// The LLM is fed the document's top concepts as bullet context and
+    /// returns a tldr that becomes the Document node's summary. If no
+    /// concept-level nodes exist for the URL (extraction produced an empty
+    /// graph), we still create the Document node with an empty summary so
+    /// the Document tab is not empty — the user can see the doc is present.
     static func appendDocumentSummary(
         graph: KnowledgeGraph,
         documentURL: URL,
@@ -564,75 +556,93 @@ extension ExtractionPipeline {
     ) async {
         let docFilename = documentURL.lastPathComponent
 
-        let rootConcepts = graph.allNodes
+        let topConcepts = graph.allNodes
             .filter { node in
                 node.level == .concept &&
-                node.hierarchyLevel == 0 &&
-                !node.isDocumentSummary &&
                 node.sourceAnchors.contains { $0.documentURL == documentURL }
             }
             .sorted { graph.edges(for: $0.id).count > graph.edges(for: $1.id).count }
             .prefix(8)
 
-        guard !rootConcepts.isEmpty else {
-            log.info("[Summary] No root concepts for \(docFilename), skipping doc summary")
-            return
-        }
-
-        let bullets = rootConcepts.map { node -> String in
+        let bullets = topConcepts.map { node -> String in
             if let s = node.summary, !s.isEmpty { return "- \(node.label): \(s)" }
             return "- \(node.label)"
         }.joined(separator: "\n")
 
-        let sourceText = """
-        Document: \(docFilename)
+        var summaryText = ""
+        if !topConcepts.isEmpty {
+            let sourceText = """
+            Document: \(docFilename)
 
-        Key concepts extracted from this document:
-        \(bullets)
-        """
-
-        let summaryText: String
-        do {
-            summaryText = try await backend.summarizeConcept(docFilename, sourceText: sourceText)
-        } catch {
-            log.error("[Summary] LLM call failed for \(docFilename): \(error.localizedDescription)")
-            return
+            Key concepts extracted from this document:
+            \(bullets)
+            """
+            do {
+                let raw = try await backend.summarizeConcept(docFilename, sourceText: sourceText)
+                summaryText = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            } catch {
+                log.error("[Summary] LLM call failed for \(docFilename): \(error.localizedDescription)")
+            }
+        } else {
+            log.info("[Summary] No concept nodes for \(docFilename); creating Document node with empty summary")
         }
 
-        let trimmed = summaryText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            log.warning("[Summary] LLM returned empty summary for \(docFilename)")
-            return
-        }
+        // Find or create the Document node for this URL.
+        let existing = graph.allNodes.first(where: { node in
+            node.level == .document &&
+            node.sourceAnchors.contains { $0.documentURL == documentURL }
+        })
 
-        if let existing = graph.allNodes.first(where: {
-            $0.isDocumentSummary && $0.sourceAnchors.contains { $0.documentURL == documentURL }
-        }) {
-            var updated = existing
+        let documentNodeID: UUID
+        if var updated = existing {
             updated.label = docFilename
-            updated.summary = trimmed
+            if !summaryText.isEmpty { updated.summary = summaryText }
+            updated.lastModified = Date()
             graph.updateNode(updated)
-            log.info("[Summary] Replaced doc summary node for \(docFilename)")
-            return
+            documentNodeID = updated.id
+            log.info("[Summary] Updated Document node for \(docFilename)")
+        } else {
+            let anchor = SourceAnchor(
+                documentURL: documentURL,
+                pageIndex: 0,
+                boundingBox: .zero,
+                textSnippet: ""
+            )
+            let node = ConceptNode(
+                label: docFilename,
+                type: .concept,
+                summary: summaryText.isEmpty ? nil : summaryText,
+                sourceAnchors: [anchor],
+                confidence: 1.0,
+                level: .document
+            )
+            graph.addNode(node)
+            documentNodeID = node.id
+            log.info("[Summary] Created Document node for \(docFilename)")
         }
 
-        let anchor = SourceAnchor(
-            documentURL: documentURL,
-            pageIndex: 0,
-            boundingBox: .zero,
-            textSnippet: ""
-        )
-        let node = ConceptNode(
-            label: docFilename,
-            type: .concept,
-            summary: trimmed,
-            sourceAnchors: [anchor],
-            confidence: 1.0,
-            level: .concept,
-            hierarchyLevel: -1,
-            isDocumentSummary: true
-        )
-        graph.addNode(node)
-        log.info("[Summary] Added doc summary node for \(docFilename)")
+        // Link Document → Chapter nodes for this URL via containsChapter edges.
+        // (Chapter nodes are produced by the chapter-extraction pass, which
+        // lands separately; if there are no Chapter nodes yet this is a no-op.)
+        let chapters = graph.allNodes.filter { node in
+            node.level == .chapter &&
+            node.sourceAnchors.contains { $0.documentURL == documentURL }
+        }
+        for chapter in chapters {
+            let alreadyLinked = graph.allEdges.contains { e in
+                e.type == .containsChapter &&
+                e.sourceNodeID == documentNodeID &&
+                e.targetNodeID == chapter.id
+            }
+            if !alreadyLinked {
+                let edge = GraphEdge(
+                    sourceNodeID: documentNodeID,
+                    targetNodeID: chapter.id,
+                    type: .containsChapter,
+                    confidence: 1.0
+                )
+                graph.addEdge(edge)
+            }
+        }
     }
 }

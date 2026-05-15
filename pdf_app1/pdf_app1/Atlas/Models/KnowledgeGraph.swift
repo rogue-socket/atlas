@@ -41,12 +41,12 @@ struct ConceptNode: Identifiable, Hashable {
     var confidence: Double
     var isPinned: Bool
     var position: CGPoint?
-    var parentChapterID: UUID?  // deprecated — use parentConceptID
     var level: NodeLevel
-    var parentConceptID: UUID?
     var highlightColorIndex: Int?
-    var hierarchyLevel: Int
-    var isDocumentSummary: Bool
+    /// Wall-clock timestamp of the last mutation. Used by `GraphStore` on load
+    /// to reconcile divergence when the same node appears in multiple
+    /// per-document graph files (multi-anchor entities) — latest write wins.
+    var lastModified: Date
 
     init(
         id: UUID = UUID(),
@@ -59,12 +59,9 @@ struct ConceptNode: Identifiable, Hashable {
         confidence: Double = 1.0,
         isPinned: Bool = false,
         position: CGPoint? = nil,
-        parentChapterID: UUID? = nil,
         level: NodeLevel = .concept,
-        parentConceptID: UUID? = nil,
         highlightColorIndex: Int? = nil,
-        hierarchyLevel: Int = 1,
-        isDocumentSummary: Bool = false
+        lastModified: Date = Date()
     ) {
         self.id = id
         self.label = label
@@ -76,22 +73,23 @@ struct ConceptNode: Identifiable, Hashable {
         self.confidence = confidence
         self.isPinned = isPinned
         self.position = position
-        self.parentChapterID = parentChapterID
         self.level = level
-        self.parentConceptID = parentConceptID
         self.highlightColorIndex = highlightColorIndex
-        self.hierarchyLevel = hierarchyLevel
-        self.isDocumentSummary = isDocumentSummary
+        self.lastModified = lastModified
     }
 }
 
-// MARK: - ConceptNode Codable (backward-compatible)
+// MARK: - ConceptNode Codable
+// No backwards compatibility with pre-4-level-migration graphs.
+// Old fields (hierarchyLevel, isDocumentSummary, parentConceptID,
+// parentChapterID) are dropped; their roles are now expressed via the
+// `level` field (4 cases) and containment edges
+// (containsChapter / containsConcept / containsEntity).
 extension ConceptNode: Codable {
     enum CodingKeys: String, CodingKey {
         case id, label, type, summary, sourceAnchors, readingState, expansionState
-        case confidence, isPinned, position, parentChapterID
-        case level, parentConceptID, highlightColorIndex, hierarchyLevel
-        case isDocumentSummary
+        case confidence, isPinned, position
+        case level, highlightColorIndex, lastModified
     }
 
     init(from decoder: Decoder) throws {
@@ -106,12 +104,9 @@ extension ConceptNode: Codable {
         confidence = try c.decode(Double.self, forKey: .confidence)
         isPinned = try c.decode(Bool.self, forKey: .isPinned)
         position = try c.decodeIfPresent(CGPoint.self, forKey: .position)
-        parentChapterID = try c.decodeIfPresent(UUID.self, forKey: .parentChapterID)
-        level = try c.decodeIfPresent(NodeLevel.self, forKey: .level) ?? .concept
-        parentConceptID = try c.decodeIfPresent(UUID.self, forKey: .parentConceptID)
+        level = try c.decode(NodeLevel.self, forKey: .level)
         highlightColorIndex = try c.decodeIfPresent(Int.self, forKey: .highlightColorIndex)
-        hierarchyLevel = try c.decodeIfPresent(Int.self, forKey: .hierarchyLevel) ?? (level == .concept ? 0 : 1)
-        isDocumentSummary = try c.decodeIfPresent(Bool.self, forKey: .isDocumentSummary) ?? false
+        lastModified = try c.decodeIfPresent(Date.self, forKey: .lastModified) ?? Date()
     }
 }
 
@@ -273,27 +268,61 @@ nonisolated class KnowledgeGraph {
         allNodes.filter { $0.level == .concept }
     }
 
+    func nodes(at level: NodeLevel) -> [ConceptNode] {
+        allNodes.filter { $0.level == level }
+    }
+
+    /// Children of `nodeID` via the structural containment edge appropriate
+    /// for the parent's level (Document → Chapter, Chapter → Concept,
+    /// Concept → Entity). Returns nodes that this node *contains* (i.e.
+    /// outgoing containment edges where `sourceNodeID == nodeID`).
     func entities(for conceptID: UUID) -> [ConceptNode] {
-        allNodes.filter { $0.parentConceptID == conceptID }
+        containedChildren(of: conceptID, edgeType: .containsEntity)
     }
 
     func parentConcept(of entityID: UUID) -> ConceptNode? {
-        guard let entity = nodes[entityID], let parentID = entity.parentConceptID else { return nil }
-        return nodes[parentID]
+        // Entities may have multiple parent concepts under the 4-level model
+        // (a concept can be contained in multiple chapters; an entity can
+        // belong to multiple concepts). This helper returns the *first* such
+        // parent for compatibility — callers that need the full set should
+        // use `parents(of:edgeType:)` directly.
+        parents(of: entityID, edgeType: .containsEntity).first
     }
 
-    func childNodes(of nodeID: UUID) -> [ConceptNode] {
+    /// Outgoing containment children: nodes where an edge of `edgeType`
+    /// exists from `nodeID` (as source) to the child.
+    func containedChildren(of nodeID: UUID, edgeType: EdgeType) -> [ConceptNode] {
         guard let edgeIDs = adjacency[nodeID] else { return [] }
         return edgeIDs.compactMap { edgeID -> ConceptNode? in
             guard let edge = edges[edgeID],
-                  edge.type == .subtopicOf,
+                  edge.type == edgeType,
+                  edge.sourceNodeID == nodeID else { return nil }
+            return nodes[edge.targetNodeID]
+        }
+    }
+
+    /// Incoming containment parents: nodes that contain `nodeID` via
+    /// `edgeType` edges (i.e. `targetNodeID == nodeID`).
+    func parents(of nodeID: UUID, edgeType: EdgeType) -> [ConceptNode] {
+        guard let edgeIDs = adjacency[nodeID] else { return [] }
+        return edgeIDs.compactMap { edgeID -> ConceptNode? in
+            guard let edge = edges[edgeID],
+                  edge.type == edgeType,
                   edge.targetNodeID == nodeID else { return nil }
             return nodes[edge.sourceNodeID]
         }
     }
 
-    func level0Nodes() -> [ConceptNode] {
-        allNodes.filter { $0.hierarchyLevel == 0 }
+    func childNodes(of nodeID: UUID) -> [ConceptNode] {
+        // Returns children via *any* containment edge — used by renderer
+        // hit-testing where the specific edge type doesn't matter.
+        guard let edgeIDs = adjacency[nodeID] else { return [] }
+        return edgeIDs.compactMap { edgeID -> ConceptNode? in
+            guard let edge = edges[edgeID],
+                  edge.type.isContainment,
+                  edge.sourceNodeID == nodeID else { return nil }
+            return nodes[edge.targetNodeID]
+        }
     }
 
     func toggleExpansion(_ nodeID: UUID) {
@@ -321,7 +350,7 @@ nonisolated class KnowledgeGraph {
         guard let edgeIDs = adjacency[nodeID] else { return false }
         return edgeIDs.contains { edgeID in
             guard let edge = edges[edgeID] else { return false }
-            return edge.type == .subtopicOf && edge.targetNodeID == nodeID
+            return edge.type.isContainment && edge.sourceNodeID == nodeID
         }
     }
 

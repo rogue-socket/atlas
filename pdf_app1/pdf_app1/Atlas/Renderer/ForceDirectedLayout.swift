@@ -25,6 +25,11 @@ class ForceDirectedLayout {
     var isConverged: Bool = false
     var iteration: Int = 0
 
+    /// Entity → parent-concept lookup derived from `containsEntity` edges at
+    /// the start of `computeLayout`. Cached so `iterate` and
+    /// `resolveClusterOverlaps` can read it without re-scanning edges.
+    private var parentConceptByEntity: [UUID: UUID] = [:]
+
     // Tuned for readability — nodes stay well-separated
     private let repulsionConstant: Double = 25000
     private let attractionConstant: Double = 0.005
@@ -55,28 +60,25 @@ class ForceDirectedLayout {
             height: max(canvasSize.height, Double(nodes.count) * 90)
         )
 
-        // Build the canonical-parent forest from concept nodes + subtopicOf
-        // edges. If the data has hierarchy (any subtopicOf), seed positions
-        // as horizontal bands by `hierarchyLevel`. Otherwise the seeder is
-        // skipped and we fall back to the grid-of-singletons placement.
-        let conceptNodes = nodes.filter { $0.level == .concept }
-        let forest = HierarchyForest.build(conceptNodes: conceptNodes, edges: edges)
-        let useTreeSeeding = !forest.isDegenerate
-
-        let hierarchyLevelByID: [UUID: Int] = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0.hierarchyLevel) })
-        let seedPositions: [UUID: CGPoint] = useTreeSeeding
-            ? TreeLayoutSeeder(canvasSize: virtualSize).seed(forest: forest) { hierarchyLevelByID[$0] ?? 0 }
-            : [:]
-
-        // Concept nodes share a group with their subtree root (so FDL's
-        // group attraction pulls a subtree together as a cluster).
-        // Entities group under their parent concept (unchanged behavior).
-        func groupKey(for node: ConceptNode) -> String {
-            if node.level == .entity, let parentID = node.parentConceptID {
-                return parentID.uuidString
+        // Build a parent-concept lookup from `containsEntity` edges. Replaces
+        // the prior `parentConceptID` field on entities — under the 4-level
+        // model containment is expressed as an edge (an entity may have
+        // multiple parent concepts, so this picks the first found).
+        parentConceptByEntity = [:]
+        for edge in edges where edge.type == .containsEntity {
+            if parentConceptByEntity[edge.targetNodeID] == nil {
+                parentConceptByEntity[edge.targetNodeID] = edge.sourceNodeID
             }
-            if useTreeSeeding {
-                return forest.root(of: node.id).uuidString
+        }
+
+        // Group by NodeLevel for entities (under their parent concept) and
+        // by node id for concepts/chapters/documents (one group each).
+        // Tree-based seeding from `HierarchyForest` was removed — band-by-
+        // level seeding is a follow-up commit.
+        let seedPositions: [UUID: CGPoint] = [:]
+        func groupKey(for node: ConceptNode) -> String {
+            if node.level == .entity, let parentID = parentConceptByEntity[node.id] {
+                return parentID.uuidString
             }
             return node.id.uuidString
         }
@@ -85,26 +87,7 @@ class ForceDirectedLayout {
         let groupNames = groups.keys.sorted()
         var groupCenters: [String: CGPoint] = [:]
 
-        // Tree-seeded groups: center on the seeded subtree-root position.
-        // Entity groups + ungrouped concepts: fall through to grid below.
-        if useTreeSeeding {
-            for (key, members) in groups {
-                if let rootUUID = UUID(uuidString: key), let rootPos = seedPositions[rootUUID] {
-                    groupCenters[key] = rootPos
-                } else {
-                    // Entity group: average of any seeded member positions
-                    let seeded = members.compactMap { seedPositions[$0.id] }
-                    if !seeded.isEmpty {
-                        let avgX = seeded.map(\.x).reduce(0, +) / Double(seeded.count)
-                        let avgY = seeded.map(\.y).reduce(0, +) / Double(seeded.count)
-                        groupCenters[key] = CGPoint(x: avgX, y: avgY)
-                    }
-                }
-            }
-        }
-
-        // Grid fallback for any group still missing a center (degenerate
-        // forest, entity-only groups whose parent wasn't seeded, etc.)
+        // Grid placement for all groups (no tree seeding under the 4-level model yet).
         if groupCenters.count < groupNames.count {
             let cols = max(Int(ceil(sqrt(Double(groupNames.count)))), 2)
             let cellW = virtualSize.width / Double(cols + 1)
@@ -210,7 +193,8 @@ class ForceDirectedLayout {
             let dy = center.y - pos.y
 
             // Entities get stronger pull toward their parent concept
-            let strength = (node.level == .entity && node.parentConceptID != nil)
+            let hasParentConcept = node.level == .entity && parentConceptByEntity[node.id] != nil
+            let strength = hasParentConcept
                 ? parentAttractionConstant
                 : groupAttractionConstant
             forces[node.id]?.dx += dx * strength
@@ -219,7 +203,7 @@ class ForceDirectedLayout {
 
         // Direct parent-entity attraction: pull entities toward their parent's position
         for node in nodes where node.level == .entity {
-            guard let parentID = node.parentConceptID,
+            guard let parentID = parentConceptByEntity[node.id],
                   let entityPos = positions[node.id],
                   let parentPos = positions[parentID] else { continue }
             let dx = parentPos.x - entityPos.x
@@ -304,10 +288,12 @@ class ForceDirectedLayout {
         let conceptNodes = nodes.filter { $0.level == .concept }
         guard conceptNodes.count >= 2 else { return }
 
-        // entityIDsByParent: for each concept, the IDs of its entities
+        // entityIDsByParent: for each concept, the IDs of its entities.
+        // Uses the parentConceptByEntity lookup populated by computeLayout
+        // (from containsEntity edges).
         var entityIDsByParent: [UUID: [UUID]] = [:]
         for node in nodes where node.level == .entity {
-            if let parentID = node.parentConceptID {
+            if let parentID = parentConceptByEntity[node.id] {
                 entityIDsByParent[parentID, default: []].append(node.id)
             }
         }

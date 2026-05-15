@@ -89,7 +89,9 @@ struct MapCanvasRenderer: View {
 
             let alpha: Double = (edge.sourceNodeID == selectedNodeID || edge.targetNodeID == selectedNodeID) ? 0.7 : 0.25
 
-            if edge.type == .containsEntity || edge.type == .subtopicOf { continue }
+            // Skip structural containment edges (drawn implicitly via cluster
+            // backgrounds, not as explicit connectors).
+            if edge.type.isContainment || edge.type == .subtopicOf { continue }
 
             context.stroke(path, with: .color(edge.type.color.opacity(alpha)), lineWidth: 1.2)
 
@@ -108,17 +110,18 @@ struct MapCanvasRenderer: View {
     // MARK: - Nodes
 
     private func drawNodes(context: GraphicsContext, transform: CGAffineTransform, size: CGSize) {
-        // Draw deeper hierarchy levels first, top themes on top
+        // Draw deeper levels first (entities → concepts → chapters → documents),
+        // so higher abstractions render on top.
+        let levelOrder: [NodeLevel: Int] = [.entity: 0, .concept: 1, .chapter: 2, .document: 3]
         let sortedNodes = graph.allNodes.sorted { a, b in
-            a.hierarchyLevel > b.hierarchyLevel
+            (levelOrder[a.level] ?? 0) < (levelOrder[b.level] ?? 0)
         }
 
-        // Precompute entity counts per concept to avoid O(n) filter per node per frame
+        // Precompute entity counts per concept from containsEntity edges
+        // (replaces the old parentConceptID lookup).
         var entityCountByParent: [UUID: Int] = [:]
-        for n in graph.allNodes where n.level == .entity {
-            if let pid = n.parentConceptID {
-                entityCountByParent[pid, default: 0] += 1
-            }
+        for edge in graph.allEdges where edge.type == .containsEntity {
+            entityCountByParent[edge.sourceNodeID, default: 0] += 1
         }
 
         for node in sortedNodes {
@@ -133,7 +136,7 @@ struct MapCanvasRenderer: View {
             let isMultiDoc = node.sourceAnchors.contains { $0.documentURL != node.sourceAnchors.first?.documentURL }
 
             let hasSummary = node.summary != nil && viewScale >= 0.7
-            let sizing = NodeSizing.forLevel(node.hierarchyLevel, hasSummary: hasSummary)
+            let sizing = NodeSizing.forNodeLevel(node.level, hasSummary: hasSummary)
             let nodeW = sizing.baseWidth * viewScale
             let nodeH = sizing.baseHeight * viewScale
             let cr: CGFloat = 8 * viewScale

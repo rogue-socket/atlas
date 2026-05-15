@@ -129,10 +129,24 @@ class DeepExtractionPipeline {
 
                 if var existing = existingEntity {
                     existing.sourceAnchors.append(contentsOf: entityAnchors)
-                    if existing.parentConceptID == nil {
-                        existing.parentConceptID = conceptNodeID
-                    }
+                    existing.lastModified = Date()
                     graph.updateNode(existing)
+                    // Ensure containsEntity edge exists (concept may already
+                    // contain this entity from a prior batch).
+                    let alreadyLinked = graph.allEdges.contains { e in
+                        e.type == .containsEntity &&
+                        e.sourceNodeID == conceptNodeID &&
+                        e.targetNodeID == existing.id
+                    }
+                    if !alreadyLinked {
+                        let containsEdge = GraphEdge(
+                            sourceNodeID: conceptNodeID,
+                            targetNodeID: existing.id,
+                            type: .containsEntity,
+                            confidence: 1.0
+                        )
+                        graph.addEdge(containsEdge)
+                    }
                 } else {
                     let entityType = entity.type.asConceptType(default: .definition)
                     let parentColor = graph.node(for: conceptNodeID)?.highlightColorIndex
@@ -143,7 +157,6 @@ class DeepExtractionPipeline {
                         sourceAnchors: entityAnchors,
                         confidence: 0.85,
                         level: .entity,
-                        parentConceptID: conceptNodeID,
                         highlightColorIndex: parentColor
                     )
                     graph.addNode(entityNode)

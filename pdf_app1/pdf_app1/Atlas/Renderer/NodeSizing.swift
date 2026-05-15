@@ -11,6 +11,17 @@ struct NodeSizing {
     let dotSize: CGFloat
     let bgOpacity: Double
 
+    /// Maps a `NodeLevel` to its visual sizing tier. Document and Chapter
+    /// share the largest tier (they're the dominant nodes when their tab
+    /// is selected); Concept is medium; Entity is smallest.
+    static func forNodeLevel(_ level: NodeLevel, hasSummary: Bool = false) -> NodeSizing {
+        switch level {
+        case .document, .chapter: return forLevel(0, hasSummary: hasSummary)
+        case .concept:            return forLevel(1, hasSummary: hasSummary)
+        case .entity:             return forLevel(2, hasSummary: hasSummary)
+        }
+    }
+
     static func forLevel(_ level: Int, hasSummary: Bool = false) -> NodeSizing {
         let clamped = max(0, min(level, 2))
         switch clamped {
