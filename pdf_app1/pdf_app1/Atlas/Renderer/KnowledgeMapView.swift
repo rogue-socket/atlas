@@ -168,7 +168,11 @@ struct KnowledgeMapView: View {
                 if newKey.nodeCount > 0 && !interaction.isDragging {
                     recomputeLayout(canvasSize: geometry.size)
                     if oldKey.zoomLevel != newKey.zoomLevel {
-                        interaction.fitToContent(layout: layout, canvasSize: geometry.size)
+                        interaction.fitToContent(
+                            layout: layout,
+                            canvasSize: geometry.size,
+                            visibleIDs: Set(visibleNodes.map(\.id))
+                        )
                     }
                 }
                 if oldKey.nodeCount != newKey.nodeCount && !debouncedSearchQuery.isEmpty {
@@ -220,12 +224,16 @@ struct KnowledgeMapView: View {
         let nodes = visibleNodes
         let nodeIDs = Set(nodes.map(\.id))
         let edges = graph.allEdges.filter { nodeIDs.contains($0.sourceNodeID) && nodeIDs.contains($0.targetNodeID) }
-        layout.computeLayout(nodes: nodes, edges: edges, canvasSize: canvasSize)
+        // `validNodeIDs` is the FULL graph's node IDs so FDL doesn't evict
+        // positions for off-tab nodes — tab switches restore the prior
+        // layout instead of reshuffling from a fresh seed.
+        let allIDs = Set(graph.allNodes.map(\.id))
+        layout.computeLayout(nodes: nodes, edges: edges, canvasSize: canvasSize, validNodeIDs: allIDs)
 
         cachedFilteredGraph = graphForCurrentZoom
 
         if !hasComputedLayout {
-            interaction.fitToContent(layout: layout, canvasSize: canvasSize)
+            interaction.fitToContent(layout: layout, canvasSize: canvasSize, visibleIDs: nodeIDs)
             hasComputedLayout = true
         }
     }
@@ -291,7 +299,11 @@ struct KnowledgeMapView: View {
             Button(action: { interaction.zoomIn() }) { Image(systemName: "plus.magnifyingglass") }
             Button(action: { interaction.zoomOut() }) { Image(systemName: "minus.magnifyingglass") }
             Button(action: {
-                interaction.fitToContent(layout: layout, canvasSize: canvasSize)
+                interaction.fitToContent(
+                    layout: layout,
+                    canvasSize: canvasSize,
+                    visibleIDs: Set(visibleNodes.map(\.id))
+                )
             }) { Image(systemName: "arrow.up.left.and.arrow.down.right") }
                 .help("Fit All")
 
