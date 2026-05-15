@@ -397,19 +397,51 @@ struct KnowledgeMapView: View {
                 }
             }
 
-            // Connected edges
-            let edges = graph.edges(for: node.id)
-            if !edges.isEmpty {
+            // Connected edges — only relational (non-containment) so the
+            // panel matches the canvas, which deliberately skips containment
+            // edges (those are implicit in the level-fold + cluster bbox).
+            let allEdges = graph.edges(for: node.id)
+            let relational = allEdges.filter { !$0.type.isContainment }
+            let containment = allEdges.filter { $0.type.isContainment }
+
+            if !relational.isEmpty {
                 Divider()
-                Text("Connections (\(edges.count))")
+                Text("Connections (\(relational.count))")
                     .font(.caption2)
                     .foregroundColor(.secondary)
-                ForEach(edges.prefix(5)) { edge in
+                ForEach(relational.prefix(5)) { edge in
                     let otherID = edge.sourceNodeID == node.id ? edge.targetNodeID : edge.sourceNodeID
                     if let other = graph.node(for: otherID) {
                         HStack(spacing: 4) {
                             Circle().fill(edge.type.color).frame(width: 5, height: 5)
                             Text(edge.type.displayName)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Text(other.label)
+                                .font(.caption2)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+
+            // Hierarchy — containment edges surface here, labeled by
+            // direction so users can see the fold relationships even
+            // though they're not drawn as lines on the canvas.
+            if !containment.isEmpty {
+                Divider()
+                Text("Hierarchy (\(containment.count))")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                ForEach(containment.prefix(5)) { edge in
+                    let isOutgoing = edge.sourceNodeID == node.id
+                    let otherID = isOutgoing ? edge.targetNodeID : edge.sourceNodeID
+                    if let other = graph.node(for: otherID) {
+                        HStack(spacing: 4) {
+                            Image(systemName: isOutgoing ? "arrow.down.right" : "arrow.up.left")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Text(isOutgoing ? "Contains" : "In")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                             Text(other.label)
