@@ -131,6 +131,7 @@ class DocumentManager: ObservableObject {
         recentFilesManager.addRecentFile(url)
 
         log.info("[DocManager] openDocument: \(url.lastPathComponent), \(document.pageCount) pages, tab \(self.documents.count)/\(self.maxOpenDocuments)")
+        saveOpenSession()
         return .success
     }
     
@@ -153,7 +154,7 @@ class DocumentManager: ObservableObject {
     }
     
     func closeDocument(_ document: PDFDocumentItem) {
-        log.info("[DocManager] closeDocument: \(document.url.lastPathComponent)")
+        log.info("[DocManager] closeDocument: \(document.url.lastPathComponent) (remaining \(self.documents.count - 1)/\(self.maxOpenDocuments))")
         if document.needsScopeRelease {
             scopeAccessor.stop(for: document.url)
         }
@@ -166,6 +167,7 @@ class DocumentManager: ObservableObject {
 
         // Update comparison if needed
         updateComparisonAfterClosing(document)
+        saveOpenSession()
     }
     
     func selectDocument(url: URL) {
@@ -214,6 +216,7 @@ class DocumentManager: ObservableObject {
         var newDocuments = documents
         newDocuments.move(fromOffsets: source, toOffset: destination)
         documents = newDocuments
+        saveOpenSession()
     }
     
     // MARK: - Window Management
@@ -224,14 +227,30 @@ class DocumentManager: ObservableObject {
     // MARK: - Session Persistence
 
     /// Save bookmarks for all currently open tabs so they can be restored on next launch.
+    /// Called both after each open/close/reorder (crash-safe snapshot) and from
+    /// `willTerminate` (final flush). UserDefaults coalesces writes, so per-mutation
+    /// calls are cheap.
     func saveOpenSession() {
+        var failed: [String] = []
         let bookmarks: [Data] = documents.compactMap { item in
-            try? item.url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+            if let data = try? item.url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil) {
+                return data
+            } else {
+                failed.append(item.url.lastPathComponent)
+                return nil
+            }
         }
-        if let encoded = try? JSONEncoder().encode(bookmarks) {
-            UserDefaults.standard.set(encoded, forKey: AppConstants.openSessionBookmarksKey)
+        guard let encoded = try? JSONEncoder().encode(bookmarks) else {
+            log.error("[DocManager] saveOpenSession: JSON encode failed for \(bookmarks.count) bookmark(s)")
+            return
         }
-        log.info("[DocManager] saveOpenSession: saved \(bookmarks.count) tab(s)")
+        UserDefaults.standard.set(encoded, forKey: AppConstants.openSessionBookmarksKey)
+        if failed.isEmpty {
+            log.info("[DocManager] saveOpenSession: persisted \(bookmarks.count)/\(self.documents.count) tab(s)")
+        } else {
+            let failedList = failed.joined(separator: ", ")
+            log.warning("[DocManager] saveOpenSession: persisted \(bookmarks.count)/\(self.documents.count) tab(s); bookmark creation failed for: \(failedList)")
+        }
     }
 
     /// Restore tabs from the previous session's bookmarks.
@@ -245,8 +264,16 @@ class DocumentManager: ObservableObject {
             return
         }
 
-        guard let data = UserDefaults.standard.data(forKey: AppConstants.openSessionBookmarksKey),
-              let bookmarks = try? JSONDecoder().decode([Data].self, from: data) else {
+        guard let data = UserDefaults.standard.data(forKey: AppConstants.openSessionBookmarksKey) else {
+            log.info("[DocManager] restoreOpenSession: no saved session (key absent)")
+            return
+        }
+        guard let bookmarks = try? JSONDecoder().decode([Data].self, from: data) else {
+            log.warning("[DocManager] restoreOpenSession: session data found but decode failed")
+            return
+        }
+        if bookmarks.isEmpty {
+            log.info("[DocManager] restoreOpenSession: saved session is empty")
             return
         }
 
@@ -292,15 +319,18 @@ class DocumentManager: ObservableObject {
 
     private func resolveSessionBookmark(_ bookmark: Data) -> URL? {
         var isStale = false
-        guard let url = try? URL(resolvingBookmarkData: bookmark,
-                                 options: [.withSecurityScope, .withoutUI],
-                                 relativeTo: nil,
-                                 bookmarkDataIsStale: &isStale) else {
+        do {
+            let url = try URL(resolvingBookmarkData: bookmark,
+                              options: [.withSecurityScope, .withoutUI],
+                              relativeTo: nil,
+                              bookmarkDataIsStale: &isStale)
+            if isStale {
+                log.info("[DocManager] restoreOpenSession: stale bookmark for \(url.lastPathComponent) — will refresh on next saveOpenSession")
+            }
+            return url
+        } catch {
+            log.warning("[DocManager] restoreOpenSession: bookmark resolution failed (\(bookmark.count) bytes): \(error.localizedDescription, privacy: .public)")
             return nil
         }
-        if isStale {
-            log.info("[DocManager] restoreOpenSession: stale bookmark for \(url.lastPathComponent) — will refresh on next saveOpenSession")
-        }
-        return url
     }
 }
