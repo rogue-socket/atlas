@@ -9,8 +9,14 @@ import SwiftUI
 import AppKit
 
 // MARK: - Node Level (Hierarchy)
+/// Four-level abstraction ladder for knowledge-graph nodes. Each level is
+/// a fold of the level below: a Document contains Chapters; a Chapter
+/// contains Concepts; a Concept contains Entities. Mirrors
+/// `SemanticZoomLevel` 1:1 — the renderer's tab UI is just a level filter.
 enum NodeLevel: String, Codable, Hashable {
-    case concept   // top-level organizational unit (theme/topic)
+    case document  // representative node for an entire PDF
+    case chapter   // representative node for a chapter / section
+    case concept   // theme or topic within a chapter
     case entity    // specific thing within a concept (term, technique, person, formula)
 }
 
@@ -61,7 +67,10 @@ enum ConceptType: String, Codable, CaseIterable, Hashable {
         }
     }
 
-    /// Heuristic default hierarchy level when the LLM doesn't specify one
+    /// Heuristic default node level when the LLM doesn't specify one.
+    /// Document and Chapter levels come from dedicated extraction passes,
+    /// never inferred from `ConceptType`, so this only maps to
+    /// `.concept` / `.entity`.
     var defaultLevel: NodeLevel {
         switch self {
         case .concept, .theorem, .method, .claim:
@@ -84,7 +93,12 @@ enum EdgeType: String, Codable, CaseIterable, Hashable {
     case partOf
     case uses
     case containsEntity
-    case subtopicOf
+    case subtopicOf        // TODO(4-level migration): retire; absorbed into .containsConcept (Chapter → Concept).
+    // Containment edges express the 4-level fold. Each adjacent pair of
+    // levels uses its own edge type so renderer filters can hide them or
+    // style them consistently (e.g. drawn faintly, no linkingPhrase label).
+    case containsChapter   // Document → Chapter
+    case containsConcept   // Chapter → Concept
 
     var displayName: String {
         switch self {
@@ -97,8 +111,8 @@ enum EdgeType: String, Codable, CaseIterable, Hashable {
         case .sameTopic: return "Same Topic"
         case .partOf: return "Part Of"
         case .uses: return "Uses"
-        case .containsEntity: return "Contains"
         case .subtopicOf: return "Subtopic Of"
+        case .containsChapter, .containsConcept, .containsEntity: return "Contains"
         }
     }
 
@@ -113,8 +127,17 @@ enum EdgeType: String, Codable, CaseIterable, Hashable {
         case .sameTopic: return .cyan
         case .partOf: return .indigo
         case .uses: return .mint
-        case .containsEntity: return .secondary
         case .subtopicOf: return .brown
+        case .containsChapter, .containsConcept, .containsEntity: return .secondary
+        }
+    }
+
+    /// True for the three structural fold edges. UI may render these
+    /// differently (faded, hidden when not expanded, no linking-phrase label).
+    var isContainment: Bool {
+        switch self {
+        case .containsChapter, .containsConcept, .containsEntity: return true
+        default: return false
         }
     }
 }
