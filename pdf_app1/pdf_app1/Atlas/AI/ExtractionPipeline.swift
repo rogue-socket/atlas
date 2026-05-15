@@ -105,18 +105,37 @@ class ExtractionPipeline {
 
         totalPages = pageRange.count
 
-        var existingLabels = graph.allNodes.map { $0.label }
+        // SCE: detect doc-N>1 by checking for any node anchored in another doc.
+        // The cumulative-state header is built once per doc against the live graph
+        // (which carries the prior docs' nodes) and passed to every batch.
+        let hasPriorDocNodes = graph.allNodes.contains { node in
+            node.sourceAnchors.contains { $0.documentURL != documentURL }
+        }
+        let priorDocsHeader: String? = hasPriorDocNodes
+            ? PromptTemplates.cumulativeStateHeader(priorDocsGraph: graph, currentDocURL: documentURL)
+            : nil
+        if let h = priorDocsHeader {
+            log.info("[SCE] doc=\(documentURL.lastPathComponent) prior-docs-header: \(h.split(separator: "\n").count) line(s)")
+        }
+
+        // SCE: all batch results go into a per-doc buffer. Buffer commits to the
+        // live graph atomically once all batches complete; mid-doc cancellation
+        // or error discards the buffer (integration decision #3).
+        let buffer = KnowledgeGraph()
+        var existingLabels: [String] = []
         let outlineEntries = layoutAnalyzer.extractOutline(from: document)
         let outlineHints = outlineEntries.map { $0.title }
-        log.info("Outline entries: \(outlineEntries.count), existing concepts: \(existingLabels.count)")
+        log.info("Outline entries: \(outlineEntries.count), SCE buffer starts empty")
 
         var pageIndex = pageRange.lowerBound
         var batchNumber = 0
+        var allBatchesCompleted = true
         while pageIndex < pageRange.upperBound {
             // Check for cancellation before each batch
             if Task.isCancelled {
                 log.info("Extraction cancelled by user after \(batchNumber) batches")
-                statusMessage = "Cancelled — \(graph.nodeCount) concepts extracted"
+                statusMessage = "Cancelled — buffer discarded (\(buffer.nodeCount) nodes)"
+                allBatchesCompleted = false
                 break
             }
 
@@ -133,34 +152,46 @@ class ExtractionPipeline {
                     document: document,
                     documentURL: documentURL,
                     pageRange: batchRange,
-                    graph: graph,
+                    graph: buffer,
                     backend: backend,
                     existingLabels: existingLabels,
                     outlineHints: outlineHints,
+                    priorDocsHeader: priorDocsHeader,
                     projectID: projectID
                 )
+                let promptTokens = backend.lastResponsePromptTokens.map(String.init) ?? "?"
+                log.info("[SCE] doc=\(documentURL.lastPathComponent) batch=\(batchNumber) prompt_tokens=\(promptTokens)")
                 // Update existing labels for next batch so the LLM doesn't re-extract
-                existingLabels = graph.allNodes.map { $0.label }
-                log.info("Batch \(batchNumber) done. Graph now has \(graph.nodeCount) nodes, \(graph.edgeCount) edges")
+                existingLabels = buffer.allNodes.map { $0.label }
+                log.info("Batch \(batchNumber) done. Buffer now has \(buffer.nodeCount) nodes, \(buffer.edgeCount) edges")
             } catch is CancellationError {
                 log.info("Extraction cancelled during batch \(batchNumber)")
-                statusMessage = "Cancelled — \(graph.nodeCount) concepts extracted"
+                statusMessage = "Cancelled — buffer discarded (\(buffer.nodeCount) nodes)"
+                allBatchesCompleted = false
                 break
             } catch {
                 log.error("Batch \(batchNumber) FAILED: \(error.localizedDescription)")
-                statusMessage = "Error: \(error.localizedDescription)"
+                statusMessage = "Error: \(error.localizedDescription) — buffer discarded"
+                allBatchesCompleted = false
                 break
             }
 
             pageIndex = batchEnd
         }
 
-        if Task.isCancelled {
+        if !allBatchesCompleted || Task.isCancelled {
             isProcessing = false
             graph.documentProcessingState[documentURL] = .unprocessed
-            log.info("=== Extraction cancelled for \(documentURL.lastPathComponent) ===")
+            log.info("=== Extraction aborted for \(documentURL.lastPathComponent) (buffer discarded: \(buffer.nodeCount)n/\(buffer.edgeCount)e) ===")
             return
         }
+
+        // SCE: atomic commit. Merge respects lastModified for UUID collisions and
+        // dedupes edges by tuple (see KnowledgeGraph.merge).
+        let bufferNodes = buffer.nodeCount
+        let bufferEdges = buffer.edgeCount
+        graph.merge(from: buffer)
+        log.info("[SCE] doc=\(documentURL.lastPathComponent) committed buffer: \(bufferNodes)n/\(bufferEdges)e -> live graph now \(graph.nodeCount)n/\(graph.edgeCount)e")
 
         // Chapter extraction (PDF outline if present, else LLM).
         statusMessage = "Identifying chapters..."
@@ -233,6 +264,7 @@ class ExtractionPipeline {
         backend: any AtlasModel,
         existingLabels: [String],
         outlineHints: [String],
+        priorDocsHeader: String? = nil,
         projectID: UUID? = nil
     ) async throws {
         // Step 1: Extract text
@@ -295,7 +327,8 @@ class ExtractionPipeline {
             documentTitle: documentURL.lastPathComponent,
             pageRange: pageRange,
             existingConcepts: existingLabels,
-            outlineHints: outlineHints
+            outlineHints: outlineHints,
+            priorDocsContext: priorDocsHeader
         )
 
         // Step 4: AI concept extraction (hierarchical)
