@@ -20,10 +20,28 @@ enum PromptTemplates {
             ? ""
             : "\nDocument outline hints: \(context.outlineHints.joined(separator: " > "))"
 
+        let priorDocsBlock: String
+        if let header = context.priorDocsContext, !header.isEmpty {
+            priorDocsBlock = """
+
+            ## Prior Documents — Cross-Document Reuse
+
+            The following concepts and entities were extracted from earlier documents in this project. \
+            When the current text refers to the SAME real-world thing as one of these, REUSE the existing \
+            label verbatim so it merges into a single node. Create a new node only when the current text \
+            describes a genuinely different thing. The `type` shown is advisory — match meaning, not type.
+
+            \(header)
+
+            """
+        } else {
+            priorDocsBlock = ""
+        }
+
         return """
         You are a concept map extraction system. Analyze the following text from "\(context.documentTitle)" (pages \(context.pageRange.lowerBound + 1)-\(context.pageRange.upperBound)) and extract concepts, their entities, and relationships between concepts.
         \(outlineHints)
-
+        \(priorDocsBlock)
         Already extracted concepts (do not duplicate): \(existingList)
 
         ## Core Principle
@@ -92,6 +110,32 @@ enum PromptTemplates {
         TEXT:
         \(text)
         """
+    }
+
+    // MARK: - SCE Cumulative-State Header
+
+    /// Build the cross-document reuse header for SCE doc N (N>1).
+    ///
+    /// Emits one line per node anchored ONLY in prior documents (excludes any node
+    /// also anchored in `currentDocURL`). Format per line:
+    ///   `- <label> (<level>·<type>): <summary>`
+    ///
+    /// Natural-language, terse — chosen over JSON to minimize prompt tokens.
+    /// Returns "" when there are no prior-doc nodes (caller treats empty as no-op).
+    static func cumulativeStateHeader(priorDocsGraph: KnowledgeGraph, currentDocURL: URL) -> String {
+        let lines: [String] = priorDocsGraph.allNodes.compactMap { node in
+            let anchors = node.sourceAnchors
+            guard !anchors.isEmpty else { return nil }
+            // Skip nodes anchored in the current doc — caller handles intra-doc dedup via existingConcepts.
+            if anchors.contains(where: { $0.documentURL == currentDocURL }) { return nil }
+            let levelTag = node.level.rawValue
+            let typeTag = node.type.rawValue
+            let summary = (node.summary?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
+                $0.isEmpty ? nil : $0
+            } ?? "(no summary)"
+            return "- \(node.label) (\(levelTag)·\(typeTag)): \(summary)"
+        }
+        return lines.sorted().joined(separator: "\n")
     }
 
     // MARK: - Edge Proposal

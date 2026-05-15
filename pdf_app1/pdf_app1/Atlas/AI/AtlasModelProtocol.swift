@@ -37,6 +37,24 @@ struct ExtractionContext {
     let pageRange: Range<Int>
     let existingConcepts: [String] // labels of concepts already extracted
     let outlineHints: [String] // TOC entries for structure hints
+    // SCE: cumulative-state header for cross-doc reuse. Pre-serialized natural-language
+    // listing of nodes anchored in prior docs (label · type · summary, one per line).
+    // nil for doc 1 in an SCE run and for all non-SCE runs.
+    let priorDocsContext: String?
+
+    init(
+        documentTitle: String,
+        pageRange: Range<Int>,
+        existingConcepts: [String],
+        outlineHints: [String],
+        priorDocsContext: String? = nil
+    ) {
+        self.documentTitle = documentTitle
+        self.pageRange = pageRange
+        self.existingConcepts = existingConcepts
+        self.outlineHints = outlineHints
+        self.priorDocsContext = priorDocsContext
+    }
 }
 
 // MARK: - Answer With Citations
@@ -92,6 +110,12 @@ protocol AtlasModel: Sendable {
     var modelIdentifier: String { get }
     var isAvailable: Bool { get }
 
+    /// SCE telemetry: prompt token count from the most recent transport call.
+    /// Only Gemini implements this in v1 (per integration decision #4); other
+    /// backends return nil. Read immediately after `extractConcepts` to capture
+    /// the concept-extraction prompt's size; subsequent calls overwrite it.
+    var lastResponsePromptTokens: Int? { get }
+
     func extractConcepts(from text: String, context: ExtractionContext) async throws -> [RawConcept]
     func proposeEdges(between concepts: [String], context: String) async throws -> [RawEdge]
     func summarizeConcept(_ label: String, sourceText: String) async throws -> String
@@ -105,6 +129,8 @@ protocol AtlasModel: Sendable {
 }
 
 extension AtlasModel {
+    var lastResponsePromptTokens: Int? { nil }
+
     func proposeMerges(
         documentAConcepts: [(label: String, summary: String?)],
         documentBConcepts: [(label: String, summary: String?)]
