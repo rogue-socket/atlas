@@ -188,3 +188,79 @@ cp /tmp/atlas_project_pre_etr_2026-05-16.json \
 - `embeddings_ABE6D4F9-…json`: new, 8.49 MB, 216 entries
 - `/tmp/atlas_project_pre_etr_2026-05-16.json`: pre-ETR backup, untouched
 - `/tmp/atlas_etr_live.log`: empty (logs go to unified logging, not stdout)
+
+---
+
+## Threshold sweep — adj-floor 0.85 / 0.80 / 0.75 (added later same session)
+
+Each variant ran against a freshly-restored baseline (`/tmp/atlas_project_pre_etr_2026-05-16.json` → on-disk) with the embedding cache wiped before the first run and reused warm thereafter. auto-merge stayed at 0.95 (default) throughout — band was always empty because no pair embedded ≥ 0.95 sim.
+
+| `--adj-floor` | Candidates | LLM batches | LLM-approved | Final merges | Groups (after transitive closure) | Nodes removed | Post graph |
+|---|---|---|---|---|---|---|---|
+| 0.85 (default) | 5 | 1 | 2 | 2 | 2 | 2 | 244n / 750e |
+| 0.80 | 50 | 3 | 4 | 4 | 3 | 4 | 242n / 750e |
+| 0.75 | 387 | 22 | 9 | 9 | 5 | 9 | 237n / 741e |
+| 0.70 | ~1000+ (est.) | — | — | — | — | — | RUN FAILED — transient Gemini "network connection was lost" mid-adjudication; pre-apply, graph intact at baseline |
+
+**Approval rate trends down as floor drops:** 40% → 8% → 2.3%. The LLM is doing its job — rejecting most of the additional candidates that lower thresholds surface. Precision stays high across the sweep.
+
+### Cumulative merges discovered at each floor
+
+Floor 0.85 (2 merges):
+- "Lab result release: typically within 24 hours" (OPS) → "same-day or next-day results" (CLI)
+- "In-app messaging: response within 6 business hours" (OPS) → "Asynchronous messages" (CLI)
+
+Floor 0.80 adds 2 more (4 total):
+- "Care coordinator handles prior authorization where required" (OPS) → "referral and prior authorization handled by VitaCare care coordinators" (CLI)
+- "care coordinator manages the referral end-to-end" (OPS) → same CLI canonical (3-member group via transitive closure)
+
+Floor 0.75 adds 5 more (9 total):
+- "Annual wellness visit: scheduled within 14 days of patient request" (OPS) → "Annual Wellness Visit" — strong match, near-identical labels
+- "Extended evening hours available at 16 clinics (open until 9:00 PM)" (OPS) → "Clinic hours are 7:30 AM - 7:00 PM ..." — debatable; extended hours are a variance from standard hours, but LLM accepted as "clinic operating hours" theme
+- "Care Between Visits" (CLI) → merged into care-coordinator cluster (5-member group)
+- "External Care Coordination" (OPS concept) → also into care-coordinator cluster — note this is a level-promotion (concept absorbed via cross-level merge)
+- "Care coordinator matches the patient to a high-quality specialist within their insurance network" (OPS) → same cluster
+
+### Rubric scoring across the sweep
+
+Cross-doc strong-merge rubric pairs caught:
+
+| Rubric row | Pair | 0.85 | 0.80 | 0.75 |
+|---|---|---|---|---|
+| 8 | OPS care coordinator ↔ CLI referral/prior auth handled by care coordinators | ❌ | ✅ | ✅ |
+| 9 | OPS Lab result release ↔ CLI Lab Result Communication | ⚠️ partial | ⚠️ partial | ⚠️ partial |
+| Bonus (not in rubric) | OPS Annual wellness visit ↔ CLI/OPS Annual Wellness Visit | ❌ | ❌ | ✅ |
+| Bonus (not in rubric) | In-app messaging ↔ Asynchronous messages | ✅ | ✅ | ✅ |
+| Bonus (not in rubric) | Lab result release ↔ same-day or next-day results | ✅ | ✅ | ✅ |
+
+| Floor | Precision (true merges / total merges) | Recall (strong-merge rubric pairs caught / 6) | Wall-clock |
+|---|---|---|---|
+| 0.85 | 2/2 = 100% | 1/6 ≈ 17% (row 9 partial) | ~22s cold, ~13s warm |
+| 0.80 | 4/4 = 100% | 2/6 ≈ 33% (rows 8 + 9 partial) | ~57s cold, ~45s warm est. |
+| 0.75 | ~8/9 ≈ 89% (extended-hours merge debatable) | 2/6 ≈ 33% (no new strong-merge rubric rows caught; the additional merges are valid but not on the rubric) | ~3min warm |
+
+### Conclusions from the sweep
+
+1. **Lower floor finds more genuine merges**, with the LLM holding the precision line. Going from 0.85 → 0.75 quadrupled merges (2 → 9) while only one was marginal (extended hours).
+
+2. **Diminishing returns past 0.80 for rubric coverage.** 0.80 caught row 8 (care coordinator). 0.75 added 5 more merges but none of them were strong-merge rubric pairs — they were valid merges the rubric author hadn't enumerated (rubric v2 work). So *rubric recall* plateaus at 2/6 from 0.80 onward, even as *real-world merge yield* keeps climbing.
+
+3. **0.70 is impractical at vitacare scale** — even before the network failure, 1000+ candidates × ~12s per LLM batch would take 10-15 minutes. For larger projects this gets worse. **Add transient-failure retry** to the LLM call before sweeping below 0.75.
+
+4. **Recommended production default: 0.80.** Doubles merges over 0.85 with no false positives, surfaces a clear rubric win (row 8), and stays under 1min wall-clock on vitacare. 0.75 is worth doing as an audit pass but not as the default.
+
+5. **The rubric needs expansion.** Multiple legitimate cross-doc merges (annual wellness visit, the care-coordinator cluster pieces beyond row 8, extended hours debate) aren't on the rubric. Rubric v2 should be built by walking the actual extraction, not predicted from PDF text.
+
+### Followup actions from the sweep
+
+- Add retry-with-backoff to `generateRawResponse` in `GeminiBackend` (or in the orchestrator's batch loop) so a single network blip doesn't lose a multi-minute run.
+- Bump the default `adjudicationFloor` from 0.85 → 0.80 in `ResolverThresholds.default` (small one-line change; backed by sweep data).
+- Add structured logging (or write a debug-only JSON sidecar) of *which* pairs hit which band — debugging the 0.70 result without privacy redaction would be much easier with per-pair audit trail.
+
+### On-disk state after the sweep
+
+- `project_ABE6D4F9-…json`: **back at baseline 246n/753e** (final restore before 0.70 run; 0.70 failed pre-apply)
+- `embeddings_ABE6D4F9-…json`: 218 entries, warm and reusable
+- `/tmp/atlas_post_etr_floor080.json`: 0.80 run result (242n/750e)
+- `/tmp/atlas_post_etr_floor075.json`: 0.75 run result (237n/741e)
+- `/tmp/atlas_project_pre_etr_2026-05-16.json`: pre-ETR backup, still untouched
