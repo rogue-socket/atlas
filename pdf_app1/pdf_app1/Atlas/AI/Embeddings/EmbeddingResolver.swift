@@ -26,7 +26,12 @@ private let log = AtlasLogger.embedding
 
 struct ResolverThresholds: Sendable, Equatable {
     var autoMerge: Float = 0.95
-    var adjudicationFloor: Float = 0.85
+    /// Bumped 2026-05-16 from 0.85 → 0.80 after the threshold sweep on
+    /// vitacare (see `audits/2026-05-16_etr-live-verification.md` §"Threshold
+    /// sweep"). 0.80 caught rubric row 8 (care-coordinator cluster) at no
+    /// precision cost vs 0.85; LLM kept rejection rate at ~92% so false
+    /// positives stayed at zero.
+    var adjudicationFloor: Float = 0.80
     var adjudicationBatchSize: Int = 18
     static let `default` = ResolverThresholds()
 }
@@ -269,7 +274,7 @@ extension EmbeddingResolver {
                     continue
                 }
                 let prompt = PromptTemplates.mergeAdjudication(pairs: pairsForPrompt)
-                let raw = try await llm.generateRawResponse(prompt: prompt)
+                let raw = try await generateWithRetry(llm: llm, prompt: prompt)
                 let decisions = try PromptTemplates.parseMergeAdjudicationResponse(raw, expectedCount: pairsForPrompt.count)
                 for (cand, merge) in zip(batch, decisions) where merge {
                     adjudicated.append(MergeDecision(aID: cand.aID, bID: cand.bID,
@@ -282,5 +287,42 @@ extension EmbeddingResolver {
         let all = autoMerges + adjudicated
         log.info("[ETR] final merge plan: \(all.count) decisions (auto=\(autoMerges.count), adjudicated=\(adjudicated.count))")
         return MergePlan(decisions: all, thresholds: thresholds)
+    }
+
+    /// Calls `llm.generateRawResponse(prompt:)` with retry-with-backoff for
+    /// transient transport failures. Added after the 2026-05-16 vitacare
+    /// sweep at `--adj-floor 0.70` lost a multi-minute run to a single
+    /// "network connection was lost" mid-batch.
+    ///
+    /// Policy: 3 attempts total, exponential backoff (1s → 3s). Logical
+    /// errors (`AIError.decodingError`, `AIError.invalidResponse`) bypass
+    /// retry — those don't get better on retry. Everything else retries.
+    /// `maxAttempts` is exposed for tests.
+    static func generateWithRetry(
+        llm: any AtlasModel,
+        prompt: String,
+        maxAttempts: Int = 3
+    ) async throws -> String {
+        var lastError: Error?
+        for attempt in 0..<maxAttempts {
+            do {
+                return try await llm.generateRawResponse(prompt: prompt)
+            } catch let error as AIError {
+                switch error {
+                case .decodingError, .invalidResponse:
+                    throw error  // logical; retry won't help
+                default:
+                    lastError = error
+                }
+            } catch {
+                lastError = error
+            }
+            if attempt < maxAttempts - 1 {
+                let delaySeconds = pow(3.0, Double(attempt))  // 1s, 3s
+                log.warning("[ETR] LLM call failed (attempt \(attempt + 1)/\(maxAttempts)): \(lastError?.localizedDescription ?? "?", privacy: .public) — retrying in \(delaySeconds)s")
+                try? await Task.sleep(for: .seconds(delaySeconds))
+            }
+        }
+        throw lastError ?? AIError.modelUnavailable("retry exhausted with no captured error")
     }
 }

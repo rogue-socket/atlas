@@ -172,15 +172,16 @@ final class EmbeddingResolverTests: XCTestCase {
     }
 
     func test_classify_inAdjudicationBand_returnsAdjudication() {
-        let t = ResolverThresholds.default
+        let t = ResolverThresholds.default  // floor 0.80, autoMerge 0.95
+        XCTAssertEqual(EmbeddingResolver.classify(similarity: 0.80, thresholds: t), .adjudication)
         XCTAssertEqual(EmbeddingResolver.classify(similarity: 0.85, thresholds: t), .adjudication)
         XCTAssertEqual(EmbeddingResolver.classify(similarity: 0.90, thresholds: t), .adjudication)
         XCTAssertEqual(EmbeddingResolver.classify(similarity: 0.9499, thresholds: t), .adjudication)
     }
 
     func test_classify_belowFloor_returnsReject() {
-        let t = ResolverThresholds.default
-        XCTAssertEqual(EmbeddingResolver.classify(similarity: 0.84, thresholds: t), .reject)
+        let t = ResolverThresholds.default  // floor 0.80
+        XCTAssertEqual(EmbeddingResolver.classify(similarity: 0.79, thresholds: t), .reject)
         XCTAssertEqual(EmbeddingResolver.classify(similarity: 0.0,  thresholds: t), .reject)
         XCTAssertEqual(EmbeddingResolver.classify(similarity: -1.0, thresholds: t), .reject)
     }

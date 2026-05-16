@@ -182,6 +182,78 @@ final class EmbeddingResolverOrchestratorTests: XCTestCase {
         XCTAssertTrue(plan.decisions.isEmpty)
     }
 
+    // MARK: - generateWithRetry
+
+    /// Throws AIError.networkError on the first `failureCount` calls, then
+    /// returns `successResponse`. Tracks total call count.
+    final class FlakyLLMBackend: AtlasModel, @unchecked Sendable {
+        let displayName = "Flaky"
+        let modelIdentifier = "flaky-llm"
+        let isAvailable = true
+        private let lock = NSLock()
+        private var _callCount = 0
+        var callCount: Int { lock.lock(); defer { lock.unlock() }; return _callCount }
+        private let failureCount: Int
+        private let successResponse: String
+        private let errorToThrow: Error
+
+        init(failureCount: Int,
+             successResponse: String = "[]",
+             errorToThrow: Error = AIError.networkError(NSError(domain: NSURLErrorDomain, code: -1005, userInfo: [NSLocalizedDescriptionKey: "The network connection was lost."]))) {
+            self.failureCount = failureCount
+            self.successResponse = successResponse
+            self.errorToThrow = errorToThrow
+        }
+
+        func extractConcepts(from text: String, context: ExtractionContext) async throws -> [RawConcept] { throw AIError.modelUnavailable("not impl in fake") }
+        func proposeEdges(between concepts: [String], context: String) async throws -> [RawEdge] { throw AIError.modelUnavailable("not impl in fake") }
+        func summarizeConcept(_ label: String, sourceText: String) async throws -> String { throw AIError.modelUnavailable("not impl in fake") }
+        func answerQuestion(_ question: String, context: String) async throws -> AnswerWithCitations { throw AIError.modelUnavailable("not impl in fake") }
+
+        func generateRawResponse(prompt: String) async throws -> String {
+            lock.lock()
+            _callCount += 1
+            let n = _callCount
+            lock.unlock()
+            if n <= failureCount { throw errorToThrow }
+            return successResponse
+        }
+    }
+
+    func test_generateWithRetry_succeedsAfterTransientFailures() async throws {
+        let llm = FlakyLLMBackend(failureCount: 2, successResponse: "[true]")
+        let result = try await EmbeddingResolver.generateWithRetry(llm: llm, prompt: "x", maxAttempts: 3)
+        XCTAssertEqual(result, "[true]")
+        XCTAssertEqual(llm.callCount, 3, "Should have called 3 times: 2 failures + 1 success")
+    }
+
+    func test_generateWithRetry_throwsAfterExhaustingAttempts() async {
+        let llm = FlakyLLMBackend(failureCount: 5)  // more failures than attempts
+        do {
+            _ = try await EmbeddingResolver.generateWithRetry(llm: llm, prompt: "x", maxAttempts: 3)
+            XCTFail("Expected throw after exhausting retries")
+        } catch {
+            // Expected — any error
+        }
+        XCTAssertEqual(llm.callCount, 3, "Should have called exactly maxAttempts times")
+    }
+
+    func test_generateWithRetry_doesNotRetryOnLogicalError() async {
+        // decodingError shouldn't retry — the response is broken in a way
+        // retry won't fix.
+        let llm = FlakyLLMBackend(failureCount: 5,
+                                  errorToThrow: AIError.decodingError("invalid JSON"))
+        do {
+            _ = try await EmbeddingResolver.generateWithRetry(llm: llm, prompt: "x", maxAttempts: 3)
+            XCTFail("Expected throw")
+        } catch let error as AIError {
+            if case .decodingError = error { /* expected */ } else { XCTFail("Wrong error: \(error)") }
+        } catch {
+            XCTFail("Wrong error type: \(error)")
+        }
+        XCTAssertEqual(llm.callCount, 1, "decodingError should NOT trigger retry")
+    }
+
     func test_resolve_logsThresholdsInPlan() async throws {
         let projectID = UUID()
         defer { wipeCacheFile(for: projectID) }
