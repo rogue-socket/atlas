@@ -434,17 +434,17 @@ Each pair references same real-world thing across two docs. Embedding similarity
 |---|---|---|---|---|---|
 | 1 | CLI | "Asynchronous messages" | PAT | "In-app messaging: response within 6 business hours, typically much faster" | ✅ caught at 0.85 |
 | 2 | CLI | "same-day or next-day results" | PAT | "Lab result release: typically within 24 hours of completion" | ✅ caught at 0.85 |
-| 3 | CLI | "Lab Result Communication" (concept) | PAT | "Lab result release: typically within 24 hours of completion" (entity) | ❌ missed (cross-level + lower sim) |
+| 3 | CLI | "Lab Result Communication" (concept) | PAT | "Lab result release: typically within 24 hours of completion" (entity) | ✅ caught at 0.80 by tuned prompt (2026-05-17), prior runs missed |
 | 4 | CLI | "referral and prior authorization handled by VitaCare care coordinators" | PAT | "Care coordinator handles prior authorization where required" | ✅ caught at 0.80 |
 | 5 | CLI | "referral and prior authorization handled by VitaCare care coordinators" | PAT | "care coordinator manages the referral end-to-end" | ✅ caught at 0.80 |
 | 6 | CLI | "referral and prior authorization handled by VitaCare care coordinators" | PAT | "Care coordinator matches the patient to a high-quality specialist within their insurance network" | ✅ caught at 0.75 |
 | 7 | CLI | "Annual Wellness Visit" | PAT | "Annual wellness visit: scheduled within 14 days of patient request" | ✅ caught at 0.75 |
 | 8 | CLI | "Specialty Care Services" (concept) | PAT | "Specialist visit (VitaCare specialty): within 14 days for routine, same-day for urgent" (entity) | ❌ missed |
 | 9 | CLI | "discounted specialty services" | PAT | "Specialist visit (VitaCare specialty): within 14 days for routine, same-day for urgent" | ❌ missed |
-| 10 | CLI | "Advanced Imaging Referrals" (concept) | PAT | "External Care Coordination" (concept) | ✅ caught at 0.75 |
+| 10 | CLI | "Advanced Imaging Referrals" (concept) | PAT | "External Care Coordination" (concept) | ✅ caught at 0.80 by tuned prompt (2026-05-17); previously only at 0.75 |
 | 11 | CLI | "Substance use disorder treatment" | COM | "Substance Use Disorder Records (42 CFR Part 2)" (concept) | ❌ missed |
 | 12 | CLI | "messaging-based care" | PAT | "In-app messaging: response within 6 business hours, typically much faster" | ❌ missed |
-| 13 | CLI | "Lab results are posted to the patient portal" | PAT | "Lab result release: typically within 24 hours of completion" | ❌ missed |
+| 13 | CLI | "Lab results are posted to the patient portal" | PAT | "Lab result release: typically within 24 hours of completion" | ✅ caught at 0.80 by tuned prompt (2026-05-17) |
 | 14 | ORG | "Clinic hours are 7:30 AM - 7:00 PM Monday through Friday and 8:00 AM - 2:00 PM on Saturdays" | PAT | "Extended evening hours available at 16 clinics (open until 9:00 PM)" | ⚠️ caught at 0.75 — debatable (variance vs base hours) |
 | 15 | CLI | "primary care clinician" | PAT | "Clinician identifies need for outside care and writes a referral" | ❌ missed — same role, very different label |
 | 16 | CLI | "MRI, CT, mammography" | PAT | "External Care Coordination" | ❌ missed — same external-referral pathway |
@@ -459,6 +459,17 @@ Each pair references same real-world thing across two docs. Embedding similarity
 - Floor 0.75: **8/20 caught** (rows 1, 2, 4, 5, 6, 7, 10 + debatable 14)
 
 Recall at default 0.80: 25%. At 0.75: 40%. Headroom to improve via prompt engineering, embedding model upgrade, or aggressive threshold tuning paired with stricter LLM adjudication.
+
+**Score after 2026-05-17 prompt-tuning pass (floor 0.80, Gemini T=0 + topK=1):**
+- Rubric in-band recall: **7/7 caught in all 3 runs** (rows 1, 2, 3, 4, 5, 6, 10, 13 — eight rubric-rows-in-band; rows 3, 10, 13 newly caught vs prior). The 12 not-in-band rows still need lower floor or different embedding to surface.
+- Rubric precision: **8/8 traps rejected in all 3 runs** (from §"SHOULD-NOT-MERGE" — same eight pairs that hold across all prior runs).
+- Off-rubric extras (not on either rubric list, surfaced by the tuned prompt; need future rubric placement):
+  - `Advanced Imaging Referrals ↔ Referral Process` (0.879, 2/3 runs) — clear subset; promote to SHOULD-MERGE row 21.
+  - `Asynchronous messages ↔ Message response: within 6 business hours during business days` (0.877, 3/3) — symmetric to row 1; promote to SHOULD-MERGE row 22.
+  - `Business Continuity & Disaster Recovery ↔ Operational Reliability` (0.815, 3/3) — marginal; defer rubric placement until reviewed.
+  - `Chronic Condition Programs ↔ "no additional cost for members of programs in diabetes, hypertension…"` (0.808, 2/3) — entity is a pricing-fact about the concept; arguably hierarchy not merge; defer.
+
+Methodology note: Gemini at temperature 0.0 + topK 1 is still non-deterministic across runs (4-5 approvals seen on the *old* prompt across 3 same-data reruns). Diagnostic reads must use the stable 3-of-3 intersection per pair, not single-run approval counts. Rubric-anchored precision/recall above is the 3-of-3 reading.
 
 ### v2 SHOULD-NOT-MERGE — 20 cross-doc pairs
 

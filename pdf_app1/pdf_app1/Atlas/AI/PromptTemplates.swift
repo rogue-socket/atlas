@@ -405,19 +405,49 @@ enum PromptTemplates {
         let body = pairs.enumerated().map { formatPair($0.offset, $0.element.a, $0.element.b) }.joined(separator: "\n\n")
 
         return """
-        You are deciding whether candidate pairs of knowledge-graph nodes refer to the same real-world thing.
+        You are deciding whether candidate pairs of knowledge-graph nodes describe the same real-world thing.
 
         For each numbered pair, output exactly one boolean: true to merge, false to keep separate.
 
-        Guidance:
-        - Merge ONLY when both candidates name the same real-world entity, concept, or topic.
-        - Do NOT merge similar-but-distinct things. Examples that look alike but must stay separate:
-          • "on-site labs" vs "external labs"
-          • "internal audits" vs "external audits"
-          • "Java" the programming language vs "Java" the island
-          • A list of co-founders vs a list of compliance officers (different people, same role-noun)
-        - If the pair is at different abstraction levels (one "concept", one "entity"), merge only when they truly refer to the same real-world thing — not a related topic.
-        - Same name + different role/scope = do NOT merge.
+        The test: could the two labels appear as bullet points under the same heading in a corporate handbook describing a single process, service, fact, or entity? If yes → merge. If they share a topic word but describe different events or different aspects → keep separate.
+
+        MERGE when:
+        - Both labels describe the same operational fact with different framings, e.g.:
+          • "Asynchronous messages" ↔ "In-app messaging: response within 6 business hours" (same in-app messaging service)
+          • "Lab result release: typically within 24 hours" ↔ "same-day or next-day results" (same lab-result delivery SLA)
+          • "Lab results are posted to the patient portal" ↔ "Lab result release: typically within 24 hours" (same lab-result release event, one names the channel, one names the timing)
+        - One label is a concept naming a process and the other is an entity describing how that process happens, e.g.:
+          • "Referral Process" ↔ "referral and prior authorization handled by VitaCare care coordinators"
+        - One label names a specific instance of a broader operational pathway and they are operationally the same activity, e.g.:
+          • "Advanced Imaging Referrals" ↔ "External Care Coordination" (advanced imaging is referred externally via the care-coordination pathway)
+          The test for this case: the two labels must describe the SAME activity from different angles, not a leaf service and the broader catalog that contains it.
+        - Two entity labels describe the same role or actor performing the same task, e.g.:
+          • "Care coordinator handles prior authorization" ↔ "care coordinator manages the referral end-to-end"
+
+        KEEP SEPARATE when:
+        - The labels share a noun (lab, portal, audit, insurance, officer, program, network) but describe different events or different aspects, e.g.:
+          • "Lab results are posted to the patient portal" ↔ "Patient portal meets WCAG 2.1 AA accessibility standards" (same portal, different facts: release event vs accessibility standard)
+          • "Insurance Networks" (accepted payors) ↔ "Insurance Policies" (corporate liability insurance)
+          • "internal audits" ↔ "external audits"
+          • A list of co-founders ↔ a list of compliance officers (different people, same role-noun)
+          • "on-site labs" ↔ "external labs" (different vendors, different locations)
+        - One is a metric or outcome and the other is a different metric, even if both are operational numbers, e.g.:
+          • "98.9% on-time visit starts" ↔ "Patient Net Promoter Score: 71"
+          • "Hypertension control to under 140/90 mmHg: 81%" ↔ "98.9% on-time visit starts"
+        - One is an employee/staff benefit and the other is a patient-facing service, e.g.:
+          • "Free VitaCare primary care for employees and dependents" ↔ "includes all primary care visits" (commercial product)
+        - One is a service catalog item and the other is a vendor-management process, e.g.:
+          • "Specialty Care Services" ↔ "Specialist Network Curation"
+        - Both are program types but with distinct delivery modalities or populations, e.g.:
+          • "Group Programs" ↔ "Chronic Condition Programs"
+          • "Health Coaching" ↔ "Chronic Condition Programs"
+        - One label is a leaf service or program and the other is the broader catalog or umbrella it sits inside (use a hierarchy edge, not a merge), e.g.:
+          • "Post-Discharge Care" ↔ "VitaCare Services" (specific service inside the umbrella service catalog)
+          • "Health Coaching" ↔ "VitaCare Services"
+          • "External Care Coordination" ↔ "VitaCare Services"
+          • "Group Programs" ↔ "VitaCare Services"
+
+        When uncertain, prefer KEEP SEPARATE (false). Only merge when you can articulate the single real-world thing both labels point at.
 
         Pairs:
         \(body)
