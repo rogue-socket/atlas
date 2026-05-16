@@ -18,4 +18,5 @@ enum AtlasLogger {
     static let text     = Logger(subsystem: subsystem, category: "text")
     static let sync     = Logger(subsystem: subsystem, category: "sync")
     static let ui       = Logger(subsystem: subsystem, category: "ui")
+    static let headless = Logger(subsystem: subsystem, category: "headless")
 }

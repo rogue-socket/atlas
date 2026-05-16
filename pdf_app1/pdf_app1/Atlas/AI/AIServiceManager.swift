@@ -89,6 +89,25 @@ class AIServiceManager {
     }
 
     func getAPIKey(for backend: AIBackendType) -> String? {
+        // Dev-mode lookup order (Keychain prompts on every fresh process are
+        // painful for headless / repeated runs). All sources are local-only.
+        //
+        //   1. Process env var (e.g. ATLAS_GEMINI_API_KEY) — per-invocation override
+        //   2. Dev keys file inside the app's sandbox container — opting in here
+        //      is *authoritative*: missing keys for a backend return nil rather
+        //      than falling through to Keychain, so backends you haven't seeded
+        //      in the file never trigger an ACL prompt (matters for the test
+        //      host, which defaults to Claude before UserDefaults loads).
+        //   3. Keychain — production storage (only consulted when the dev file
+        //      doesn't exist at all)
+        if let envKey = ProcessInfo.processInfo.environment[envVarName(for: backend)],
+           !envKey.isEmpty {
+            return envKey
+        }
+        if FileManager.default.fileExists(atPath: devKeysFileURL.path) {
+            return devKeysFileLookup(backend: backend)
+        }
+
         let service = "com.atlas.apikey.\(backend.rawValue)"
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -102,6 +121,43 @@ class AIServiceManager {
 
         guard status == errSecSuccess, let data = result as? Data else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+
+    // MARK: - Dev key sources (env var + plaintext file)
+
+    private func envVarName(for backend: AIBackendType) -> String {
+        "ATLAS_\(backend.rawValue.uppercased())_API_KEY"
+    }
+
+    /// Path: `<app sandbox>/Data/atlas-dev-keys.json`. The Application Support
+    /// directory resolves into the sandbox container, so this stays accessible
+    /// to the app without entitlement changes. JSON shape:
+    ///   `{ "claude": "...", "openai": "...", "gemini": "...", "ollama": "..." }`
+    /// Missing or unreadable file = nil (silently fall through to Keychain).
+    private var devKeysFileURL: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        // appSupport here is `<container>/Data/Library/Application Support`.
+        // Two levels up gets us to `<container>/Data/`, where the file is least
+        // intrusive (next to other top-level container junk, not buried).
+        return appSupport
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("atlas-dev-keys.json")
+    }
+
+    private func devKeysFileLookup(backend: AIBackendType) -> String? {
+        let url = devKeysFileURL
+        guard FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String]
+        else { return nil }
+        // Case-insensitive key match so the file can use either the enum's
+        // rawValue ("Gemini") or the more natural lowercase form ("gemini").
+        let target = backend.rawValue.lowercased()
+        for (k, v) in obj where k.lowercased() == target {
+            return v
+        }
+        return nil
     }
 
     // MARK: - Response Caching

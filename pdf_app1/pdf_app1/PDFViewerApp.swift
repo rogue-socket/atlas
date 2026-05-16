@@ -9,8 +9,20 @@ import SwiftUI
 import AppKit
 import os.log
 
+// AppDelegate exists solely to give the headless runner a reliable
+// `applicationDidFinishLaunching` hook — `.onAppear` doesn't fire when
+// the app is launched in the background (`open -g`).
+final class HeadlessAppDelegate: NSObject, NSApplicationDelegate {
+    static var inject: ((NSApplication) -> Void)?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        Self.inject?(NSApplication.shared)
+    }
+}
+
 @main
 struct PDFViewerApp: App {
+    @NSApplicationDelegateAdaptor(HeadlessAppDelegate.self) private var appDelegate
     @StateObject private var recentFilesManager: RecentFilesManager
     @StateObject private var projectsManager = ProjectsManager()
     @StateObject private var documentManager: DocumentManager
@@ -18,11 +30,32 @@ struct PDFViewerApp: App {
     @State private var aiServiceManager = AIServiceManager()
     /// Guards against re-sweeping if `didLoadInitialState` re-fires for any reason.
     @State private var didSweepOrphans = false
+    /// Non-nil when launched with `--headless-extract` — suppresses UI-driven
+    /// startup (session restore, orphan sweep) so the runner owns the lifecycle.
+    private let headlessConfig = HeadlessRunnerConfig.parse(from: CommandLine.arguments)
 
     init() {
         let recent = RecentFilesManager()
         _recentFilesManager = StateObject(wrappedValue: recent)
         _documentManager = StateObject(wrappedValue: DocumentManager(recentFilesManager: recent))
+
+        // Capture init-time references so AppDelegate can drive the headless runner
+        // independent of view lifecycle.
+        if let config = headlessConfig {
+            let projects = projectsManager
+            let ai = aiServiceManager
+            let graph = knowledgeGraph
+            HeadlessAppDelegate.inject = { _ in
+                Task { @MainActor in
+                    await HeadlessRunner().run(
+                        config: config,
+                        projectsManager: projects,
+                        aiService: ai,
+                        graph: graph
+                    )
+                }
+            }
+        }
     }
 
     var body: some Scene {
@@ -35,6 +68,20 @@ struct PDFViewerApp: App {
                 .environment(aiServiceManager)
                 .frame(minWidth: AppConstants.minWindowWidth, minHeight: AppConstants.minWindowHeight)
                 .onAppear {
+                    // Headless mode: bypass session restore + orphan sweep so the
+                    // runner has a clean lifecycle, then drive extraction + exit.
+                    if let config = headlessConfig {
+                        Task { @MainActor in
+                            await HeadlessRunner().run(
+                                config: config,
+                                projectsManager: projectsManager,
+                                aiService: aiServiceManager,
+                                graph: knowledgeGraph
+                            )
+                        }
+                        return
+                    }
+
                     documentManager.restoreOpenSession()
                     configureWindow()
                     // If projects loaded synchronously (e.g. cached state), trigger
@@ -44,7 +91,7 @@ struct PDFViewerApp: App {
                     }
                 }
                 .onChange(of: projectsManager.didLoadInitialState) { _, loaded in
-                    if loaded {
+                    if loaded && headlessConfig == nil {
                         runGraphOrphanSweep()
                     }
                 }
