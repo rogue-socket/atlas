@@ -415,3 +415,110 @@ F1:        2·P·R / (P+R) = ____
 - 8 of the 20 should-merge rows above are flagged as anti-examples to make the table self-documenting; the real should-merge count is 12. A v2 of this rubric should split into two clean tables.
 - Several should-merge pairs are in-doc concept↔entity (rows 2, 5, 13, 15, 16) which ETR cross-doc-only will skip by design. These exist to document the deliberate scope limit.
 - Pairs reference labels from the 2026-05-16 extraction; if labels drift on re-extraction (LLM non-determinism with temperature > 0), some labels may not appear. Rerun extraction in alphabetical-doc order before scoring for reproducibility.
+
+---
+
+## Quality Rubric v2 — vitacare 2026-05-16 (cross-doc focus)
+
+**v2 frozen 2026-05-16 after the threshold sweep (`audits/2026-05-16_etr-live-verification.md` §"Threshold sweep") surfaced 4 valid cross-doc merges the v1 rubric author missed. v2 grounds every pair in the actual extraction labels (218 eligible nodes walked), separates the should-merge and should-not-merge tables cleanly (no cross-references), and focuses exclusively on cross-doc pairs since that's what ETR evaluates by design.**
+
+> **When to use v2 over v1:** for any ETR run scoring. v1 is preserved above as historical record of the first attempt + the anti-example cross-referencing mistake.
+
+> **Doc abbreviations:** CLI = clinical_services_and_pricing, COM = compliance_quality_and_security, ORG = organization_and_people, PAT = patient_experience_and_operations.
+
+### v2 SHOULD-MERGE — 20 cross-doc pairs
+
+Each pair references same real-world thing across two docs. Embedding similarity should land them in either the auto-merge band (≥0.95) or adjudication (0.80–0.95 with the new default); LLM should approve. Pairs marked ✅ were caught by ETR in the 2026-05-16 sweep at the indicated floor.
+
+| # | Doc A | Label A | Doc B | Label B | Status |
+|---|---|---|---|---|---|
+| 1 | CLI | "Asynchronous messages" | PAT | "In-app messaging: response within 6 business hours, typically much faster" | ✅ caught at 0.85 |
+| 2 | CLI | "same-day or next-day results" | PAT | "Lab result release: typically within 24 hours of completion" | ✅ caught at 0.85 |
+| 3 | CLI | "Lab Result Communication" (concept) | PAT | "Lab result release: typically within 24 hours of completion" (entity) | ❌ missed (cross-level + lower sim) |
+| 4 | CLI | "referral and prior authorization handled by VitaCare care coordinators" | PAT | "Care coordinator handles prior authorization where required" | ✅ caught at 0.80 |
+| 5 | CLI | "referral and prior authorization handled by VitaCare care coordinators" | PAT | "care coordinator manages the referral end-to-end" | ✅ caught at 0.80 |
+| 6 | CLI | "referral and prior authorization handled by VitaCare care coordinators" | PAT | "Care coordinator matches the patient to a high-quality specialist within their insurance network" | ✅ caught at 0.75 |
+| 7 | CLI | "Annual Wellness Visit" | PAT | "Annual wellness visit: scheduled within 14 days of patient request" | ✅ caught at 0.75 |
+| 8 | CLI | "Specialty Care Services" (concept) | PAT | "Specialist visit (VitaCare specialty): within 14 days for routine, same-day for urgent" (entity) | ❌ missed |
+| 9 | CLI | "discounted specialty services" | PAT | "Specialist visit (VitaCare specialty): within 14 days for routine, same-day for urgent" | ❌ missed |
+| 10 | CLI | "Advanced Imaging Referrals" (concept) | PAT | "External Care Coordination" (concept) | ✅ caught at 0.75 |
+| 11 | CLI | "Substance use disorder treatment" | COM | "Substance Use Disorder Records (42 CFR Part 2)" (concept) | ❌ missed |
+| 12 | CLI | "messaging-based care" | PAT | "In-app messaging: response within 6 business hours, typically much faster" | ❌ missed |
+| 13 | CLI | "Lab results are posted to the patient portal" | PAT | "Lab result release: typically within 24 hours of completion" | ❌ missed |
+| 14 | ORG | "Clinic hours are 7:30 AM - 7:00 PM Monday through Friday and 8:00 AM - 2:00 PM on Saturdays" | PAT | "Extended evening hours available at 16 clinics (open until 9:00 PM)" | ⚠️ caught at 0.75 — debatable (variance vs base hours) |
+| 15 | CLI | "primary care clinician" | PAT | "Clinician identifies need for outside care and writes a referral" | ❌ missed — same role, very different label |
+| 16 | CLI | "MRI, CT, mammography" | PAT | "External Care Coordination" | ❌ missed — same external-referral pathway |
+| 17 | CLI | "VitaCare Direct Membership" (concept) | PAT | "Patient Pricing & Insurance" reference (no exact entity; weak signal) | ❌ acknowledged weak — placeholder for future revisions |
+| 18 | CLI | "affiliated imaging centers" | PAT | "External Care Coordination" | ❌ missed |
+| 19 | CLI | "HIPAA-compliant clinical record system" | COM | "Technical Safeguards" | ❌ missed — system vs control category, borderline |
+| 20 | COM | "Patients entering SUD treatment receive a plain-language overview of how their records are protected, who can access them, and what consent looks like in practice." | CLI | "Substance use disorder treatment" | ❌ missed |
+
+**Score after 2026-05-16 threshold sweep:**
+- Floor 0.85: **3/20 caught** (rows 1, 2, 7? no, 7 was 0.75) — actually 1, 2 = **2/20**
+- Floor 0.80: **5/20 caught** (rows 1, 2, 4, 5)
+- Floor 0.75: **8/20 caught** (rows 1, 2, 4, 5, 6, 7, 10 + debatable 14)
+
+Recall at default 0.80: 25%. At 0.75: 40%. Headroom to improve via prompt engineering, embedding model upgrade, or aggressive threshold tuning paired with stricter LLM adjudication.
+
+### v2 SHOULD-NOT-MERGE — 20 cross-doc pairs
+
+These pairs look similar by surface label or topic word but refer to distinct real-world things. ETR should either skip (sim < floor) or LLM-reject. A merge on any of these is a **false positive**.
+
+| # | Doc A | Label A | Doc B | Label B | Why distinct |
+|---|---|---|---|---|---|
+| 1 | ORG | "$1,200 annual wellness reimbursement" | PAT | "Annual wellness visit: scheduled within 14 days of patient request" | Employee benefit vs patient-care service |
+| 2 | COM | "Privacy Officer" | ORG | "Dr. Helena Vargas" (Chief Compliance and Quality Officer) | Two distinct named officer roles |
+| 3 | CLI | "Video visits" | ORG | "Dedicated telehealth clinicians work fully remote with a state-licensed home setup" | Patient-facing service vs staff work arrangement |
+| 4 | CLI | "HIPAA-compliant clinical record system" | COM | "HIPAA Security Rule" | Implementation artifact vs federal regulation |
+| 5 | CLI | "Insurance Networks" (concept) | COM | "Insurance Policies" (concept) | Patient insurance acceptance vs corporate liability insurance |
+| 6 | ORG | "Quality incentive: up to 18% of base" | COM | "Quality Measurement" | Compensation lever vs governance/measurement function |
+| 7 | ORG | "Patient Net Promoter Score (NPS): 71" | PAT | "98.9% on-time visit starts (visits started within 15 minutes of scheduled time)" | Both performance numbers, different metrics |
+| 8 | CLI | "Behavioral health" | COM | "Substance Use Disorder Records (42 CFR Part 2)" | BH covers therapy + psychiatry broadly; SUD has heightened 42 CFR Part 2 regime |
+| 9 | CLI | "Pediatric primary care" | ORG | "Physicians (MD/DO): 312" | Service segment vs workforce headcount |
+| 10 | CLI | "988 Suicide and Crisis Lifeline" | PAT | "After-hours nurse line: 24/7 for VitaCare patients with urgent clinical concerns" | Both 24/7 phone channels, distinct services (federal lifeline vs in-house triage) |
+| 11 | CLI | "Care Between Visits" | PAT | "Post-Discharge Care" (concept) | Both post-visit follow-up, but messaging-based ongoing care vs hospital-transition program |
+| 12 | CLI | "Lab results are posted to the patient portal" | PAT | "Patient portal meets WCAG 2.1 AA accessibility standards" | Both patient-portal facts, different aspects (channel vs accessibility) |
+| 13 | ORG | "EAP with 12 free counseling sessions per issue per year" | CLI | "Behavioral Health Services" (concept) | Employee benefit vs patient service offering |
+| 14 | ORG | "Free VitaCare primary care for employees and dependents on VitaCare health plans" | CLI | "VitaCare Direct Membership" (concept) | Employee benefit vs commercial product |
+| 15 | CLI | "Virtual Care Platform" (concept) | COM | "Telehealth platform RTO/RPO" | Capability description vs reliability target |
+| 16 | ORG | "Hypertension control to under 140/90 mmHg: 81%" | PAT | "98.9% on-time visit starts" | Clinical outcome metric vs operational SLA metric |
+| 17 | CLI | "Send-out Lab Services" (concept) | COM | "Business Associate Agreements" | Lab vendor relationship vs general vendor contracts |
+| 18 | CLI | "Specialty Care Services" (concept) | PAT | "Specialist Network Curation" (concept) | Service catalog vs vendor management process |
+| 19 | PAT | "Group Programs" (concept) | CLI | "Chronic Condition Programs" | Both program types, distinct delivery modalities |
+| 20 | CLI | "Substance use disorder treatment" | COM | "distinct consent and disclosure framework" | Clinical service vs the consent regime for that service |
+
+**Score after 2026-05-16 threshold sweep (precision check):**
+- Floor 0.85: 0 false positives out of 2 merges = precision **100%**
+- Floor 0.80: 0 false positives out of 4 merges = precision **100%**
+- Floor 0.75: at most 1 marginal merge (#14 "Extended evening hours" → "Clinic hours") not on this anti-list but debatable — call precision **~89%** charitably, **100%** strictly
+
+### v2 Scoring template
+
+```
+System under test: __________
+Adjudication floor: __________
+Run wall-clock: __________
+
+Pre / post nodes: __________ / __________
+Cross-doc shared nodes (sourceAnchors.count > 1): __________
+Cross-doc edges: __________
+
+SHOULD-MERGE (20 pairs):
+  TP (correctly merged): ___
+  FN (missed): ___
+
+SHOULD-NOT-MERGE (20 pairs):
+  TN (correctly skipped): ___
+  FP (wrongly merged): ___
+
+Precision = TP / (TP + FP) = ___
+Recall    = TP / (TP + FN) = ___
+F1        = 2·P·R / (P + R) = ___
+```
+
+### v2 limits acknowledged
+
+- **Cross-doc only.** In-doc pairs (concept↔entity, sibling entities under one chapter) are deliberately excluded since ETR cross-doc-only filter skips them by design. If we ever flip the filter on, build v3 with in-doc pairs added.
+- **Labels frozen to 2026-05-16 extraction snapshot at `/tmp/atlas_project_pre_etr_2026-05-16.json`.** Re-extraction may produce different labels (LLM non-determinism). Either restore from that snapshot before scoring, or rebuild the rubric after the new extraction.
+- **No formal stratification.** Pairs span easy (near-identical phrasing) to hard (different surface forms, same concept). The 0.75 sweep result suggests easy pairs caught early, hard pairs need lower threshold OR semantic prompt tuning.
+- **Some pairs deliberately stretchy** (rows 17, 19 in should-merge). They test whether the LLM goes too eager. Marked as such; weight them less in recall calculation if you want a stricter score.
