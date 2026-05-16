@@ -21,6 +21,13 @@ class AIServiceManager {
     var isConfigured: Bool = false
     var totalTokensUsed: Int = 0
 
+    // ETR: embedding backend selected independently from the chat backend.
+    // nil = no embedding configured → ETR features disabled in UI.
+    // Defaults from PRD §"Locked-in prep items — 2026-05-16":
+    //   Gemini → "gemini-embedding-2-preview" (3072-dim, live-tested 2026-05-16)
+    var selectedEmbeddingBackendType: AIBackendType? = .gemini
+    var selectedEmbeddingModel: String = "gemini-embedding-2-preview"
+
     private var responseCache: [String: String] = [:]
     private let cacheDirectory: URL
 
@@ -60,6 +67,48 @@ class AIServiceManager {
             let baseURL = UserDefaults.standard.string(forKey: AppConstants.ollamaBaseURLKey) ?? "http://localhost:11434"
             log.info("[AIService] Using Ollama at \(baseURL)")
             return OpenAIBackend(apiKey: "", model: selectedModel, baseURL: baseURL + "/v1", displayName: "Ollama")
+        }
+    }
+
+    // MARK: - Embedding Backend Creation (ETR)
+
+    /// True when the embedding backend selected for ETR has a usable
+    /// credential. UI surfaces "ETR unavailable" when this is false.
+    var isEmbeddingConfigured: Bool {
+        guard let type = selectedEmbeddingBackendType else { return false }
+        switch type {
+        case .ollama: return true
+        default: return (getAPIKey(for: type) ?? "").isEmpty == false
+        }
+    }
+
+    /// Constructs an embedding backend per current selection. Returns nil when
+    /// no embedding backend is configured OR the chosen vendor doesn't expose
+    /// an embedding API (Claude). Callers gate ETR features on the returned
+    /// non-nil value.
+    func createEmbeddingBackend() -> (any AtlasEmbeddingBackend)? {
+        guard let type = selectedEmbeddingBackendType else {
+            log.info("[AIService] createEmbeddingBackend: no embedding backend selected")
+            return nil
+        }
+        switch type {
+        case .gemini:
+            let apiKey = getAPIKey(for: .gemini) ?? ""
+            guard !apiKey.isEmpty else {
+                log.warning("[AIService] No API key for Gemini (embedding)")
+                return nil
+            }
+            return GeminiEmbeddingBackend(apiKey: apiKey, model: selectedEmbeddingModel)
+        case .claude:
+            // Claude has no embedding API as of 2026-05; ETR must use a
+            // different vendor when the chat backend is Claude.
+            log.warning("[AIService] Claude has no embedding API — ETR unavailable with this selection")
+            return nil
+        case .openai, .ollama:
+            // Deferred until ETR proves end-to-end with Gemini (per SCE-style
+            // integration decision #4 carried into ETR v1 scope).
+            log.warning("[AIService] Embedding backend for \(type.rawValue) not yet implemented in v1")
+            return nil
         }
     }
 
@@ -197,12 +246,23 @@ class AIServiceManager {
         if let model = UserDefaults.standard.string(forKey: AppConstants.aiModelKey) {
             selectedModel = model
         }
+        // ETR embedding selection. Empty string sentinel = "explicitly none"
+        // (user disabled ETR). Missing key entirely = default to .gemini.
+        if let raw = UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingBackendTypeKey) {
+            selectedEmbeddingBackendType = raw.isEmpty ? nil : AIBackendType(rawValue: raw)
+        }
+        if let m = UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingModelKey) {
+            selectedEmbeddingModel = m
+        }
         updateConfiguredState()
     }
 
     func savePreferences() {
         UserDefaults.standard.set(selectedBackendType.rawValue, forKey: AppConstants.aiBackendTypeKey)
         UserDefaults.standard.set(selectedModel, forKey: AppConstants.aiModelKey)
+        UserDefaults.standard.set(selectedEmbeddingBackendType?.rawValue ?? "",
+                                   forKey: AppConstants.aiEmbeddingBackendTypeKey)
+        UserDefaults.standard.set(selectedEmbeddingModel, forKey: AppConstants.aiEmbeddingModelKey)
     }
 
     private func updateConfiguredState() {

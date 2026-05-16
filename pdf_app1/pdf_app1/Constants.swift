@@ -112,6 +112,10 @@ struct AppConstants {
     static let aiModelKey = "atlas.ai.model"
     /// UserDefaults key for Ollama base URL override
     static let ollamaBaseURLKey = "atlas.ollama.baseURL"
+    /// UserDefaults key for the ETR embedding backend type (nil = ETR disabled)
+    static let aiEmbeddingBackendTypeKey = "atlas.ai.embedding.backendType"
+    /// UserDefaults key for the ETR embedding model identifier
+    static let aiEmbeddingModelKey = "atlas.ai.embedding.model"
 }
 
 // MARK: - Notification Names
