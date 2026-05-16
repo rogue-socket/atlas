@@ -326,3 +326,94 @@ These come after the migration + chosen merging approach lands.
 1. **Test corpus selection** — user picks 5-8 PDFs OR generates via `sample_pdfs/generate.py`. Capture choice in this doc.
 2. **20+20 quality pairs** — written down before any branch is implemented.
 3. **Embedding model defaults** for ETR — when implementing the settings selector, decide which embedding model is default for each backend.
+
+---
+
+## Locked-in prep items — 2026-05-16
+
+### 1. Test corpus — `vitacare` (4 PDFs)
+
+- `sample_pdfs/files/vitacare_organization_and_people.pdf`
+- `sample_pdfs/files/vitacare_clinical_services_and_pricing.pdf`
+- `sample_pdfs/files/vitacare_patient_experience_and_operations.pdf`
+- `sample_pdfs/files/vitacare_compliance_quality_and_security.pdf`
+
+Healthcare domain, synthetic, engineered cross-doc overlap by design (one fictional company across four facets). 4 PDFs is under the 5-8 recommendation in the original spec but cross-doc overlap density is the metric that matters, not file count. Real extraction on 2026-05-16 produced 4 docs / 24 chapters / 37 concepts / **149 entities** — sufficient corpus mass for A/B differentiation. NexaPay was rejected (already analyzed in post-α smoke test → cache pollution). Harvest_hearth is reserved as a holdout for repeat runs.
+
+### 2. 20+20 quality pairs (grounded in real 2026-05-16 vitacare extraction)
+
+Doc tags: `ORG` = organization_and_people, `CLI` = clinical_services_and_pricing, `OPS` = patient_experience_and_operations, `CMP` = compliance_quality_and_security.
+
+**SHOULD-MERGE (20):**
+
+| # | Pair | Why |
+|---|------|-----|
+| 1 | `ORG::Company Identity & Founding` ↔ `CMP::Company Identity` | Same company entity (already auto-merged by Levenshtein → verifies baseline) |
+| 2 | `ORG::Dr. Helena Vargas (CCQO)` ↔ `CMP::Program Ownership` | CCQO named in ORG, referenced by title in CMP; same person |
+| 3 | `ORG::Anna Schultz (CTO)` ↔ `CMP::Program Ownership & Compliance` | CTO named in ORG, referenced by title in CMP InfoSec ownership |
+| 4 | `CLI::External Laboratory Services` ↔ `OPS::External Service Partners` | Both reference Labcorp & Quest Diagnostics |
+| 5 | `CLI::Imaging Services` ↔ `OPS::External Service Partners` | RadNet/SimonMed only named in OPS but CLI references same partnerships |
+| 6 | `CLI::Behavioral Health Record Privacy` ↔ `CMP::Heightened Protections` | Same 42 CFR Part 2 regime |
+| 7 | `CLI::Patient Messaging & Non-Billable Interactions` ↔ `OPS::Digital Messaging Response` | Same in-app messaging entity |
+| 8 | `CLI::Annual Wellness Visit` ↔ `OPS::Appointment Scheduling Timelines` | Same visit type, different attributes |
+| 9 | `CLI::Telehealth Modalities & Access` ↔ `CLI::Availability & Response Times` | Same telehealth surface, different attrs (within-doc) |
+| 10 | `OPS::Patient Portal Features` ↔ `OPS::Portal Accessibility & Access` | Same portal entity, different attrs (within-doc) |
+| 11 | `CMP::Heightened Protections` ↔ `CMP::Distinct Consent Framework` | Both describe SUD-record handling |
+| 12 | `CMP::Workforce Access Controls` ↔ `CMP::PHI Access Controls` | Overlapping access-control entities |
+| 13 | `CLI::Primary Care Clinician Role` ↔ `ORG::Primary Care Physician Staffing` | Same PCC-centric model from staffing vs role lens |
+| 14 | `ORG::Co-founders` ↔ `ORG::Dr. Amara Okonkwo (CEO)` | Okonkwo IS a co-founder; subset relation |
+| 15 | `ORG::Co-founders` ↔ `ORG::Dr. Liam Brennan (CMO)` | Brennan IS a co-founder; subset relation |
+| 16 | `CMP::Recovery Objectives` ↔ `CMP::Continuity Planning` | Same BCM/DR entity |
+| 17 | `CMP::Clinical Quality Governance` ↔ `CMP::Quality Measurement & Review` | Same clinical-quality program |
+| 18 | `ORG::Regional Clinic Networks` ↔ `ORG::Regional Network Details` | Same regional network, summary + example |
+| 19 | `OPS::Patient Communication & Support` ↔ `OPS::Phone Support Availability` | Phone support is a component of comms entity |
+| 20 | `CMP::External Audits` ↔ `CMP::System Monitoring & Testing` | Overlapping external assessment entity |
+
+**SHOULD-NOT-MERGE (20) — precision traps:**
+
+| # | Pair | Why not |
+|---|------|---------|
+| 1 | `CLI::On-site Laboratory Services` ↔ `CLI::External Laboratory Services` | Deliberately opposite (in-clinic vs send-out) |
+| 2 | `CLI::Telehealth Limitations` ↔ `CLI::Suitable Telehealth Conditions` | Opposite sides of same scope |
+| 3 | `CMP::Internal Audit Function` ↔ `CMP::External Audits` | "Audit" in both, fundamentally different functions |
+| 4 | `ORG::Health & Wellness Benefits` ↔ `OPS::Health Coaching Programs` | Employee benefits ≠ patient coaching |
+| 5 | `CLI::Excluded Services` ↔ `CLI::Telehealth Limitations` | Scope-of-service vs modality-of-service |
+| 6 | `CMP::Patient Education` ↔ `OPS::Patient Education & Engagement` | SUD consent plain-language ≠ general patient library |
+| 7 | `ORG::Co-founders` ↔ `CMP::Key Officers & Reporting` | Both "officers" but different people (Okonkwo/Brennan ≠ Solis/Torres) |
+| 8 | `CMP::Workstation Security` ↔ `CMP::Physical Access Controls` | Screen locks ≠ badge access |
+| 9 | `ORG::Mission Statement` ↔ `OPS::Patient Experience Goal` | Org-level mission ≠ UX goal |
+| 10 | `OPS::Hospital Affiliations` ↔ `OPS::External Service Partners` | Clinical hospitals ≠ lab/imaging vendors |
+| 11 | `CLI::Direct Membership` ↔ `OPS::Employer Partnerships` | Self-pay/uninsured ≠ B2B employer contracts |
+| 12 | `CMP::Liability Insurance Coverage` ↔ `ORG::Health & Wellness Benefits` | Corporate liability ≠ employee health plans |
+| 13 | `CMP::Clinical Quality Governance` ↔ `CMP::Operational Compliance` | Distinct governance domains |
+| 14 | `OPS::Cancellation Policy & Fees` ↔ `CMP::Breach Notification` | Both have "notification" but unrelated |
+| 15 | `CLI::Pediatric Primary Care` ↔ `CLI::Women's Health & Gynecology` | Distinct specialty service lines |
+| 16 | `CMP::Notice of Privacy Practices` ↔ `CMP::HIPAA Patient Rights` | NPP is the disclosure doc; rights are the rights themselves |
+| 17 | `ORG::Anna Schultz (CTO)` ↔ `ORG::Tomas Reed (SVP, People)` | Both C-suite, distinct people |
+| 18 | `CLI::Cardiology Services` ↔ `CLI::Endocrinology & Diabetes Care` | Distinct specialty entities |
+| 19 | `OPS::Multilingual Support` ↔ `OPS::Alternative Material Formats` | Language ≠ format accessibility |
+| 20 | `CMP::Recovery Objectives` ↔ `OPS::Lab Result Release` | Both have "time" metrics, completely unrelated domains |
+
+**Scoring rubric:** for each approach (SCE / ETR), count TP / FP / TN / FN against these 40 pairs after the full pipeline runs. Compute precision = TP / (TP + FP) and recall = TP / (TP + FN). Both numbers required.
+
+### 3. Embedding model defaults
+
+| Backend | Default | Notes |
+|---------|---------|-------|
+| OpenAI | `text-embedding-3-large` (3072-dim) | Matches Gemini's default dim for apples-to-apples; `-3-small` (1536-dim) is the cheaper fallback. |
+| Gemini | `gemini-embedding-2-preview` (3072-dim) | Live-tested 2026-05-16 — HTTP 200 with valid embedding response. Fallback: `gemini-embedding-001` (also live, GA, 3072-dim). `text-embedding-004` confirmed dead (404 on `embedContent` v1beta). |
+| Ollama | `nomic-embed-text` | Local; only embedding model called out in PRD. |
+| Claude | — | No embedding API; ETR disabled in UI when LLM backend = Claude and no other embedding configured. |
+
+**ETR availability gate** (unchanged from PRD §"Embedding backend"): selector validates the embedding endpoint on save; ETR option in merging-strategy UI is disabled until a valid embedding model is configured.
+
+### 4. Integration decisions (apply to both SCE and ETR branches)
+
+| # | Decision | Rationale |
+|---|----------|-----------|
+| 1 | **Doc ordering for SCE = order of user click.** Use the order PDFs were added to the project (preserved in `OpenSessionBookmarks` / `DocumentManager`). | Captures user intent without UI work; deterministic enough for reproducibility within a session. Re-runs that test "anchoring fragility" simply re-add PDFs in a different order. |
+| 2 | **Disable `GraphMergeEngine` (Levenshtein dedup) during A/B runs.** SCE/ETR fully owns the cross-doc merge result; the existing Levenshtein pass is bypassed for the duration of the comparison. Re-enable in production after the winner lands. | Clean comparison — baseline numbers per branch attribute every merge to the branch under test. Avoids double-counting with the existing 2-merge auto-detect found on vitacare. |
+| 3 | **Buffer-then-commit at end-of-doc.** SCE collects all batch results for doc N in a temporary `KnowledgeGraph` buffer, merges into the real graph atomically when doc N's extraction completes. Failure mid-doc discards the buffer; partial-doc state never leaks into doc N+1's cumulative-state prompt header. | Simpler than per-batch commit + rollback (~30 LOC vs. ~100 LOC). Matches the PRD's atomicity requirement directly. |
+| 4 | **v1 supports Gemini backend only.** SCE branch initially targets Gemini-only (use `gemini-embedding-2-preview` for ETR's embeddings, and any chat-completion Gemini model for SCE's cumulative-state prompts). OpenAI/Claude/Ollama support deferred until SCE proves end-to-end on Gemini. | Limits scope of the token-tracking instrumentation — only `GeminiBackend` needs to expose `usageMetadata.promptTokenCount`. Other vendors get token plumbing added if Gemini SCE proves out. |
+| 5 | **Skip the optional final canonicalization LLM pass in v1.** PRD §"SCE Algorithm" step 5 (one-LLM-call-over-full-entity-list canonicalization) is deferred. | First end-to-end SCE run will tell us if the per-batch reuse decisions need a final cleanup. Adding it speculatively wastes a branch cycle. |
+| 6 | **Commit doc updates to `main` before branching.** Both SCE and ETR branches branch off `8225e37` (post-α HEAD). The 2026-05-16 PRD + backlog updates live on `main` as a separate commit; both branches inherit the locked-in prep items from `main` history. | Keeps prep items durable on `main` and version-pinned in git, not just in session docs. |

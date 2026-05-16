@@ -1,23 +1,23 @@
 # Post-α-Migration Bug Report
 
 **Created:** 2026-05-15
-**Updated:** 2026-05-16 — B5, B4, B1, B2, B3 Stage 1, L2 fixed (build-green; uncommitted; live smoke-test pending). See per-finding `**Status (2026-05-16):**` notes inline below.
+**Updated:** 2026-05-16 — B5, B4, B1, B2, B3 Stage 1, L2 fixed and **pushed to `origin/main`** (HEAD `8225e37`). User smoke-tested on the NexaPay 4-PDF corpus — B2/B3/B4/L2 confirmed working live; B5 covered by unit test only (no legacy graphs on disk to exercise live). Plus the Connections-panel UX gap that surfaced during smoke-test is also fixed (commit `f1ad018`).
 **Context:** Runtime test of the 4-level knowledge-graph migration (commits `9ea83d6` → `3e69414`) against a 4-PDF test corpus (`harvest_hearth_*.pdf`). Bugs and limitations discovered both visually and via log inspection at `pdf_projects/temp_logs.txt`.
 
 ## Status snapshot (2026-05-16)
 
 | ID | State | Notes |
 |---|---|---|
-| **B5** | ✅ Fixed | Custom `CodableRepresentation` decoder; `LossyEdge` wrapper. Test: `test_decode_skipsEdgesWithRetiredEdgeType_keepsNodesAndOtherEdges`. |
-| **B4** | ✅ Fixed | `encodeSubgraph(for:)` + `mergeSubgraph(from:scopedTo:)`; per-tab merge load. Legacy bloated files self-clean on load. 4 new tests. |
-| **B1** | ✅ Fixed | Carve-out removed; `activeNodeID` param dropped from `DensityManager.visibleNodes`. Inverted test in place. |
-| **B2** | ✅ Fixed | Notification carries `sourceDocumentURL`; doc-switch via `openDocument` + 150ms dispatch; toast on `.fileNotReadable`/`.invalidPDF`/`.tooManyTabs`. No unit tests (UI integration). |
-| **B3** | ✅ Stage 1 | `LevelBandSeeder` + cross-tab position preservation via `validNodeIDs`. 3 unit tests. Stage 2 (band-Y clamp during iteration) deferred. |
-| **L2** | ✅ Fixed | `ChapterEdgeAggregation.synthesize` after `appendDocumentSummary` in both pipelines. 5 unit tests. Renderer style differentiation deferred (open design question). |
+| **B5** | ✅ Pushed | Custom `CodableRepresentation` decoder; `LossyEdge` wrapper. Test: `test_decode_skipsEdgesWithRetiredEdgeType_keepsNodesAndOtherEdges`. Commit `d600b83` + `56fe5c5`. **Not live-tested** (no legacy graphs on disk after the wipe); unit test covers the scenario. |
+| **B4** | ✅ Live-verified | `encodeSubgraph(for:)` + `mergeSubgraph(from:scopedTo:)`; per-tab merge load. Legacy bloated files self-clean on load. 4 new tests. Commits `5d2e75f` + `388bdca` + `53803b5` + `1697a41` + `63df680`. **Live confirmed:** per-doc files saved with correctly-scoped counts (57/89, 38/52, 14/14, 55/78), not cumulative. |
+| **B1** | ✅ Pushed | Carve-out removed; `activeNodeID` param dropped from `DensityManager.visibleNodes`. Inverted test in place. Commits `aa0605a` + `4f07652`. |
+| **B2** | ✅ Live-verified | Notification carries `sourceDocumentURL`; doc-switch via `openDocument` + 150ms dispatch; toast on `.fileNotReadable`/`.invalidPDF`/`.tooManyTabs`. No unit tests (UI integration). Commits `53c1ad0` + `e832adb`. **Live confirmed:** source-link routing works across tabs. |
+| **B3** | ✅ Stage 1 live-verified | `LevelBandSeeder` + cross-tab position preservation via `validNodeIDs`. 3 unit tests. Commits `072b0cd` + `d0368f6` + `a2f6b91` + `087ad4a`. **Live confirmed:** layout stays consistent across Doc/Chapter/Concept/Entity tab switches. Stage 2 (band-Y clamp during iteration) deferred. |
+| **L2** | ✅ Live-verified | `ChapterEdgeAggregation.synthesize` after `appendDocumentSummary` in both pipelines. 5 unit tests. Commits `75a217c` + `8432c5e`. **Live confirmed:** 30 chapter-level aggregated edges across the 4-PDF NexaPay corpus (`[Pipeline] Synthesized 5/8/2/15 chapter-level aggregated edge(s)`). Renderer style differentiation deferred (open design question). |
 | **B6** | ⏸ Deferred | Until Deep mode is next touched. |
 | **L1** | ⏸ Deferred | Waits for SCE/ETR cross-doc branches. |
 | **L3** | ⏸ Deferred | Waits for user evidence. |
-| **N1** | ⏸ Deferred | Low-priority empty-state hint / hairline connector. |
+| **N1** | ⏸ Superseded | Connections-panel UX gap (containment edges shown in panel but not on canvas) was fixed during smoke-test — see commit `f1ad018`. The audit's hairline-transitive-connector idea is no longer the lead mitigation; SCE/ETR will produce real cross-doc edges that obsolete N1. |
 
 ---
 
