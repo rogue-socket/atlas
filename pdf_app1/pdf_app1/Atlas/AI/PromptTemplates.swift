@@ -26,12 +26,20 @@ enum PromptTemplates {
 
             ## Prior Documents — Cross-Document Reuse
 
-            The following concepts and entities were extracted from earlier documents in this project. \
-            When the current text refers to the SAME real-world thing as one of these, REUSE the existing \
-            label verbatim so it merges into a single node. Create a new node only when the current text \
-            describes a genuinely different thing. The `type` shown is advisory — match meaning, not type.
+            The following concepts and entities were extracted from earlier documents in this project:
 
             \(header)
+
+            CRITICAL: When the current text discusses any of these things, COPY THE LABEL EXACTLY — character-for-character, including capitalization, punctuation, and word order. Do NOT paraphrase, abbreviate, expand, prefix with titles, or "improve" the wording. Nodes only merge across documents when labels match exactly.
+
+            Worked examples of CORRECT reuse:
+            - Prior list: "Annual Wellness Visit". Current text describes wellness visits → use "Annual Wellness Visit". Bad: "Wellness Visit", "Wellness Visits", "Annual Wellness".
+            - Prior list: "Helena Vargas". Current text mentions Dr. Vargas → use "Helena Vargas". Bad: "Dr. Helena Vargas", "Vargas", "Dr. Vargas".
+            - Prior list: "Telehealth Platform". Current text describes the same platform → use "Telehealth Platform". Bad: "National Telehealth Platform", "Telehealth System".
+
+            Create a NEW label only when the current concept is genuinely distinct — a different real-world thing — even if the topic area overlaps. For example, prior list "Behavioral Health Services" vs. current text introducing "Behavioral Health Records Privacy" are separate concepts and should be separate nodes.
+
+            The `type` shown on prior nodes is advisory; reuse the label even when the type would differ.
 
             """
         } else {

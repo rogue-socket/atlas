@@ -134,7 +134,8 @@ final class SCETests: XCTestCase {
         )
         let prompt = PromptTemplates.conceptExtraction(text: "sample text", context: ctx)
         XCTAssertTrue(prompt.contains("Prior Documents — Cross-Document Reuse"))
-        XCTAssertTrue(prompt.contains("REUSE the existing"))
+        XCTAssertTrue(prompt.contains("COPY THE LABEL EXACTLY"))
+        XCTAssertTrue(prompt.contains("Worked examples"))
         XCTAssertTrue(prompt.contains("VitaCare Health Network"))
     }
 
