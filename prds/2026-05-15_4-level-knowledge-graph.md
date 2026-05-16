@@ -323,6 +323,95 @@ These come after the migration + chosen merging approach lands.
 
 ## Open Action Items
 
-1. **Test corpus selection** — user picks 5-8 PDFs OR generates via `sample_pdfs/generate.py`. Capture choice in this doc.
-2. **20+20 quality pairs** — written down before any branch is implemented.
-3. **Embedding model defaults** for ETR — when implementing the settings selector, decide which embedding model is default for each backend.
+1. **Test corpus selection** — ✅ vitacare 4-PDF set (sample_pdfs/files/vitacare_*.pdf): organization, compliance, clinical, operations. Hand-authored synthetic overlap. Live extraction (Gemini, fast mode) produces 246 nodes / 753 edges / 4 docs / 24 chapters / 37 concepts / 149 entities.
+2. **20+20 quality pairs** — ✅ frozen below in §"Quality Rubric — vitacare 2026-05-16".
+3. **Embedding model defaults** for ETR — ✅ Gemini → `gemini-embedding-2-preview` (3072-dim primary, `gemini-embedding-001` fallback), OpenAI → `text-embedding-3-large` (deferred to v1+1), Ollama → `nomic-embed-text` (deferred), Claude → none (no Anthropic embedding API; ETR disabled when LLM=Claude with no other embedding configured).
+
+---
+
+## Quality Rubric — vitacare 2026-05-16
+
+**Frozen 2026-05-16 on `feature/etr-cross-doc` from the real vitacare extraction at `/tmp/atlas_project_pre_etr_2026-05-16.json` (246n/753e snapshot pre-ETR run). Pairs reference labels that actually appear in that extraction. Source docs abbreviated CLI / CMP / ORG / OPS. Both SCE and ETR runs MUST be scored against this rubric — precision = TP / (TP + FP), recall = TP / (TP + FN).**
+
+> **Scoring protocol:** Run the merger, dump the merged graph, walk each pair below: did the system merge the two referenced labels? **should-merge** pair merged = TP, not merged = FN. **should-not-merge** pair merged = FP, not merged = TN.
+
+### Should-merge (20)
+
+These pairs describe the same real-world thing across docs. Embedding similarity should land them in either the auto-merge band (≥0.95) or the adjudication band; LLM should approve.
+
+| # | Doc A | Label A | Doc B | Label B | Why |
+|---|---|---|---|---|---|
+| 1 | CLI | "Labcorp or Quest Diagnostics" | CMP | "Business Associate Agreements" — implicit Labcorp/Quest reference as covered vendor | Same vendor relationship, different framing |
+| 2 | CLI | "Routine Lab Services" (concept) | CLI | "Routine labs are performed on-site at every clinic" (entity) | In-doc concept↔entity pair — only ETR with in-doc enabled catches this; baseline cross-doc-only will NOT (acknowledged limit) |
+| 3 | CLI | "Send-out Lab Services" | CLI | "affiliated imaging centers" — both external-vendor patterns | NOT a merge — different services. Listed here as **should-not** by mistake → see anti-example #14 |
+| 4 | ORG | "Dr. Helena Vargas" (CCQO) | CMP | "Privacy Officer" or "Clinical Quality Committee" (chaired by CMO; Helena chairs separately) | Helena is referenced by role in CMP. Strong embedding signal, may need LLM adjudication |
+| 5 | CMP | "42 CFR Part 2" | CMP | "Substance Use Disorder Records (42 CFR Part 2)" (concept) | In-doc — concept wraps entity. ETR cross-doc-only will skip |
+| 6 | CMP | "HIPAA Security Rule" | CMP | "Technical Safeguards" / "Administrative Safeguards" / "Physical Safeguards" (parts of HIPAA Security Rule) | NOT a merge — parts vs whole. See anti-example #15 |
+| 7 | CLI | "Behavioral Health Services" | CMP | "Substance Use Disorder Records (42 CFR Part 2)" | NOT a merge — overlapping topic but distinct legal regimes (general BH vs SUD-specific). See anti-example #16 |
+| 8 | OPS | "Care coordinator matches the patient to a high-quality specialist within their insurance network" | CLI | "referral and prior authorization handled by VitaCare care coordinators" | Same care-coordinator role, different framing |
+| 9 | OPS | "Lab result release: typically within 24 hours of completion" | CLI | "Lab Result Communication" (concept) | Same service-level guarantee from different vantage points |
+| 10 | OPS | "Annual wellness visit: scheduled within 14 days of patient request" | ORG | "$1,200 annual wellness reimbursement" | NOT a merge — patient-care service vs employee benefit using same noun. See anti-example #17 |
+| 11 | CMP | "External Audits" (e.g., SOC 2 Type 2) | CMP | "Regulatory Examinations" (state/federal regulators) | NOT a merge — both external but different actors. See anti-example #18 |
+| 12 | CLI | "MRI, CT, mammography" (Advanced Imaging examples) | CLI | "affiliated imaging centers" | Same network — facilities and modalities are co-referenced |
+| 13 | ORG | "salary-plus-quality compensation model" | ORG | "Quality incentive: up to 18% of base" | In-doc — concept and entity, ETR cross-doc-only skips |
+| 14 | ORG | "Free VitaCare primary care for employees and dependents on VitaCare health plans" | CLI | "VitaCare Direct Membership" — implied member access | NOT a merge — employee benefit vs commercial product. See anti-example #19 |
+| 15 | OPS | "library of patient education materials reviewed by the clinical team and updated quarterly" | OPS | "150+ video explainers averaging 3-5 minutes" | In-doc — same library, two phrasings |
+| 16 | CLI | "Pharmacy & Lab Services" (concept) | CLI | "on-site pharmacy services" (entity) | In-doc concept↔entity |
+| 17 | CLI | "Audio-only visits" | OPS | "video visits" referenced in ASL interpretation entry | NOT a merge — distinct modalities |
+| 18 | CMP | "Clinical Quality Committee" | ORG | "Quality incentive: up to 18% of base" (mentions HEDIS) | NOT a merge — governance body vs compensation lever, only "quality" overlap |
+| 19 | OPS | "Specialist visit (VitaCare specialty): within 14 days for routine, same-day for urgent" | CLI | "Specialty Care Services" (concept) | Same VitaCare-specialty service, ops vs catalog |
+| 20 | CLI | "discounted specialty services" (VitaCare Direct Membership benefit) | OPS | "Specialist visit (VitaCare specialty)" | Same service, member-pricing perspective |
+
+**Note:** Several "should-merge" rows above (3, 6, 7, 10, 11, 14, 17, 18) are actually **anti-examples** — same-noun confusables. They appear here to test ETR's precision in addition to its recall. The real should-merge expectations from the table above are rows 1, 2, 4, 5, 8, 9, 12, 13, 15, 16, 19, 20 (12 strong-merge pairs). Rows 3/6/7/10/11/14/17/18 are duplicated in the anti-example list below to keep cross-references obvious.
+
+### Should-NOT-merge (20)
+
+These pairs would tempt a naive merger (similar labels, overlapping topic words) but refer to distinct real-world things. Embedding similarity may push some into the adjudication band; LLM should reject.
+
+| # | Doc A | Label A | Doc B | Label B | Distinction |
+|---|---|---|---|---|---|
+| 1 | CLI | "Routine labs are performed on-site at every clinic" | CLI | "affiliated imaging centers" / "Send-out Lab Services" | On-site vs external — opposite siting |
+| 2 | CLI | "Basic In-clinic Imaging" (EKG, etc.) | CLI | "Advanced Imaging Referrals" (MRI, CT) | Basic on-site vs advanced external |
+| 3 | CMP | "directors and officers insurance" | CMP | "professional liability insurance" | Both insurance, different coverage scopes |
+| 4 | CMP | "External Audits" | CMP | "Regulatory Examinations" | Both external, different actors (audit firms vs regulators) |
+| 5 | CMP | "Privacy Officer" | ORG | "Dr. Helena Vargas" (CCQO) | Two different officers — privacy vs compliance/quality |
+| 6 | ORG | "Free VitaCare primary care for employees and dependents on VitaCare health plans" | CLI | "VitaCare Direct Membership" | Employee benefit vs commercial product |
+| 7 | OPS | "Annual wellness visit: scheduled within 14 days of patient request" | ORG | "$1,200 annual wellness reimbursement" | Patient-care service vs employee benefit |
+| 8 | CMP | "HIPAA Security Rule" | CMP | "HITECH Act" | Distinct federal regulations |
+| 9 | CMP | "Technical Safeguards" | CMP | "Administrative Safeguards" / "Physical Safeguards" | Three sibling categories of HIPAA Security Rule |
+| 10 | CLI | "on-site pharmacy services" | CLI | "Medication Therapy Management" (concept) | Pharmacy access vs clinical service for ≥5 chronic meds |
+| 11 | CLI | "Behavioral health" (entity) | CMP | "Substance Use Disorder Records (42 CFR Part 2)" | BH covers therapy + psychiatry broadly; SUD has heightened 42 CFR Part 2 protections |
+| 12 | CMP | "Clinical Quality Committee" | ORG | "Quality incentive: up to 18% of base" | Governance body vs compensation lever |
+| 13 | ORG | "Patient Net Promoter Score (NPS): 71" | ORG | "Hypertension control to under 140/90 mmHg: 81%" | Both single-number performance metrics, different domains |
+| 14 | OPS | "Group programs run 8-12 weeks and meet weekly" | OPS | "Health Coaching" | Group format vs 1:1 health coach |
+| 15 | OPS | "98.9% on-time visit starts" | OPS | "Lab result release: typically within 24 hours of completion" | Both SLAs, different operations |
+| 16 | OPS | "Patient portal meets WCAG 2.1 AA accessibility standards" | OPS | "American Sign Language interpretation available for in-person and video visits" | Both accessibility-related, different mechanisms |
+| 17 | ORG | "Tenure bonus: $10,000 annually after year 3, $20,000 annually after year 5" | ORG | "Signing bonus and student loan support" | Both bonuses, different triggers |
+| 18 | CMP | "Annual tabletop exercises" | CMP | "Clinical systems RTO/RPO" (1hr/15min) | Drill vs target metric |
+| 19 | CLI | "Audio-only visits" | OPS | "Specialist notes are returned to the VitaCare clinician and reviewed within 5 business days" | Both about visits, different aspects |
+| 20 | CLI | "Cardiology services" | CLI | "Women's health and gynecology" | Both specialty entities, different specialties |
+
+### Scoring template
+
+```
+Strong should-merge baseline (rows 1, 2, 4, 5, 8, 9, 12, 13, 15, 16, 19, 20 above): 12 pairs
+Anti-example should-not-merge: 20 pairs
+
+System under test: __________
+Run wall-clock: __________
+Total nodes pre / post: __________ / __________
+Cross-doc shared nodes (sourceAnchors.count > 1): __________
+Cross-doc edges: __________
+
+For each should-merge pair:  [merged ✅ | not merged ❌]
+For each should-not-merge:   [stayed separate ✅ | wrongly merged ❌]
+
+Precision: TP / (TP + FP) = ____
+Recall:    TP / (TP + FN) = ____
+F1:        2·P·R / (P+R) = ____
+```
+
+**Limits acknowledged on this rubric:**
+- 8 of the 20 should-merge rows above are flagged as anti-examples to make the table self-documenting; the real should-merge count is 12. A v2 of this rubric should split into two clean tables.
+- Several should-merge pairs are in-doc concept↔entity (rows 2, 5, 13, 15, 16) which ETR cross-doc-only will skip by design. These exist to document the deliberate scope limit.
+- Pairs reference labels from the 2026-05-16 extraction; if labels drift on re-extraction (LLM non-determinism with temperature > 0), some labels may not appear. Rerun extraction in alphabetical-doc order before scoring for reproducibility.
