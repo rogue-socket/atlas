@@ -224,6 +224,48 @@ final class RecentFilesManagerTests: XCTestCase {
                        "bookmark blob also removed on the auto-remove pass")
     }
 
+    /// `replaceBookmark` is the back-end of the "Locate…" recovery flow:
+    /// when the user re-grants access to an inaccessible recent via
+    /// NSOpenPanel, we mint a fresh bookmark for the picked URL, swap it
+    /// in place, and clear the inaccessible flag. The entry stays at the
+    /// same index (recents order is preserved).
+    func testReplaceBookmark_RestoresAccessAndClearsInaccessibleFlag() throws {
+        let suiteName = "RecentFilesManagerTests-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Failed to create UserDefaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let oldURL = URL(fileURLWithPath: "/tmp/atlas-old-\(UUID().uuidString).pdf")
+        let newURL = URL(fileURLWithPath: "/tmp/atlas-new-\(UUID().uuidString).pdf")
+
+        let s1 = RecentFilesManager(userDefaults: defaults, bookmarker: URLDataBookmarker())
+        s1.addRecentFile(oldURL)
+
+        // Reboot with a failing resolver → entry is inaccessible.
+        let s2 = RecentFilesManager(userDefaults: defaults, bookmarker: FailingResolveBookmarker())
+        waitForFileChecks(s2)
+        XCTAssertEqual(s2.recentFiles, [oldURL])
+        XCTAssertTrue(s2.inaccessibleFiles.contains(0))
+
+        // User locates the file via NSOpenPanel; we replay that as a direct
+        // call to replaceBookmark. The bookmarker can still mint bookmarks
+        // (NSOpenPanel grants a fresh security scope), even though resolve
+        // would still fail on the next launch.
+        let ok = s2.replaceBookmark(at: 0, with: newURL)
+        XCTAssertTrue(ok, "replaceBookmark should succeed when index is in range")
+
+        XCTAssertEqual(s2.recentFiles, [newURL], "URL must be swapped at the same index")
+        XCTAssertFalse(s2.inaccessibleFiles.contains(0),
+                       "inaccessible flag must clear after the user re-grants access")
+
+        let persisted = (try? JSONDecoder().decode([Data].self,
+            from: defaults.data(forKey: AppConstants.recentFilesBookmarksKey) ?? Data())) ?? []
+        XCTAssertEqual(persisted.count, 1, "still exactly one bookmark on disk")
+    }
+
     /// Cross-reboot tracer: a file added in one manager instance is still
     /// present after a "reboot" (new manager with the same UserDefaults).
     func testFilesPersistAcrossReboot() throws {
