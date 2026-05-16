@@ -230,12 +230,16 @@ final class HeadlessRunner {
 
         let plan: MergePlan
         do {
+            let auditDir = FileManager.default
+                .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+                .appendingPathComponent("Atlas/graphs", isDirectory: true)
             plan = try await EmbeddingResolver.resolve(
                 graph: graph,
                 projectID: projectID,
                 embeddingBackend: embeddingBackend,
                 llmBackend: llmBackend,
-                thresholds: thresholds
+                thresholds: thresholds,
+                auditOutputDir: auditDir
             )
         } catch {
             log.error("[Headless] ETR resolve failed: \(error.localizedDescription, privacy: .public) — skipping apply")

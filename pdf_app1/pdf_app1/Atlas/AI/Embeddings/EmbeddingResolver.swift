@@ -68,6 +68,44 @@ struct MergePlan: Sendable {
     let thresholds: ResolverThresholds
 }
 
+// MARK: - Audit trail (followup #3 from 2026-05-16 sweep)
+
+/// One entry per "interesting" pair the resolver evaluated — every auto-
+/// merge and every pair that reached the adjudication band. Rejects (sim
+/// below floor) are skipped to keep the file small; if you need them, lower
+/// the floor and re-run.
+struct ResolverAuditEntry: Codable, Sendable {
+    let aID: String
+    let aLabel: String
+    let aDoc: String?      // primary source-doc filename (first anchor)
+    let aLevel: String     // "concept" or "entity"
+    let bID: String
+    let bLabel: String
+    let bDoc: String?
+    let bLevel: String
+    let similarity: Float
+    let band: String       // "autoMerge" | "adjudication" | "exactLabel"
+    let exactLabelMatch: Bool
+    let llmVerdict: String?  // "approved" | "rejected" | null (no LLM run)
+    let finalReason: String? // MergeReason raw value, or nil if not in plan
+}
+
+struct ResolverAudit: Codable, Sendable {
+    let timestamp: String
+    let modelIdentifier: String
+    let vectorDimension: Int
+    let thresholds: ResolverThresholdsCodable
+    let eligibleNodeCount: Int
+    let pairsEvaluated: Int
+    let entries: [ResolverAuditEntry]
+
+    struct ResolverThresholdsCodable: Codable, Sendable {
+        let autoMerge: Float
+        let adjudicationFloor: Float
+        let adjudicationBatchSize: Int
+    }
+}
+
 // MARK: - Pure helpers
 
 enum EmbeddingResolver {
@@ -171,7 +209,8 @@ extension EmbeddingResolver {
         projectID: UUID,
         embeddingBackend: any AtlasEmbeddingBackend,
         llmBackend: (any AtlasModel)? = nil,
-        thresholds: ResolverThresholds = .default
+        thresholds: ResolverThresholds = .default,
+        auditOutputDir: URL? = nil
     ) async throws -> MergePlan {
         log.info("[ETR] thresholds: autoMerge=\(thresholds.autoMerge) adjudicationFloor=\(thresholds.adjudicationFloor) batch=\(thresholds.adjudicationBatchSize)")
 
@@ -234,6 +273,10 @@ extension EmbeddingResolver {
 
         var autoMerges: [MergeDecision] = []
         var adjudicationCandidates: [MergeCandidate] = []
+        // Audit collector: one entry per pair that reached auto-merge or
+        // adjudication. Rejects (sim < floor) skipped — adding them would
+        // bloat the file from ~100 entries to tens of thousands.
+        var auditEntries: [ResolverAuditEntry] = []
 
         for (aID, bID) in pairs {
             guard let va = resolved[aID], let vb = resolved[bID],
@@ -242,13 +285,28 @@ extension EmbeddingResolver {
 
             if isExactLabelMatch(a, b) {
                 autoMerges.append(MergeDecision(aID: aID, bID: bID, similarity: sim, reason: .exactLabel))
+                if auditOutputDir != nil {
+                    auditEntries.append(makeAuditEntry(a: a, b: b, sim: sim,
+                                                       band: "exactLabel",
+                                                       exactLabel: true,
+                                                       llmVerdict: nil,
+                                                       finalReason: MergeReason.exactLabel.rawValue))
+                }
                 continue
             }
             switch classify(similarity: sim, thresholds: thresholds) {
             case .autoMerge:
                 autoMerges.append(MergeDecision(aID: aID, bID: bID, similarity: sim, reason: .highSimilarity))
+                if auditOutputDir != nil {
+                    auditEntries.append(makeAuditEntry(a: a, b: b, sim: sim,
+                                                       band: "autoMerge",
+                                                       exactLabel: false,
+                                                       llmVerdict: nil,
+                                                       finalReason: MergeReason.highSimilarity.rawValue))
+                }
             case .adjudication:
                 adjudicationCandidates.append(MergeCandidate(aID: aID, bID: bID, similarity: sim))
+                // Audit entry written later once the LLM verdict is known.
             case .reject:
                 continue
             }
@@ -260,6 +318,26 @@ extension EmbeddingResolver {
         if !adjudicationCandidates.isEmpty {
             guard let llm = llmBackend else {
                 log.info("[ETR] no LLM backend provided; dropping \(adjudicationCandidates.count) adjudication candidates")
+                if auditOutputDir != nil {
+                    for cand in adjudicationCandidates {
+                        if let a = nodesByID[cand.aID], let b = nodesByID[cand.bID] {
+                            auditEntries.append(makeAuditEntry(
+                                a: a, b: b, sim: cand.similarity,
+                                band: "adjudication",
+                                exactLabel: false,
+                                llmVerdict: nil,
+                                finalReason: nil))
+                        }
+                    }
+                    writeAudit(entries: auditEntries,
+                               thresholds: thresholds,
+                               eligibleCount: eligible.count,
+                               pairCount: pairs.count,
+                               modelIdentifier: embeddingBackend.modelIdentifier,
+                               vectorDimension: embeddingBackend.vectorDimension,
+                               projectID: projectID,
+                               dir: auditOutputDir!)
+                }
                 return MergePlan(decisions: autoMerges, thresholds: thresholds)
             }
             let batchSize = max(1, thresholds.adjudicationBatchSize)
@@ -276,9 +354,20 @@ extension EmbeddingResolver {
                 let prompt = PromptTemplates.mergeAdjudication(pairs: pairsForPrompt)
                 let raw = try await generateWithRetry(llm: llm, prompt: prompt)
                 let decisions = try PromptTemplates.parseMergeAdjudicationResponse(raw, expectedCount: pairsForPrompt.count)
-                for (cand, merge) in zip(batch, decisions) where merge {
-                    adjudicated.append(MergeDecision(aID: cand.aID, bID: cand.bID,
-                                                     similarity: cand.similarity, reason: .llmAdjudicated))
+                for (cand, merge) in zip(batch, decisions) {
+                    if merge {
+                        adjudicated.append(MergeDecision(aID: cand.aID, bID: cand.bID,
+                                                         similarity: cand.similarity, reason: .llmAdjudicated))
+                    }
+                    if auditOutputDir != nil,
+                       let a = nodesByID[cand.aID], let b = nodesByID[cand.bID] {
+                        auditEntries.append(makeAuditEntry(
+                            a: a, b: b, sim: cand.similarity,
+                            band: "adjudication",
+                            exactLabel: false,
+                            llmVerdict: merge ? "approved" : "rejected",
+                            finalReason: merge ? MergeReason.llmAdjudicated.rawValue : nil))
+                    }
                 }
                 log.info("[ETR] adjudication batch [\(batchStart)..<\(batchStart + batch.count)]: \(decisions.filter { $0 }.count)/\(decisions.count) approved")
             }
@@ -286,7 +375,81 @@ extension EmbeddingResolver {
 
         let all = autoMerges + adjudicated
         log.info("[ETR] final merge plan: \(all.count) decisions (auto=\(autoMerges.count), adjudicated=\(adjudicated.count))")
+
+        if let dir = auditOutputDir {
+            writeAudit(entries: auditEntries,
+                       thresholds: thresholds,
+                       eligibleCount: eligible.count,
+                       pairCount: pairs.count,
+                       modelIdentifier: embeddingBackend.modelIdentifier,
+                       vectorDimension: embeddingBackend.vectorDimension,
+                       projectID: projectID,
+                       dir: dir)
+        }
+
         return MergePlan(decisions: all, thresholds: thresholds)
+    }
+
+    // MARK: - Audit helpers
+
+    /// Internal for unit testability. Builds an audit row from two nodes.
+    static func makeAuditEntry(a: ConceptNode, b: ConceptNode,
+                               sim: Float, band: String,
+                               exactLabel: Bool,
+                               llmVerdict: String?,
+                               finalReason: String?) -> ResolverAuditEntry {
+        ResolverAuditEntry(
+            aID: a.id.uuidString,
+            aLabel: a.label,
+            aDoc: a.sourceAnchors.first?.documentURL.lastPathComponent,
+            aLevel: a.level.rawValue,
+            bID: b.id.uuidString,
+            bLabel: b.label,
+            bDoc: b.sourceAnchors.first?.documentURL.lastPathComponent,
+            bLevel: b.level.rawValue,
+            similarity: sim,
+            band: band,
+            exactLabelMatch: exactLabel,
+            llmVerdict: llmVerdict,
+            finalReason: finalReason
+        )
+    }
+
+    /// Writes `etr_audit_<projectID>_<ISO8601>.json` into `dir`. Failure
+    /// logs but does not throw — audit logging is best-effort, never a
+    /// reason to abort the resolve.
+    static func writeAudit(entries: [ResolverAuditEntry],
+                           thresholds: ResolverThresholds,
+                           eligibleCount: Int,
+                           pairCount: Int,
+                           modelIdentifier: String,
+                           vectorDimension: Int,
+                           projectID: UUID,
+                           dir: URL) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let safeStamp = timestamp.replacingOccurrences(of: ":", with: "-")
+        let audit = ResolverAudit(
+            timestamp: timestamp,
+            modelIdentifier: modelIdentifier,
+            vectorDimension: vectorDimension,
+            thresholds: .init(autoMerge: thresholds.autoMerge,
+                              adjudicationFloor: thresholds.adjudicationFloor,
+                              adjudicationBatchSize: thresholds.adjudicationBatchSize),
+            eligibleNodeCount: eligibleCount,
+            pairsEvaluated: pairCount,
+            entries: entries
+        )
+        let url = dir.appendingPathComponent("etr_audit_\(projectID.uuidString)_\(safeStamp).json")
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(audit)
+            try data.write(to: url, options: .atomic)
+            log.info("[ETR] audit written: \(entries.count) entries to \(url.lastPathComponent)")
+        } catch {
+            log.error("[ETR] audit write failed: \(error.localizedDescription) — continuing")
+        }
     }
 
     /// Calls `llm.generateRawResponse(prompt:)` with retry-with-backoff for

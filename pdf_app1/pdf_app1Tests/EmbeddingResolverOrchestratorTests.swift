@@ -254,6 +254,107 @@ final class EmbeddingResolverOrchestratorTests: XCTestCase {
         XCTAssertEqual(llm.callCount, 1, "decodingError should NOT trigger retry")
     }
 
+    // MARK: - Audit trail
+
+    func test_resolve_writesAuditFile_whenAuditDirProvided() async throws {
+        let projectID = UUID()
+        let auditDir = FileManager.default.temporaryDirectory.appendingPathComponent("etr-audit-test-\(UUID().uuidString)")
+        defer {
+            wipeCacheFile(for: projectID)
+            try? FileManager.default.removeItem(at: auditDir)
+        }
+        let g = KnowledgeGraph()
+        let a = ConceptNode(label: "Helena Vargas", type: .person, summary: "ORG",
+                            sourceAnchors: [anchor("/org.pdf")], level: .entity)
+        let b = ConceptNode(label: "helena vargas", type: .person, summary: "CMP",
+                            sourceAnchors: [anchor("/cmp.pdf")], level: .entity)
+        g.addNode(a); g.addNode(b)
+        let backend = FakeEmbeddingBackend(dim: 3) { _ in [1, 0, 0] }
+
+        _ = try await EmbeddingResolver.resolve(graph: g, projectID: projectID,
+                                                embeddingBackend: backend,
+                                                auditOutputDir: auditDir)
+
+        // Should produce exactly one audit file matching the pattern.
+        let files = try FileManager.default.contentsOfDirectory(atPath: auditDir.path)
+        let matching = files.filter { $0.hasPrefix("etr_audit_\(projectID.uuidString)") && $0.hasSuffix(".json") }
+        XCTAssertEqual(matching.count, 1, "Expected exactly one audit file, got: \(files)")
+
+        // Decode and sanity-check.
+        let auditURL = auditDir.appendingPathComponent(matching[0])
+        let data = try Data(contentsOf: auditURL)
+        let audit = try JSONDecoder().decode(ResolverAudit.self, from: data)
+        XCTAssertEqual(audit.eligibleNodeCount, 2)
+        XCTAssertEqual(audit.pairsEvaluated, 1)
+        XCTAssertEqual(audit.entries.count, 1)
+        let entry = audit.entries[0]
+        XCTAssertEqual(entry.band, "exactLabel")
+        XCTAssertTrue(entry.exactLabelMatch)
+        XCTAssertEqual(entry.finalReason, "exactLabel")
+        XCTAssertNil(entry.llmVerdict, "Exact-label merge bypasses LLM, so no verdict")
+        XCTAssertTrue(entry.aDoc == "org.pdf" || entry.bDoc == "org.pdf")
+        XCTAssertTrue(entry.aDoc == "cmp.pdf" || entry.bDoc == "cmp.pdf")
+    }
+
+    func test_resolve_doesNotWriteAuditFile_whenAuditDirNil() async throws {
+        let projectID = UUID()
+        defer { wipeCacheFile(for: projectID) }
+        let g = KnowledgeGraph()
+        let a = ConceptNode(label: "X", type: .concept, summary: nil,
+                            sourceAnchors: [anchor("/a.pdf")], level: .concept)
+        let b = ConceptNode(label: "X", type: .concept, summary: nil,
+                            sourceAnchors: [anchor("/b.pdf")], level: .concept)
+        g.addNode(a); g.addNode(b)
+        let backend = FakeEmbeddingBackend(dim: 3) { _ in [1, 0, 0] }
+
+        // Snapshot temp dir contents before. Run resolver with auditOutputDir
+        // nil (default). Confirm no new etr_audit_* files appear.
+        let tempBefore = (try? FileManager.default.contentsOfDirectory(atPath: NSTemporaryDirectory()))?
+            .filter { $0.hasPrefix("etr_audit_") } ?? []
+        _ = try await EmbeddingResolver.resolve(graph: g, projectID: projectID,
+                                                embeddingBackend: backend)
+        let tempAfter = (try? FileManager.default.contentsOfDirectory(atPath: NSTemporaryDirectory()))?
+            .filter { $0.hasPrefix("etr_audit_") } ?? []
+        XCTAssertEqual(tempBefore, tempAfter, "auditOutputDir nil should produce no audit files")
+    }
+
+    func test_resolve_auditCapturesAdjudicationVerdicts() async throws {
+        let projectID = UUID()
+        let auditDir = FileManager.default.temporaryDirectory.appendingPathComponent("etr-audit-verdict-\(UUID().uuidString)")
+        defer {
+            wipeCacheFile(for: projectID)
+            try? FileManager.default.removeItem(at: auditDir)
+        }
+        let g = KnowledgeGraph()
+        let a = ConceptNode(label: "Telehealth", type: .concept, summary: nil,
+                            sourceAnchors: [anchor("/A.pdf")], level: .concept)
+        let b = ConceptNode(label: "Virtual Care", type: .concept, summary: nil,
+                            sourceAnchors: [anchor("/B.pdf")], level: .concept)
+        g.addNode(a); g.addNode(b)
+        // Vectors near 0.87 — in 0.80-0.95 adjudication band with default thresholds.
+        let backend = FakeEmbeddingBackend(dim: 2) { text in
+            text.contains("Telehealth") ? [1, 0] : [0.87, sqrt(1 - 0.87 * 0.87)]
+        }
+        // LLM approves (returns [true])
+        let llm = FlakyLLMBackend(failureCount: 0, successResponse: "[true]")
+
+        _ = try await EmbeddingResolver.resolve(graph: g, projectID: projectID,
+                                                embeddingBackend: backend,
+                                                llmBackend: llm,
+                                                auditOutputDir: auditDir)
+        let files = try FileManager.default.contentsOfDirectory(atPath: auditDir.path)
+            .filter { $0.hasPrefix("etr_audit_") }
+        XCTAssertEqual(files.count, 1)
+        let audit = try JSONDecoder().decode(
+            ResolverAudit.self,
+            from: try Data(contentsOf: auditDir.appendingPathComponent(files[0]))
+        )
+        XCTAssertEqual(audit.entries.count, 1)
+        XCTAssertEqual(audit.entries[0].band, "adjudication")
+        XCTAssertEqual(audit.entries[0].llmVerdict, "approved")
+        XCTAssertEqual(audit.entries[0].finalReason, "llmAdjudicated")
+    }
+
     func test_resolve_logsThresholdsInPlan() async throws {
         let projectID = UUID()
         defer { wipeCacheFile(for: projectID) }
