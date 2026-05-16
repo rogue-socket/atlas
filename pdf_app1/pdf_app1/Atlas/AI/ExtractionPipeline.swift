@@ -115,27 +115,28 @@ class ExtractionPipeline {
             ? PromptTemplates.cumulativeStateHeader(priorDocsGraph: graph, currentDocURL: documentURL)
             : nil
         if let h = priorDocsHeader {
-            log.info("[SCE] doc=\(documentURL.lastPathComponent) prior-docs-header: \(h.split(separator: "\n").count) line(s)")
+            log.info("[SCE] doc=\(documentURL.lastPathComponent, privacy: .public) prior-docs-header: \(h.split(separator: "\n").count) line(s)")
         }
 
-        // SCE: all batch results go into a per-doc buffer. Buffer commits to the
-        // live graph atomically once all batches complete; mid-doc cancellation
-        // or error discards the buffer (integration decision #3).
-        let buffer = KnowledgeGraph()
-        var existingLabels: [String] = []
+        // Cross-doc reuse via `graph.node(matching:)` (exact-lowercase label
+        // match) only fires when batches write directly to the live graph;
+        // an intermediate buffer would shadow the live labelIndex, so a node
+        // the LLM intentionally reuses by label would land as a duplicate
+        // UUID on UUID-keyed merge. existingLabels feeds the LLM the
+        // already-known set (cumulative across all docs), the same shape
+        // the SCE prompt header is enriching.
+        var existingLabels = graph.allNodes.map { $0.label }
         let outlineEntries = layoutAnalyzer.extractOutline(from: document)
         let outlineHints = outlineEntries.map { $0.title }
-        log.info("Outline entries: \(outlineEntries.count), SCE buffer starts empty")
+        log.info("Outline entries: \(outlineEntries.count), existing labels: \(existingLabels.count)")
 
         var pageIndex = pageRange.lowerBound
         var batchNumber = 0
-        var allBatchesCompleted = true
         while pageIndex < pageRange.upperBound {
             // Check for cancellation before each batch
             if Task.isCancelled {
                 log.info("Extraction cancelled by user after \(batchNumber) batches")
-                statusMessage = "Cancelled — buffer discarded (\(buffer.nodeCount) nodes)"
-                allBatchesCompleted = false
+                statusMessage = "Cancelled — \(graph.nodeCount) concepts extracted"
                 break
             }
 
@@ -152,7 +153,7 @@ class ExtractionPipeline {
                     document: document,
                     documentURL: documentURL,
                     pageRange: batchRange,
-                    graph: buffer,
+                    graph: graph,
                     backend: backend,
                     existingLabels: existingLabels,
                     outlineHints: outlineHints,
@@ -160,38 +161,28 @@ class ExtractionPipeline {
                     projectID: projectID
                 )
                 let promptTokens = backend.lastResponsePromptTokens.map(String.init) ?? "?"
-                log.info("[SCE] doc=\(documentURL.lastPathComponent) batch=\(batchNumber) prompt_tokens=\(promptTokens)")
-                // Update existing labels for next batch so the LLM doesn't re-extract
-                existingLabels = buffer.allNodes.map { $0.label }
-                log.info("Batch \(batchNumber) done. Buffer now has \(buffer.nodeCount) nodes, \(buffer.edgeCount) edges")
+                log.info("[SCE] doc=\(documentURL.lastPathComponent, privacy: .public) batch=\(batchNumber) prompt_tokens=\(promptTokens, privacy: .public)")
+                existingLabels = graph.allNodes.map { $0.label }
+                log.info("Batch \(batchNumber) done. Graph now has \(graph.nodeCount) nodes, \(graph.edgeCount) edges")
             } catch is CancellationError {
                 log.info("Extraction cancelled during batch \(batchNumber)")
-                statusMessage = "Cancelled — buffer discarded (\(buffer.nodeCount) nodes)"
-                allBatchesCompleted = false
+                statusMessage = "Cancelled — \(graph.nodeCount) concepts extracted"
                 break
             } catch {
                 log.error("Batch \(batchNumber) FAILED: \(error.localizedDescription)")
-                statusMessage = "Error: \(error.localizedDescription) — buffer discarded"
-                allBatchesCompleted = false
+                statusMessage = "Error: \(error.localizedDescription)"
                 break
             }
 
             pageIndex = batchEnd
         }
 
-        if !allBatchesCompleted || Task.isCancelled {
+        if Task.isCancelled {
             isProcessing = false
             graph.documentProcessingState[documentURL] = .unprocessed
-            log.info("=== Extraction aborted for \(documentURL.lastPathComponent) (buffer discarded: \(buffer.nodeCount)n/\(buffer.edgeCount)e) ===")
+            log.info("=== Extraction cancelled for \(documentURL.lastPathComponent) ===")
             return
         }
-
-        // SCE: atomic commit. Merge respects lastModified for UUID collisions and
-        // dedupes edges by tuple (see KnowledgeGraph.merge).
-        let bufferNodes = buffer.nodeCount
-        let bufferEdges = buffer.edgeCount
-        graph.merge(from: buffer)
-        log.info("[SCE] doc=\(documentURL.lastPathComponent) committed buffer: \(bufferNodes)n/\(bufferEdges)e -> live graph now \(graph.nodeCount)n/\(graph.edgeCount)e")
 
         // Chapter extraction (PDF outline if present, else LLM).
         statusMessage = "Identifying chapters..."
@@ -217,6 +208,17 @@ class ExtractionPipeline {
         let synthesized = ChapterEdgeAggregation.synthesize(in: graph)
         if synthesized > 0 {
             log.info("[Pipeline] Synthesized \(synthesized) chapter-level aggregated edge(s)")
+        }
+
+        // Final save now that chapter / document / L2 enrichments are in the
+        // live graph. processBatch's per-batch save only captures concept +
+        // entity state (encoding happens synchronously at call time), so
+        // without this trailing call the per-doc file would never include
+        // chapters or the document-summary node.
+        if let projectID = projectID {
+            GraphStore.shared.saveProjectGraph(graph, projectID: projectID)
+        } else {
+            GraphStore.shared.scheduleSave(graph, for: documentURL)
         }
 
         isProcessing = false
