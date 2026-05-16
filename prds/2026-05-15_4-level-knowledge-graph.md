@@ -522,3 +522,31 @@ F1        = 2·P·R / (P + R) = ___
 - **Labels frozen to 2026-05-16 extraction snapshot at `/tmp/atlas_project_pre_etr_2026-05-16.json`.** Re-extraction may produce different labels (LLM non-determinism). Either restore from that snapshot before scoring, or rebuild the rubric after the new extraction.
 - **No formal stratification.** Pairs span easy (near-identical phrasing) to hard (different surface forms, same concept). The 0.75 sweep result suggests easy pairs caught early, hard pairs need lower threshold OR semantic prompt tuning.
 - **Some pairs deliberately stretchy** (rows 17, 19 in should-merge). They test whether the LLM goes too eager. Marked as such; weight them less in recall calculation if you want a stricter score.
+
+---
+
+## Integration decisions (apply to both SCE and ETR branches)
+
+> Originally drafted on `main` 2026-05-16 as the locked-in spec for both branches. Decision #2 was later found to be moot — see `audits/2026-05-16_etr-live-verification.md` §"Major correction: `GraphMergeEngine` is dormant code (`MergeProposalView` never instantiated)."
+
+| # | Decision | Rationale |
+|---|----------|-----------|
+| 1 | **Doc ordering for SCE = order of user click.** Use the order PDFs were added to the project (preserved in `OpenSessionBookmarks` / `DocumentManager`). | Captures user intent without UI work; deterministic enough for reproducibility within a session. Re-runs that test "anchoring fragility" simply re-add PDFs in a different order. |
+| 2 | ~~**Disable `GraphMergeEngine` (Levenshtein dedup) during A/B runs.**~~ ⚠️ **Moot 2026-05-16:** `GraphMergeEngine` is dormant code — `MergeProposalView` is never instantiated. Cross-doc baseline merges come from `KnowledgeGraph.node(matching:)`, not from this engine. Nothing to disable. | Original rationale: clean comparison — baseline numbers per branch attribute every merge to the branch under test. Avoids double-counting with the existing 2-merge auto-detect found on vitacare. |
+| 3 | **Buffer-then-commit at end-of-doc.** SCE collects all batch results for doc N in a temporary `KnowledgeGraph` buffer, merges into the real graph atomically when doc N's extraction completes. Failure mid-doc discards the buffer; partial-doc state never leaks into doc N+1's cumulative-state prompt header. | Simpler than per-batch commit + rollback (~30 LOC vs. ~100 LOC). Matches the PRD's atomicity requirement directly. |
+| 4 | **v1 supports Gemini backend only.** SCE branch initially targets Gemini-only (use `gemini-embedding-2-preview` for ETR's embeddings, and any chat-completion Gemini model for SCE's cumulative-state prompts). OpenAI/Claude/Ollama support deferred until SCE proves end-to-end on Gemini. | Limits scope of the token-tracking instrumentation — only `GeminiBackend` needs to expose `usageMetadata.promptTokenCount`. Other vendors get token plumbing added if Gemini SCE proves out. |
+| 5 | **Skip the optional final canonicalization LLM pass in v1.** PRD §"SCE Algorithm" step 5 (one-LLM-call-over-full-entity-list canonicalization) is deferred. | First end-to-end SCE run will tell us if the per-batch reuse decisions need a final cleanup. Adding it speculatively wastes a branch cycle. |
+| 6 | **Commit doc updates to `main` before branching.** Both SCE and ETR branches branch off `8225e37` (post-α HEAD). The 2026-05-16 PRD + backlog updates live on `main` as a separate commit; both branches inherit the locked-in prep items from `main` history. | Keeps prep items durable on `main` and version-pinned in git, not just in session docs. |
+
+---
+
+## Embedding model defaults
+
+| Backend | Default | Notes |
+|---------|---------|-------|
+| OpenAI | `text-embedding-3-large` (3072-dim) | Matches Gemini's default dim for apples-to-apples; `-3-small` (1536-dim) is the cheaper fallback. |
+| Gemini | `gemini-embedding-2-preview` (3072-dim) | Live-tested 2026-05-16 — HTTP 200 with valid embedding response. Fallback: `gemini-embedding-001` (also live, GA, 3072-dim). `text-embedding-004` confirmed dead (404 on `embedContent` v1beta). |
+| Ollama | `nomic-embed-text` | Local; only embedding model called out in PRD. |
+| Claude | — | No embedding API; ETR disabled in UI when LLM backend = Claude and no other embedding configured. |
+
+**ETR availability gate** (unchanged from PRD §"Embedding backend"): selector validates the embedding endpoint on save; ETR option in merging-strategy UI is disabled until a valid embedding model is configured.

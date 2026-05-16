@@ -269,6 +269,20 @@ class GraphStore {
 
     // MARK: - Orphan Sweep
 
+    /// Per-doc graph files are named `<sha256HexPrefix16(url)>.json`. The
+    /// sweep is only authorized to delete that family. Every other JSON file
+    /// in `Atlas/graphs/` is owned by a different subsystem and must be left
+    /// alone: `project_*` (project-wide graphs, separate lifecycle),
+    /// `embeddings_*` (`EmbeddingCacheStore`), `etr_audit_*` (resolver audit
+    /// sidecars). Forgetting one here means silent data loss on next launch.
+    static func isSweepablePerDocGraphFile(named name: String) -> Bool {
+        guard name.hasSuffix(".json") else { return false }
+        if name.hasPrefix("project_") { return false }
+        if name.hasPrefix("embeddings_") { return false }
+        if name.hasPrefix("etr_audit_") { return false }
+        return true
+    }
+
     /// Deletes per-document graph files whose URL hash is not in `aliveURLs`.
     /// Project graphs (`project_*.json`) are skipped — those have their own
     /// lifecycle tied to `ProjectsManager.deleteProject`.
@@ -292,8 +306,7 @@ class GraphStore {
         var keptCount = 0
         for fileURL in contents {
             let name = fileURL.lastPathComponent
-            if name.hasPrefix("project_") { continue }      // project graphs have a separate lifecycle
-            guard name.hasSuffix(".json") else { continue }
+            guard Self.isSweepablePerDocGraphFile(named: name) else { continue }
             scanned += 1
 
             let hash = String(name.dropLast(".json".count))
