@@ -931,10 +931,11 @@ struct MultiDocumentView: View {
                                     case .fileNotReadable:
                                         alertManager.showAlert(
                                             title: "File Not Accessible",
-                                            message: "This file can no longer be accessed. It may have been moved or deleted.",
-                                            primaryButton: "Remove from Recents",
-                                            secondaryButton: "Cancel",
-                                            primaryAction: { recentFilesManager.removeInaccessibleFile(at: index) }
+                                            message: "This file can no longer be accessed. It may have been moved or its access revoked.",
+                                            primaryButton: "Locate…",
+                                            secondaryButton: "Remove from Recents",
+                                            primaryAction: { locateInaccessibleRecent(at: index, originalURL: url) },
+                                            secondaryAction: { recentFilesManager.removeInaccessibleFile(at: index) }
                                         )
                                     case .invalidPDF:
                                         alertManager.showAlert(
