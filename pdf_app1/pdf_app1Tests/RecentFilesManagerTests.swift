@@ -303,6 +303,24 @@ final class RecentFilesManagerTests: XCTestCase {
                      "new path should not inherit any stale count")
     }
 
+    /// Out-of-range index returns false and leaves state untouched.
+    func testReplaceBookmark_OutOfRangeReturnsFalse() throws {
+        let suiteName = "RecentFilesManagerTests-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Failed to create UserDefaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let url = URL(fileURLWithPath: "/tmp/atlas-only-\(UUID().uuidString).pdf")
+        let s = RecentFilesManager(userDefaults: defaults, bookmarker: URLDataBookmarker())
+        s.addRecentFile(url)
+
+        XCTAssertFalse(s.replaceBookmark(at: 5, with: URL(fileURLWithPath: "/tmp/x.pdf")))
+        XCTAssertEqual(s.recentFiles, [url], "recents untouched on out-of-range index")
+    }
+
     /// Cross-reboot tracer: a file added in one manager instance is still
     /// present after a "reboot" (new manager with the same UserDefaults).
     func testFilesPersistAcrossReboot() throws {
