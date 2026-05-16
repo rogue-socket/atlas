@@ -1,9 +1,11 @@
 # ETR Step 1 — Status (2026-05-16)
 
+> ⚠️ **STALE as of 2026-05-16 PM.** This doc captured the state after stages 1+2 only. Stages 3+4 + live verification + threshold sweep + 3 followups all landed later same day. For current state read **`audits/2026-05-16_etr-session-summary.md`** first, then **`audits/2026-05-16_etr-live-verification.md`** for the sweep details. The "What's NOT done" section below is fully outdated (it's done now). The §"Open questions — RESOLVED 2026-05-16" section here is still authoritative for the 5 design decisions.
+
 > **Branch:** `feature/etr-cross-doc` (this doc lives here, not on `main`)
 > **Baseline:** `main` at `8225e37` (same as SCE branch — integration decision #6)
-> **HEAD:** `b32f376` (3 commits ahead of `main`, not pushed)
-> **Companion plan:** `atlas/audits/2026-05-16_etr-step1-plan.md` (also on this branch)
+> **HEAD at time of writing:** `b32f376` — **current HEAD: `ca3901b`** (14 ahead of `main`, not pushed)
+> **Companion plan:** `atlas/audits/2026-05-16_etr-step1-plan.md` (also on this branch, also stale)
 
 ## Branch state
 

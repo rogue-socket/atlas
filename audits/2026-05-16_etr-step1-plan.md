@@ -1,5 +1,7 @@
 # ETR Step 1 — Implementation Plan (2026-05-16)
 
+> ⚠️ **STALE as of 2026-05-16 PM.** This plan was the file-touch list before stages 3+4 landed. Everything in the plan has shipped (and more). For current state read **`audits/2026-05-16_etr-session-summary.md`**; for sweep results read **`audits/2026-05-16_etr-live-verification.md`**. This plan is preserved as historical record of the pre-implementation thinking.
+
 > **Branch:** `feature/etr-cross-doc` (this doc lives here, not on `main`)
 > **Baseline:** `main` at `8225e37` (same as SCE branch)
 > **Cherry-picked:** `e1cf898` (headless harness + dev-keys) from SCE branch — pure tooling, no SCE semantics
