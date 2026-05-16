@@ -380,4 +380,68 @@ enum PromptTemplates {
         Return valid JSON only.
         """
     }
+
+    // MARK: - ETR Merge Adjudication
+
+    /// Prompt the LLM with N candidate pairs in the 0.85–0.95 similarity band
+    /// (per `ResolverThresholds`) and ask whether each pair should be merged.
+    /// Expected output is a JSON array of N booleans in input order.
+    ///
+    /// Cross-level pairs (one `.concept` + one `.entity`) are explicitly
+    /// called out in the prompt — same-real-world-thing only, not "similar
+    /// topic." Same-name-but-different-scope cases ("on-site labs" vs
+    /// "external labs", "internal audits" vs "external audits") are anti-
+    /// examples drawn from the locked-in vitacare quality pairs.
+    static func mergeAdjudication(pairs: [(a: ConceptNode, b: ConceptNode)]) -> String {
+        let formatPair: (Int, ConceptNode, ConceptNode) -> String = { i, a, b in
+            let summaryA = a.summary?.isEmpty == false ? a.summary! : "(no summary)"
+            let summaryB = b.summary?.isEmpty == false ? b.summary! : "(no summary)"
+            return """
+            \(i + 1). A: "\(a.label)" (type=\(a.type.rawValue), level=\(a.level.rawValue)) — \(summaryA)
+               B: "\(b.label)" (type=\(b.type.rawValue), level=\(b.level.rawValue)) — \(summaryB)
+            """
+        }
+
+        let body = pairs.enumerated().map { formatPair($0.offset, $0.element.a, $0.element.b) }.joined(separator: "\n\n")
+
+        return """
+        You are deciding whether candidate pairs of knowledge-graph nodes refer to the same real-world thing.
+
+        For each numbered pair, output exactly one boolean: true to merge, false to keep separate.
+
+        Guidance:
+        - Merge ONLY when both candidates name the same real-world entity, concept, or topic.
+        - Do NOT merge similar-but-distinct things. Examples that look alike but must stay separate:
+          • "on-site labs" vs "external labs"
+          • "internal audits" vs "external audits"
+          • "Java" the programming language vs "Java" the island
+          • A list of co-founders vs a list of compliance officers (different people, same role-noun)
+        - If the pair is at different abstraction levels (one "concept", one "entity"), merge only when they truly refer to the same real-world thing — not a related topic.
+        - Same name + different role/scope = do NOT merge.
+
+        Pairs:
+        \(body)
+
+        Return ONLY a JSON array of \(pairs.count) booleans, one per pair, in the same order. No prose, no explanation, no code fences. Example for 4 pairs: [true, false, true, false]
+        """
+    }
+
+    /// Parse the adjudication response into `[Bool]`. Tolerates leading/
+    /// trailing whitespace and ```json code fences. Throws when the JSON is
+    /// invalid, not an array, or the array length doesn't match `expectedCount`
+    /// (callers can't safely map decisions back to pairs on a length mismatch).
+    static func parseMergeAdjudicationResponse(_ raw: String,
+                                               expectedCount: Int) throws -> [Bool] {
+        let cleaned = JSONRepair.cleanAndRepair(raw)
+        guard let data = cleaned.data(using: .utf8) else {
+            throw AIError.decodingError("adjudication response not UTF-8")
+        }
+        guard let bools = try JSONSerialization.jsonObject(with: data) as? [Bool] else {
+            throw AIError.decodingError("adjudication response not [Bool]: \(cleaned.prefix(120))")
+        }
+        guard bools.count == expectedCount else {
+            throw AIError.decodingError("adjudication response length \(bools.count) != expected \(expectedCount)")
+        }
+        return bools
+    }
 }
