@@ -487,13 +487,21 @@ class ExtractionPipeline {
             log.info("[Step 6] Skipped edge proposal (only \(conceptLabels.count) concepts)")
         }
 
-        // Step 7: Auto-save
+        // Step 7: Auto-save.
+        // Per-doc save ALWAYS fires — it's the only path that's actually
+        // read back on next launch (`loadGraphIfNeeded`, `loadProjectWideGraph`
+        // both load per-doc files). `scheduleSave` already scopes via
+        // `encodeSubgraph(for: documentURL)` so the per-doc file only
+        // contains this doc's anchored nodes regardless of how big the
+        // in-memory project graph is.
+        // The parallel `saveProjectGraph` call is retained as a write-side
+        // belt-and-braces; `loadProjectGraph` currently has no callers
+        // (write-only pipeline — flagged for cleanup).
+        GraphStore.shared.scheduleSave(graph, for: documentURL)
+        log.info("[Step 7] Scheduled per-document auto-save")
         if let projectID = projectID {
             GraphStore.shared.saveProjectGraph(graph, projectID: projectID)
-            log.info("[Step 7] Saved project graph")
-        } else {
-            GraphStore.shared.scheduleSave(graph, for: documentURL)
-            log.info("[Step 7] Scheduled per-document auto-save")
+            log.info("[Step 7] Also saved project graph")
         }
     }
 
