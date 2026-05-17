@@ -134,8 +134,14 @@ final class SCETests: XCTestCase {
         )
         let prompt = PromptTemplates.conceptExtraction(text: "sample text", context: ctx)
         XCTAssertTrue(prompt.contains("Prior Documents — Cross-Document Reuse"))
-        XCTAssertTrue(prompt.contains("COPY THE LABEL EXACTLY"))
-        XCTAssertTrue(prompt.contains("Worked examples"))
+        // SCE Option D+E: structured fields drive the merge; no vitacare-specific
+        // worked examples — the prompt uses abstract pattern templates instead.
+        XCTAssertTrue(prompt.contains("prior_label_match"))
+        XCTAssertTrue(prompt.contains("match_kind"))
+        XCTAssertTrue(prompt.contains("same_entity"))
+        XCTAssertTrue(prompt.contains("instance_of"))
+        XCTAssertTrue(prompt.contains("attribute_of"))
+        XCTAssertTrue(prompt.contains("process_for"))
         XCTAssertTrue(prompt.contains("VitaCare Health Network"))
     }
 
@@ -185,6 +191,261 @@ final class SCETests: XCTestCase {
         XCTAssertNotNil(live.node(matching: "Doc A Concept"))
         XCTAssertNotNil(live.node(matching: "Doc B Concept 1"))
         XCTAssertNotNil(live.node(matching: "Doc B Concept 2"))
+    }
+
+    // MARK: - SCE Option D — prior_label_match rewrite
+
+    func test_priorDocsLabelMap_excludesCurrentDocNodes_andLowercasesKeys() {
+        let g = KnowledgeGraph()
+        g.addNode(ConceptNode(label: "Company Identity & Founding",
+                              sourceAnchors: [anchor(in: docA)], level: .concept))
+        g.addNode(ConceptNode(label: "Helena Vargas",
+                              sourceAnchors: [anchor(in: docA)], level: .entity))
+        // Current-doc node — excluded.
+        g.addNode(ConceptNode(label: "Local Concept",
+                              sourceAnchors: [anchor(in: docB)], level: .concept))
+        // Multi-anchor touching current doc — excluded (already known to current doc).
+        g.addNode(ConceptNode(label: "Shared Already",
+                              sourceAnchors: [anchor(in: docA), anchor(in: docB)], level: .concept))
+
+        let map = PromptTemplates.priorDocsLabelMap(graph: g, currentDocURL: docB)
+        XCTAssertEqual(map.count, 2)
+        XCTAssertEqual(map["company identity & founding"], "Company Identity & Founding")
+        XCTAssertEqual(map["helena vargas"], "Helena Vargas")
+        XCTAssertNil(map["local concept"])
+        XCTAssertNil(map["shared already"])
+    }
+
+    func test_resolveEffectiveLabel_returnsCanonicalCasing_whenClaimMatches() {
+        let map = ["company identity & founding": "Company Identity & Founding"]
+        // LLM's label is its own current-doc framing; claim points to prior.
+        let (effective, renamed) = PromptTemplates.resolveEffectiveLabel(
+            rawLabel: "Company Identity",
+            priorLabelMatch: "company identity & founding",   // wrong case — should still match
+            priorDocsLabelMap: map
+        )
+        XCTAssertEqual(effective, "Company Identity & Founding")
+        XCTAssertTrue(renamed)
+    }
+
+    func test_resolveEffectiveLabel_returnsRawLabel_whenClaimMissing() {
+        let map = ["company identity & founding": "Company Identity & Founding"]
+        let (effective, renamed) = PromptTemplates.resolveEffectiveLabel(
+            rawLabel: "Some New Concept",
+            priorLabelMatch: nil,
+            priorDocsLabelMap: map
+        )
+        XCTAssertEqual(effective, "Some New Concept")
+        XCTAssertFalse(renamed)
+    }
+
+    func test_resolveEffectiveLabel_returnsRawLabel_whenClaimInvalid() {
+        // LLM hallucinated a prior label that isn't actually in the map.
+        let map = ["company identity & founding": "Company Identity & Founding"]
+        let (effective, renamed) = PromptTemplates.resolveEffectiveLabel(
+            rawLabel: "New Thing",
+            priorLabelMatch: "Imagined Prior Concept",
+            priorDocsLabelMap: map
+        )
+        XCTAssertEqual(effective, "New Thing")
+        XCTAssertFalse(renamed)
+    }
+
+    func test_resolveEffectiveLabel_treatsEmptyClaimAsAbsent() {
+        let map = ["x": "X"]
+        let (effective, renamed) = PromptTemplates.resolveEffectiveLabel(
+            rawLabel: "Y",
+            priorLabelMatch: "   ",  // whitespace-only is a non-claim
+            priorDocsLabelMap: map
+        )
+        XCTAssertEqual(effective, "Y")
+        XCTAssertFalse(renamed)
+    }
+
+    func test_resolveEffectiveLabel_noOpRename_whenClaimEqualsLabel() {
+        // LLM echoed its own label — valid claim but no rewrite needed.
+        let map = ["company identity": "Company Identity"]
+        let (effective, renamed) = PromptTemplates.resolveEffectiveLabel(
+            rawLabel: "Company Identity",
+            priorLabelMatch: "Company Identity",
+            priorDocsLabelMap: map
+        )
+        XCTAssertEqual(effective, "Company Identity")
+        XCTAssertFalse(renamed, "renamed should be false when canonical equals raw (case-insensitive)")
+    }
+
+    func test_rawConcept_decodesPriorLabelMatchFromSnakeCaseJSON() throws {
+        let json = """
+        {
+          "label": "Company Identity",
+          "type": "concept",
+          "summary": "Who VitaCare is.",
+          "textSpan": "VitaCare Health Network is a hybrid operator.",
+          "confidence": 0.95,
+          "prior_label_match": "Company Identity & Founding"
+        }
+        """.data(using: .utf8)!
+        let c = try JSONDecoder().decode(RawConcept.self, from: json)
+        XCTAssertEqual(c.priorLabelMatch, "Company Identity & Founding")
+    }
+
+    func test_rawConcept_decodesWithoutPriorLabelMatch_legacyResponse() throws {
+        let json = """
+        {
+          "label": "Standalone",
+          "type": "concept",
+          "summary": "No prior match.",
+          "textSpan": "Standalone phrase",
+          "confidence": 0.9
+        }
+        """.data(using: .utf8)!
+        let c = try JSONDecoder().decode(RawConcept.self, from: json)
+        XCTAssertNil(c.priorLabelMatch)
+        XCTAssertNil(c.matchKind)
+    }
+
+    func test_rawConcept_decodesMatchKindFromSnakeCaseJSON() throws {
+        let json = """
+        {
+          "label": "Annual Wellness Visit Scheduling",
+          "type": "concept",
+          "summary": "How visits get scheduled.",
+          "textSpan": "Wellness visits are scheduled annually.",
+          "confidence": 0.85,
+          "prior_label_match": "Annual Wellness Visit",
+          "match_kind": "process_for"
+        }
+        """.data(using: .utf8)!
+        let c = try JSONDecoder().decode(RawConcept.self, from: json)
+        XCTAssertEqual(c.priorLabelMatch, "Annual Wellness Visit")
+        XCTAssertEqual(c.matchKind, "process_for")
+    }
+
+    // MARK: - SCE step 3 — resolveMatchAction
+
+    func test_resolveMatchAction_sameEntity_yieldsMerge() {
+        let map = ["company identity & founding": "Company Identity & Founding"]
+        let action = PromptTemplates.resolveMatchAction(
+            priorLabelMatch: "Company Identity & Founding",
+            matchKind: "same_entity",
+            priorDocsLabelMap: map
+        )
+        XCTAssertEqual(action, .mergeByRename(canonical: "Company Identity & Founding"))
+    }
+
+    func test_resolveMatchAction_missingMatchKind_defaultsToMerge_backwardCompat() {
+        // Step-2 responses had only prior_label_match; preserve their merge behavior.
+        let map = ["x": "X"]
+        let action = PromptTemplates.resolveMatchAction(
+            priorLabelMatch: "X",
+            matchKind: nil,
+            priorDocsLabelMap: map
+        )
+        XCTAssertEqual(action, .mergeByRename(canonical: "X"))
+    }
+
+    func test_resolveMatchAction_typedKinds_yieldEdges() {
+        let map = ["asynchronous messages": "Asynchronous Messages"]
+        XCTAssertEqual(
+            PromptTemplates.resolveMatchAction(
+                priorLabelMatch: "Asynchronous Messages",
+                matchKind: "instance_of",
+                priorDocsLabelMap: map
+            ),
+            .typedEdge(canonical: "Asynchronous Messages", edgeType: .instanceOf)
+        )
+        XCTAssertEqual(
+            PromptTemplates.resolveMatchAction(
+                priorLabelMatch: "Asynchronous Messages",
+                matchKind: "attribute_of",
+                priorDocsLabelMap: map
+            ),
+            .typedEdge(canonical: "Asynchronous Messages", edgeType: .attributeOf)
+        )
+        XCTAssertEqual(
+            PromptTemplates.resolveMatchAction(
+                priorLabelMatch: "Asynchronous Messages",
+                matchKind: "process_for",
+                priorDocsLabelMap: map
+            ),
+            .typedEdge(canonical: "Asynchronous Messages", edgeType: .processFor)
+        )
+    }
+
+    func test_resolveMatchAction_invalidPriorLabel_yieldsNoMatch() {
+        let map = ["x": "X"]
+        let action = PromptTemplates.resolveMatchAction(
+            priorLabelMatch: "Hallucinated",
+            matchKind: "same_entity",
+            priorDocsLabelMap: map
+        )
+        XCTAssertEqual(action, .noMatch)
+    }
+
+    func test_resolveMatchAction_unknownMatchKind_yieldsNoMatch() {
+        // Defensive: unknown kinds are refused rather than guessed.
+        let map = ["x": "X"]
+        let action = PromptTemplates.resolveMatchAction(
+            priorLabelMatch: "X",
+            matchKind: "synonym_of",  // not in our taxonomy
+            priorDocsLabelMap: map
+        )
+        XCTAssertEqual(action, .noMatch)
+    }
+
+    // MARK: - Gemini response-schema builder
+
+    func test_buildExtractionResponseSchema_includesEnumWhenPriorLabelsPresent() throws {
+        let schema = GeminiBackend.buildExtractionResponseSchema(
+            priorCanonicalLabels: ["Helena Vargas", "Annual Wellness Visit"]
+        )
+        // Serialize and re-read to assert on shape independent of dictionary ordering.
+        let data = try JSONSerialization.data(withJSONObject: schema)
+        let s = String(data: data, encoding: .utf8) ?? ""
+        XCTAssertTrue(s.contains("\"enum\""))
+        XCTAssertTrue(s.contains("\"Helena Vargas\""))
+        XCTAssertTrue(s.contains("\"Annual Wellness Visit\""))
+        // match_kind enum should always be present
+        XCTAssertTrue(s.contains("\"same_entity\""))
+        XCTAssertTrue(s.contains("\"instance_of\""))
+        XCTAssertTrue(s.contains("\"attribute_of\""))
+        XCTAssertTrue(s.contains("\"process_for\""))
+    }
+
+    func test_buildExtractionResponseSchema_omitsPriorLabelMatchEnumWhenListEmpty() throws {
+        let schema = GeminiBackend.buildExtractionResponseSchema(priorCanonicalLabels: [])
+        let data = try JSONSerialization.data(withJSONObject: schema)
+        let s = String(data: data, encoding: .utf8) ?? ""
+        XCTAssertFalse(s.contains("\"prior_label_match\""))
+        // match_kind still present even with no priors (LLM may speculate; parser will treat as noMatch)
+        XCTAssertTrue(s.contains("\"same_entity\""))
+    }
+
+    func test_buildExtractionResponseSchema_fallsBackToUnrestrictedStringWhenOverBudget() throws {
+        // Construct labels whose total chars exceed the ~1500 budget.
+        // 50 labels × 50 chars = 2500 → over budget → enum dropped.
+        let bigLabels = (0..<50).map { i in
+            String(repeating: "x", count: 49) + String(i)
+        }
+        let schema = GeminiBackend.buildExtractionResponseSchema(priorCanonicalLabels: bigLabels)
+        let data = try JSONSerialization.data(withJSONObject: schema)
+        let s = String(data: data, encoding: .utf8) ?? ""
+        // prior_label_match field still present (so the LLM can flag matches),
+        // but with no enum constraint — parser-side validation handles it.
+        XCTAssertTrue(s.contains("\"prior_label_match\""))
+        // No occurrences of the actual label values in the schema => no enum was emitted.
+        XCTAssertFalse(s.contains("xxxxxxxxxxxxxxxxxx"))
+    }
+
+    func test_buildExtractionResponseSchema_stripsNewlinesFromLabels() throws {
+        let dirty = ["Clean Label", "Label with\nnewline", "Tab\there"]
+        let schema = GeminiBackend.buildExtractionResponseSchema(priorCanonicalLabels: dirty)
+        let data = try JSONSerialization.data(withJSONObject: schema)
+        let s = String(data: data, encoding: .utf8) ?? ""
+        // Newlines/tabs should be replaced with spaces in the enum values.
+        XCTAssertTrue(s.contains("\"Label with newline\""))
+        XCTAssertTrue(s.contains("\"Tab here\""))
+        XCTAssertFalse(s.contains("\\n"), "embedded newlines leaked into enum")
     }
 
     func test_sceBufferDiscard_skippingMergeLeavesLiveGraphUntouched() {
