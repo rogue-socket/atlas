@@ -434,7 +434,7 @@ Each pair references same real-world thing across two docs. Embedding similarity
 |---|---|---|---|---|---|
 | 1 | CLI | "Asynchronous messages" | PAT | "In-app messaging: response within 6 business hours, typically much faster" | ✅ caught at 0.85 |
 | 2 | CLI | "same-day or next-day results" | PAT | "Lab result release: typically within 24 hours of completion" | ✅ caught at 0.85 |
-| 3 | CLI | "Lab Result Communication" (concept) | PAT | "Lab result release: typically within 24 hours of completion" (entity) | ✅ caught at 0.80 by tuned prompt (2026-05-17), prior runs missed |
+| 3 | CLI | "Lab Result Communication" (concept) | PAT | "Lab result release: typically within 24 hours of completion" (entity) | ❌ in-band at 0.80 (sim 0.804) but stably rejected 3/3 by v2 prompt — see 2026-05-18 correction in score block. v1 caught it 2/3 but was retired (catalog-leaf FP regression) |
 | 4 | CLI | "referral and prior authorization handled by VitaCare care coordinators" | PAT | "Care coordinator handles prior authorization where required" | ✅ caught at 0.80 |
 | 5 | CLI | "referral and prior authorization handled by VitaCare care coordinators" | PAT | "care coordinator manages the referral end-to-end" | ✅ caught at 0.80 |
 | 6 | CLI | "referral and prior authorization handled by VitaCare care coordinators" | PAT | "Care coordinator matches the patient to a high-quality specialist within their insurance network" | ✅ caught at 0.75 |
@@ -460,16 +460,20 @@ Each pair references same real-world thing across two docs. Embedding similarity
 
 Recall at default 0.80: 25%. At 0.75: 40%. Headroom to improve via prompt engineering, embedding model upgrade, or aggressive threshold tuning paired with stricter LLM adjudication.
 
-**Score after 2026-05-17 prompt-tuning pass (floor 0.80, Gemini T=0 + topK=1):**
-- Rubric in-band recall: **7/7 caught in all 3 runs** (rows 1, 2, 3, 4, 5, 6, 10, 13 — eight rubric-rows-in-band; rows 3, 10, 13 newly caught vs prior). The 12 not-in-band rows still need lower floor or different embedding to surface.
-- Rubric precision: **8/8 traps rejected in all 3 runs** (from §"SHOULD-NOT-MERGE" — same eight pairs that hold across all prior runs).
-- Off-rubric extras (not on either rubric list, surfaced by the tuned prompt; need future rubric placement):
-  - `Advanced Imaging Referrals ↔ Referral Process` (0.879, 2/3 runs) — clear subset; promote to SHOULD-MERGE row 21.
-  - `Asynchronous messages ↔ Message response: within 6 business hours during business days` (0.877, 3/3) — symmetric to row 1; promote to SHOULD-MERGE row 22.
+**Score after 2026-05-17 prompt-tuning pass (floor 0.80, Gemini T=0 + topK=1) — corrected 2026-05-18 from sidecar re-inspection. See `audits/2026-05-17_etr-prompt-tune.md` for the full per-run table.**
+
+- **Rubric in-band set at floor 0.80: 7 rows** (rows 1, 2, 3, 4, 5, 10, 13). Row 6's "ref+prior auth ↔ Care coordinator matches patient to high-quality specialist" sits below floor — only reached the band at 0.75 in the 2026-05-16 sweep, not at 0.80.
+- **Rubric in-band recall: 6 of 7 caught in all 3 v2 runs** (rows 1, 2, 4, 5, 10, 13 stable). Rows 10 and 13 — the two named hard targets — flipped 0/3 → 3/3 under the tuned prompt (was the headline win). **Row 3 is in-band (sim 0.804) but stably rejected 3/3 in v2 runs**; v1 of the revision caught it 2/3 but was retired due to the catalog-leaf FP regression — the same anti-pattern that fixed v1's `<leaf service> ↔ "VitaCare Services"` over-merging also fires on row 3's concept↔entity merge.
+- **Net rubric recall on the 20-pair SHOULD-MERGE set: 6/20 = 30%** at floor 0.80. The other 13 rubric rows sit below 0.80 cosine on `gemini-embedding-2-preview` 3072-dim; per the audit doc, recall lift past 30% requires either a floor drop (cheap) or an embedding-text composition change / embedding-model swap (real lever).
+- **Rubric precision: 8/8 traps rejected in all 3 runs** (from §"SHOULD-NOT-MERGE" — unchanged).
+- **Off-rubric extras (cross-doc, surfaced stably by the tuned prompt; need future rubric placement):**
+  - `Asynchronous messages ↔ Message response: within 6 business hours during business days` (0.877, 3/3) — symmetric to row 1; promote to SHOULD-MERGE row 21.
+  - `Referral Process ↔ referral and prior authorization handled by VitaCare care coordinators` (0.810, 3/3) — cross-level paraphrase (PAT concept ↔ CLI entity) of the same operational pathway as rows 4-5; promote to SHOULD-MERGE row 22.
+  - `Advanced Imaging Referrals ↔ Referral Process` (0.879, 2/3) — subset relation, debatable merge; promote to SHOULD-MERGE row 23 (mark as ⚠️ debatable).
   - `Business Continuity & Disaster Recovery ↔ Operational Reliability` (0.815, 3/3) — marginal; defer rubric placement until reviewed.
   - `Chronic Condition Programs ↔ "no additional cost for members of programs in diabetes, hypertension…"` (0.808, 2/3) — entity is a pricing-fact about the concept; arguably hierarchy not merge; defer.
 
-Methodology note: Gemini at temperature 0.0 + topK 1 is still non-deterministic across runs (4-5 approvals seen on the *old* prompt across 3 same-data reruns). Diagnostic reads must use the stable 3-of-3 intersection per pair, not single-run approval counts. Rubric-anchored precision/recall above is the 3-of-3 reading.
+**Methodology note:** Gemini at temperature 0.0 + topK 1 is still non-deterministic across runs (4-5 approvals seen on the *old* prompt across 3 same-data reruns; 10/10/11 on v2). Diagnostic reads must use the stable 3-of-3 intersection per pair, not single-run approval counts. The numbers above are the 3-of-3 reading derived from the 11 audit sidecars in `Atlas/graphs/etr_audit_*.json` (1 yesterday baseline + 1 baseline-tonight + 3 det-old + 3 v1-tuned + 3 v2-tuned).
 
 ### v2 SHOULD-NOT-MERGE — 20 cross-doc pairs
 
