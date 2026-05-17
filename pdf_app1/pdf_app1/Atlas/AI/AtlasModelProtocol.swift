@@ -18,6 +18,25 @@ struct RawConcept: Codable {
     let level: String?       // "concept" or "entity" — nil for flat extraction
     let parentLabel: String? // label of parent concept (for entities)
     let entities: [RawConcept]? // nested entities when using hierarchical extraction
+    // SCE step 2 (Option D): the LLM declares a match against a prior-doc label
+    // listed in the prior-docs header. Parser-side label-rewrite uses this to
+    // bridge the textSpan-verbatim-vs-label-reuse tension surfaced in
+    // 2026-05-16 findings (label-copy instructions consistently lost to the
+    // current-doc textSpan anchor). Optional + tolerated absent in legacy
+    // responses (decoder uses defaultValue).
+    let priorLabelMatch: String?
+    // SCE step 3: the LLM categorizes the relationship between this concept
+    // and `priorLabelMatch`. `same_entity` → parser merges by rename. The
+    // typed-relation kinds (`instance_of`, `attribute_of`, `process_for`)
+    // become typed cross-doc edges instead of merges, preserving signal
+    // that prior label-only matching collapsed into precision losses.
+    let matchKind: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case label, type, summary, textSpan, confidence, level, parentLabel, entities
+        case priorLabelMatch = "prior_label_match"
+        case matchKind = "match_kind"
+    }
 }
 
 // MARK: - Raw Edge (from AI)
@@ -41,19 +60,26 @@ struct ExtractionContext {
     // listing of nodes anchored in prior docs (label · type · summary, one per line).
     // nil for doc 1 in an SCE run and for all non-SCE runs.
     let priorDocsContext: String?
+    // SCE step 3: lowercased → canonical map of prior-doc labels. Backend uses
+    // the canonical list to constrain `prior_label_match` as a Gemini enum
+    // (no hallucinations possible). Parser uses the map for case-insensitive
+    // lookup at rewrite time. Empty when no prior docs.
+    let priorDocsLabelMap: [String: String]
 
     init(
         documentTitle: String,
         pageRange: Range<Int>,
         existingConcepts: [String],
         outlineHints: [String],
-        priorDocsContext: String? = nil
+        priorDocsContext: String? = nil,
+        priorDocsLabelMap: [String: String] = [:]
     ) {
         self.documentTitle = documentTitle
         self.pageRange = pageRange
         self.existingConcepts = existingConcepts
         self.outlineHints = outlineHints
         self.priorDocsContext = priorDocsContext
+        self.priorDocsLabelMap = priorDocsLabelMap
     }
 }
 
