@@ -114,8 +114,11 @@ class ExtractionPipeline {
         let priorDocsHeader: String? = hasPriorDocNodes
             ? PromptTemplates.cumulativeStateHeader(priorDocsGraph: graph, currentDocURL: documentURL)
             : nil
+        let priorDocsLabelMap: [String: String] = hasPriorDocNodes
+            ? PromptTemplates.priorDocsLabelMap(graph: graph, currentDocURL: documentURL)
+            : [:]
         if let h = priorDocsHeader {
-            log.info("[SCE] doc=\(documentURL.lastPathComponent, privacy: .public) prior-docs-header: \(h.split(separator: "\n").count) line(s)")
+            log.info("[SCE] doc=\(documentURL.lastPathComponent, privacy: .public) prior-docs-header: \(h.split(separator: "\n").count) line(s), label-map: \(priorDocsLabelMap.count) entries")
         }
 
         // Cross-doc reuse via `graph.node(matching:)` (exact-lowercase label
@@ -158,6 +161,7 @@ class ExtractionPipeline {
                     existingLabels: existingLabels,
                     outlineHints: outlineHints,
                     priorDocsHeader: priorDocsHeader,
+                    priorDocsLabelMap: priorDocsLabelMap,
                     projectID: projectID
                 )
                 let promptTokens = backend.lastResponsePromptTokens.map(String.init) ?? "?"
@@ -267,6 +271,7 @@ class ExtractionPipeline {
         existingLabels: [String],
         outlineHints: [String],
         priorDocsHeader: String? = nil,
+        priorDocsLabelMap: [String: String] = [:],
         projectID: UUID? = nil
     ) async throws {
         // Step 1: Extract text
@@ -330,7 +335,8 @@ class ExtractionPipeline {
             pageRange: pageRange,
             existingConcepts: existingLabels,
             outlineHints: outlineHints,
-            priorDocsContext: priorDocsHeader
+            priorDocsContext: priorDocsHeader,
+            priorDocsLabelMap: priorDocsLabelMap
         )
 
         // Step 4: AI concept extraction (hierarchical)
@@ -356,6 +362,11 @@ class ExtractionPipeline {
         // Step 5: Anchor resolution + hierarchical graph integration
         var anchored = 0
         var rejected = 0
+        // SCE Option D/E telemetry — tracked at batch level
+        var scePriorMatchClaims = 0       // LLM populated prior_label_match
+        var scePriorMatchRenames = 0      // valid claim with same_entity → rename
+        var scePriorMatchMerges = 0       // rename actually landed on an existing node
+        var scePriorMatchTypedEdges = 0   // valid claim with instance_of/attribute_of/process_for → typed edge
 
         for rawConcept in rawConcepts {
             // Resolve concept-level node
@@ -377,11 +388,33 @@ class ExtractionPipeline {
             // This prevents orphan entities when the LLM returns a flat list.
             let effectiveLevel: NodeLevel = .concept
 
-            // Check for existing concept node with same label
-            let existingNode = graph.node(matching: rawConcept.label)
+            // SCE Option D+E: resolve action from (prior_label_match, match_kind).
+            if rawConcept.priorLabelMatch != nil { scePriorMatchClaims += 1 }
+            let conceptAction = PromptTemplates.resolveMatchAction(
+                priorLabelMatch: rawConcept.priorLabelMatch,
+                matchKind: rawConcept.matchKind,
+                priorDocsLabelMap: priorDocsLabelMap
+            )
+            let conceptLookupLabel: String
+            switch conceptAction {
+            case .mergeByRename(let canonical):
+                conceptLookupLabel = canonical
+                if canonical.lowercased() != rawConcept.label.lowercased() {
+                    scePriorMatchRenames += 1
+                    log.info("[SCE] concept rename: \"\(rawConcept.label, privacy: .public)\" → \"\(canonical, privacy: .public)\" via same_entity")
+                }
+            case .typedEdge, .noMatch:
+                conceptLookupLabel = rawConcept.label
+            }
+
+            let existingNode = graph.node(matching: conceptLookupLabel)
             let conceptNodeID: UUID
 
             if var existing = existingNode {
+                if case .mergeByRename = conceptAction,
+                   existing.label.lowercased() != rawConcept.label.lowercased() {
+                    scePriorMatchMerges += 1
+                }
                 existing.sourceAnchors.append(conceptAnchor)
                 if let summary = rawConcept.summary, existing.summary == nil {
                     existing.summary = summary
@@ -393,7 +426,7 @@ class ExtractionPipeline {
             } else {
                 let colorIndex = effectiveLevel == .concept ? graph.nextHighlightColorIndex() : nil
                 let node = ConceptNode(
-                    label: rawConcept.label,
+                    label: conceptLookupLabel,
                     type: conceptType,
                     summary: rawConcept.summary,
                     sourceAnchors: [conceptAnchor],
@@ -404,6 +437,22 @@ class ExtractionPipeline {
                 graph.addNode(node)
                 conceptNodeID = node.id
                 log.debug("[Step 5] Added concept: \"\(node.label)\"")
+            }
+
+            // SCE Option E typed-edge: when match_kind classifies the new node
+            // as a non-equivalence relationship to a prior canonical, record
+            // it as a typed cross-doc edge instead of merging.
+            if case .typedEdge(let canonical, let edgeType) = conceptAction,
+               let priorNode = graph.node(matching: canonical) {
+                let edge = GraphEdge(
+                    sourceNodeID: conceptNodeID,
+                    targetNodeID: priorNode.id,
+                    type: edgeType,
+                    confidence: rawConcept.confidence ?? 0.7
+                )
+                graph.addEdge(edge)
+                scePriorMatchTypedEdges += 1
+                log.info("[SCE] concept typed-edge: \"\(rawConcept.label, privacy: .public)\" -[\(edgeType.rawValue, privacy: .public)]→ \"\(canonical, privacy: .public)\"")
             }
 
             // Note: `rawConcept.subtopicOf` is ignored under the 4-level model.
@@ -429,11 +478,33 @@ class ExtractionPipeline {
 
                 let entityType = rawEntity.type.asConceptType(default: .definition)
 
-                // Check if entity already exists
-                let existingEntity = graph.node(matching: rawEntity.label)
+                // SCE Option D+E: same action-based branching for entities.
+                if rawEntity.priorLabelMatch != nil { scePriorMatchClaims += 1 }
+                let entityAction = PromptTemplates.resolveMatchAction(
+                    priorLabelMatch: rawEntity.priorLabelMatch,
+                    matchKind: rawEntity.matchKind,
+                    priorDocsLabelMap: priorDocsLabelMap
+                )
+                let entityLookupLabel: String
+                switch entityAction {
+                case .mergeByRename(let canonical):
+                    entityLookupLabel = canonical
+                    if canonical.lowercased() != rawEntity.label.lowercased() {
+                        scePriorMatchRenames += 1
+                        log.info("[SCE] entity rename: \"\(rawEntity.label, privacy: .public)\" → \"\(canonical, privacy: .public)\" via same_entity")
+                    }
+                case .typedEdge, .noMatch:
+                    entityLookupLabel = rawEntity.label
+                }
+
+                let existingEntity = graph.node(matching: entityLookupLabel)
 
                 let entityNodeID: UUID
                 if var existing = existingEntity {
+                    if case .mergeByRename = entityAction,
+                       existing.label.lowercased() != rawEntity.label.lowercased() {
+                        scePriorMatchMerges += 1
+                    }
                     existing.sourceAnchors.append(entityAnchor)
                     if let summary = rawEntity.summary, existing.summary == nil {
                         existing.summary = summary
@@ -446,7 +517,7 @@ class ExtractionPipeline {
                     // Inherit highlight color from parent concept
                     let parentColor = graph.node(for: conceptNodeID)?.highlightColorIndex
                     let entity = ConceptNode(
-                        label: rawEntity.label,
+                        label: entityLookupLabel,
                         type: entityType,
                         summary: rawEntity.summary,
                         sourceAnchors: [entityAnchor],
@@ -457,6 +528,20 @@ class ExtractionPipeline {
                     graph.addNode(entity)
                     entityNodeID = entity.id
                     log.debug("[Step 5] Added entity: \"\(entity.label)\" under \"\(rawConcept.label)\"")
+                }
+
+                // SCE Option E typed-edge for entities.
+                if case .typedEdge(let canonical, let edgeType) = entityAction,
+                   let priorNode = graph.node(matching: canonical) {
+                    let edge = GraphEdge(
+                        sourceNodeID: entityNodeID,
+                        targetNodeID: priorNode.id,
+                        type: edgeType,
+                        confidence: rawEntity.confidence ?? 0.7
+                    )
+                    graph.addEdge(edge)
+                    scePriorMatchTypedEdges += 1
+                    log.info("[SCE] entity typed-edge: \"\(rawEntity.label, privacy: .public)\" -[\(edgeType.rawValue, privacy: .public)]→ \"\(canonical, privacy: .public)\"")
                 }
 
                 // Ensure containsEntity edge exists (concept → entity).
@@ -477,9 +562,17 @@ class ExtractionPipeline {
             }
         }
         log.info("[Step 5] Anchor resolution: \(anchored) anchored, \(rejected) rejected")
+        if !priorDocsLabelMap.isEmpty {
+            log.info("[SCE] doc=\(documentURL.lastPathComponent, privacy: .public) pages=\(pageRange.lowerBound + 1)-\(pageRange.upperBound) match_summary: claims=\(scePriorMatchClaims) renames=\(scePriorMatchRenames) merges=\(scePriorMatchMerges) typed_edges=\(scePriorMatchTypedEdges)")
+        }
 
-        // Step 6: Edge proposal
-        let conceptLabels = graph.allNodes.map { $0.label }
+        // Step 6: Edge proposal. Restrict to concept-level nodes — the prompt
+        // explicitly asks for cross-topic relationships between concepts; tossing
+        // entities + chapters + documents into the list bloats the response and
+        // induced JSON-truncation failures on Pro at >200-node graphs.
+        let conceptLabels = graph.allNodes
+            .filter { $0.level == .concept }
+            .map { $0.label }
         if conceptLabels.count >= 2 {
             log.info("[Step 6] Requesting edge proposals for \(conceptLabels.count) concepts...")
             do {
