@@ -30,16 +30,25 @@ enum PromptTemplates {
 
             \(header)
 
-            CRITICAL: When the current text discusses any of these things, COPY THE LABEL EXACTLY — character-for-character, including capitalization, punctuation, and word order. Do NOT paraphrase, abbreviate, expand, prefix with titles, or "improve" the wording. Nodes only merge across documents when labels match exactly.
+            When the current text discusses one of the prior items above, FLAG the relationship using two optional fields on the concept/entity: `prior_label_match` (the value MUST be COPIED character-for-character from one of the bullet labels above — any value not in that list will be silently discarded by the parser) and `match_kind` (one of: `same_entity`, `instance_of`, `attribute_of`, `process_for`). Keep your `label` and `textSpan` natural for the current document; the parser uses these two fields to merge or to add a typed cross-document edge.
 
-            Worked examples of CORRECT reuse:
-            - Prior list: "Annual Wellness Visit". Current text describes wellness visits → use "Annual Wellness Visit". Bad: "Wellness Visit", "Wellness Visits", "Annual Wellness".
-            - Prior list: "Helena Vargas". Current text mentions Dr. Vargas → use "Helena Vargas". Bad: "Dr. Helena Vargas", "Vargas", "Dr. Vargas".
-            - Prior list: "Telehealth Platform". Current text describes the same platform → use "Telehealth Platform". Bad: "National Telehealth Platform", "Telehealth System".
+            DIRECTION RULE (strict): for every `match_kind` except `same_entity`, the CURRENT item must be the MORE SPECIFIC, NARROWER, or DERIVED thing, and the PRIOR bullet must be the BROADER, more general parent thing. If the relationship is reversed (current is broader than prior), OMIT both `prior_label_match` and `match_kind`. Do not flag a relationship just because two things are related; the direction must be current(narrow) → prior(broad).
 
-            Create a NEW label only when the current concept is genuinely distinct — a different real-world thing — even if the topic area overlaps. For example, prior list "Behavioral Health Services" vs. current text introducing "Behavioral Health Records Privacy" are separate concepts and should be separate nodes.
+            `match_kind` semantics — pick the ONE that fits, and only when the direction rule holds:
+            - `same_entity` — current item is THE SAME real-world thing as the prior bullet, just framed differently (different wording, abbreviation, expansion, casing, or sub-phrase). Parser will MERGE the two into one node. (Direction symmetric; no narrow/broad constraint.)
+            - `instance_of` — current is a SPECIFIC INSTANCE or sub-type of the prior bullet's broader category. Example direction: current "MRI" → prior "Medical imaging". REJECT direction: current "Medical imaging" → prior "MRI" (broader → narrower is wrong; omit instead).
+            - `attribute_of` — current is a PROPERTY, VALUE, COUNT, MEASUREMENT, or SPECIFICATION of the prior bullet. Example direction: current "8pm closing time" → prior "Clinic Operating Hours". REJECT direction: current "Clinic Operating Hours" → prior "8pm closing time" (the named entity is broader than its value; omit).
+            - `process_for` — current is an ACTION, PROCEDURE, WORKFLOW, or PROCESS that operates ON or PRODUCES the prior bullet. Example direction: current "Visit Scheduling" → prior "Annual Wellness Visit". REJECT direction: current "Annual Wellness Visit" → prior "Visit Scheduling" (the entity is not a process for its own scheduling; omit).
 
-            The `type` shown on prior nodes is advisory; reuse the label even when the type would differ.
+            Pattern templates (abstract — apply to whatever domain the text is from):
+            - same_entity: prior `<Canonical Phrase>` ↔ current `<paraphrase / abbreviation / expansion>` referring to the SAME thing.
+            - instance_of: prior `<Broad Category>` ↔ current `<specific named instance under that category>`.
+            - attribute_of: prior `<Entity X>` ↔ current `<a time / count / SLA / metric / policy / value of X>`.
+            - process_for: prior `<Entity X>` ↔ current `<scheduling / matching / generating / validating / measuring X>`.
+
+            If NONE of the four apply — the current item is a genuinely separate real-world thing — OMIT both `prior_label_match` and `match_kind`. Do not flag.
+
+            The `type` shown on prior nodes is advisory. Cross-level matches (concept ↔ entity) are allowed for any `match_kind`.
 
             """
         } else {
@@ -81,13 +90,17 @@ enum PromptTemplates {
               "summary": "One sentence explaining this concept",
               "textSpan": "exact verbatim quote from text",
               "confidence": 0.95,
+              "prior_label_match": "Exact Prior Label",
+              "match_kind": "same_entity",
               "entities": [
                 {
                   "label": "Specific Entity Name",
                   "type": "definition",
                   "summary": "One sentence explanation",
                   "textSpan": "exact verbatim quote from text",
-                  "confidence": 0.9
+                  "confidence": 0.9,
+                  "prior_label_match": "Exact Prior Label",
+                  "match_kind": "same_entity"
                 }
               ]
             }
@@ -106,6 +119,7 @@ enum PromptTemplates {
         REQUIRED concept fields: label, type, summary, textSpan, confidence
         REQUIRED entity fields: label, type, summary, textSpan, confidence
         REQUIRED edge fields: sourceLabel, targetLabel, type, confidence, linkingPhrase
+        OPTIONAL fields on concepts/entities: `prior_label_match` (must come from the cross-document reuse list, if shown) paired with `match_kind` (one of: same_entity, instance_of, attribute_of, process_for). Both present together or both absent. Omit when no relationship to a prior item.
         Concept types: concept, theorem, method, claim
         Entity types: definition, example, person, dataset, result, equation
         Edge types: dependsOn, contradicts, exampleOf, defines, extends, cites, sameTopic, partOf, uses
@@ -118,6 +132,78 @@ enum PromptTemplates {
         TEXT:
         \(text)
         """
+    }
+
+    // MARK: - SCE Prior-Label-Match Resolution
+
+    /// Build the lowercased→canonical-cased map of labels eligible for
+    /// `prior_label_match` rewriting. Includes every node anchored ONLY in
+    /// prior documents (i.e. not anchored in `currentDocURL`). Match semantics
+    /// mirror `KnowledgeGraph.node(matching:)`'s case-insensitive index, so we
+    /// validate the LLM's claim case-insensitively but preserve the original
+    /// casing on rewrite (the prior node's canonical label).
+    static func priorDocsLabelMap(graph: KnowledgeGraph, currentDocURL: URL) -> [String: String] {
+        var map: [String: String] = [:]
+        for node in graph.allNodes {
+            let anchors = node.sourceAnchors
+            guard !anchors.isEmpty else { continue }
+            if anchors.contains(where: { $0.documentURL == currentDocURL }) { continue }
+            map[node.label.lowercased()] = node.label
+        }
+        return map
+    }
+
+    /// Decide the effective label for graph insertion: if the LLM's claimed
+    /// `prior_label_match` is a member of `priorDocsLabelMap`, return the
+    /// canonical prior label (drives the parser-side merge); otherwise return
+    /// the LLM's original `rawLabel` unchanged.
+    static func resolveEffectiveLabel(
+        rawLabel: String,
+        priorLabelMatch: String?,
+        priorDocsLabelMap: [String: String]
+    ) -> (effectiveLabel: String, renamed: Bool) {
+        guard let claimed = priorLabelMatch?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !claimed.isEmpty,
+              let canonical = priorDocsLabelMap[claimed.lowercased()] else {
+            return (rawLabel, false)
+        }
+        return (canonical, canonical.lowercased() != rawLabel.lowercased())
+    }
+
+    /// SCE step 3: a richer match decision that splits `same_entity` (merge) from
+    /// the typed-edge kinds. Returns `.noMatch` for absent/invalid claims; the
+    /// caller treats those identically to the pre-Option-D code path.
+    enum SCEMatchAction: Equatable {
+        case noMatch
+        case mergeByRename(canonical: String)
+        case typedEdge(canonical: String, edgeType: EdgeType)
+    }
+
+    static func resolveMatchAction(
+        priorLabelMatch: String?,
+        matchKind: String?,
+        priorDocsLabelMap: [String: String]
+    ) -> SCEMatchAction {
+        guard let claimed = priorLabelMatch?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !claimed.isEmpty,
+              let canonical = priorDocsLabelMap[claimed.lowercased()] else {
+            return .noMatch
+        }
+        let kind = matchKind?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        switch kind {
+        case "instance_of": return .typedEdge(canonical: canonical, edgeType: .instanceOf)
+        case "attribute_of": return .typedEdge(canonical: canonical, edgeType: .attributeOf)
+        case "process_for": return .typedEdge(canonical: canonical, edgeType: .processFor)
+        case "same_entity", nil, "":
+            // Missing matchKind defaults to merge for backward compat with
+            // step-2 responses that only had prior_label_match.
+            return .mergeByRename(canonical: canonical)
+        default:
+            // Unknown kind — refuse to act. Safer than guessing.
+            return .noMatch
+        }
     }
 
     // MARK: - SCE Cumulative-State Header
