@@ -17,6 +17,34 @@ final class URLDataBookmarker: ProjectBookmarking, RecentFilesBookmarking {
     func refreshBookmark(for url: URL) -> Data? {
         createBookmark(for: url)
     }
+
+    func pathFromBookmark(_ data: Data) -> URL? {
+        guard let str = String(data: data, encoding: .utf8) else { return nil }
+        return URL(string: str)
+    }
+}
+
+/// Simulates a transient resolve failure — bookmark blob is intact, path can
+/// still be extracted, but `resolveBookmark` returns nil (USB unplugged,
+/// sandbox revoked, ScopedBookmarksAgent hung, etc.). Used to exercise the
+/// "keep the bookmark, surface the URL for the orphan-sweep alive-set"
+/// recovery path in `RecentFilesManager.loadRecentFiles`.
+final class FailingResolveBookmarker: RecentFilesBookmarking {
+    func createBookmark(for url: URL) -> Data? {
+        url.absoluteString.data(using: .utf8)
+    }
+
+    func resolveBookmark(_ data: Data, isStale: inout Bool) -> URL? {
+        isStale = false
+        return nil
+    }
+
+    func refreshBookmark(for url: URL) -> Data? { nil }
+
+    func pathFromBookmark(_ data: Data) -> URL? {
+        guard let str = String(data: data, encoding: .utf8) else { return nil }
+        return URL(string: str)
+    }
 }
 
 func makeTempDirectory() throws -> URL {

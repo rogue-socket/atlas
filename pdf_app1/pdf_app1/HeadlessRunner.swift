@@ -126,20 +126,31 @@ final class HeadlessRunner {
 
         let runStart = Date()
 
-        // --etr-only: skip extraction. Load existing project graph into the
+        // Resolve every file's URL up front. Used by --etr-only's project-wide
+        // load and by the post-extraction per-doc save loop. Files whose
+        // bookmark fails to resolve are dropped here with a warning.
+        let projectURLs: [URL] = files.compactMap { file in
+            guard let url = projectsManager.resolveURL(for: project.id, fileID: file.id) else {
+                log.error("[Headless] bookmark resolve failed up-front: \(file.displayName, privacy: .public) — file will be skipped")
+                return nil
+            }
+            return url
+        }
+
+        // --etr-only: skip extraction. Load existing per-doc graphs into the
         // injected `graph` (which started empty) so ETR runs against the
         // prior extraction without re-spending the LLM extract budget.
         if config.etrOnly {
-            log.info("[Headless] --etr-only: skipping per-doc extraction; loading existing project graph")
-            if let loaded = GraphStore.shared.loadProjectGraph(projectID: project.id) {
-                graph.merge(from: loaded)
-                log.info("[Headless] --etr-only: loaded \(graph.nodeCount)n/\(graph.edgeCount)e from project graph")
-            } else {
-                log.error("[Headless] --etr-only: no project graph on disk for \(project.id.uuidString.prefix(8)) — nothing to resolve")
+            log.info("[Headless] --etr-only: skipping per-doc extraction; loading existing per-doc graphs")
+            let loaded = GraphStore.shared.loadProjectWideGraph(documentURLs: projectURLs)
+            guard loaded.nodeCount > 0 else {
+                log.error("[Headless] --etr-only: no per-doc graphs on disk for \(project.name, privacy: .public) — nothing to resolve")
                 exit(4)
             }
+            graph.merge(from: loaded)
+            log.info("[Headless] --etr-only: loaded \(graph.nodeCount)n/\(graph.edgeCount)e from per-doc graphs")
             await runETR(config: config, aiService: aiService, graph: graph, projectID: project.id)
-            GraphStore.shared.saveProjectGraph(graph, projectID: project.id)
+            for url in projectURLs { GraphStore.shared.scheduleSave(graph, for: url) }
             GraphStore.shared.flushPendingSave()
             let total = Date().timeIntervalSince(runStart)
             log.info("[Headless] --etr-only done in \(String(format: "%.1f", total))s — exiting")
@@ -178,7 +189,6 @@ final class HeadlessRunner {
                 pageRange: 0..<pdf.pageCount,
                 graph: graph,
                 aiService: aiService,
-                projectID: project.id,
                 mode: config.mode
             )
             let elapsed = Date().timeIntervalSince(docStart)
@@ -187,16 +197,18 @@ final class HeadlessRunner {
             if didStart { url.stopAccessingSecurityScopedResource() }
         }
 
-        // Save project graph before ETR so the on-disk state matches in-memory
+        // Save per-doc graphs before ETR so the on-disk state matches in-memory
         // (ETR mutates `graph` in place; we want a snapshot of the pre-ETR
-        // graph for diff/audit purposes).
-        GraphStore.shared.saveProjectGraph(graph, projectID: project.id)
+        // graph for diff/audit purposes). scheduleSave scopes via
+        // encodeSubgraph(for: documentURL) so each file holds only its own
+        // anchored nodes + edges between them.
+        for url in projectURLs { GraphStore.shared.scheduleSave(graph, for: url) }
         GraphStore.shared.flushPendingSave()
 
         if config.runETR {
             await runETR(config: config, aiService: aiService, graph: graph, projectID: project.id)
             // Re-save after ETR mutates the graph.
-            GraphStore.shared.saveProjectGraph(graph, projectID: project.id)
+            for url in projectURLs { GraphStore.shared.scheduleSave(graph, for: url) }
             GraphStore.shared.flushPendingSave()
         }
 

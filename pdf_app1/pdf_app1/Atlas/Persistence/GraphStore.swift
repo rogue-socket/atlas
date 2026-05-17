@@ -32,10 +32,6 @@ class GraphStore {
         graphsDirectory.appendingPathComponent("\(documentURL.absoluteString.sha256HexPrefix16).json")
     }
 
-    private func projectGraphFileURL(for projectID: UUID) -> URL {
-        graphsDirectory.appendingPathComponent("project_\(projectID.uuidString).json")
-    }
-
     // MARK: - Save / Load per Document
 
     private struct StoredGraph: Codable {
@@ -157,38 +153,6 @@ class GraphStore {
         return merged
     }
 
-    // MARK: - Save / Load per Project
-
-    func saveProjectGraph(_ graph: KnowledgeGraph, projectID: UUID) {
-        do {
-            let data = try graph.encode()
-            let fileURL = projectGraphFileURL(for: projectID)
-            try data.write(to: fileURL, options: .atomic)
-            log.info("[GraphStore] Saved project graph \(projectID.uuidString.prefix(8)): \(graph.nodeCount) nodes, \(graph.edgeCount) edges (\(data.count) bytes)")
-        } catch {
-            log.error("[GraphStore] Failed to save project graph \(projectID): \(error)")
-        }
-    }
-
-    func loadProjectGraph(projectID: UUID) -> KnowledgeGraph? {
-        let fileURL = projectGraphFileURL(for: projectID)
-        guard fileManager.fileExists(atPath: fileURL.path) else {
-            log.info("[GraphStore] No saved project graph for \(projectID.uuidString.prefix(8))")
-            return nil
-        }
-
-        do {
-            let data = try Data(contentsOf: fileURL)
-            let graph = KnowledgeGraph()
-            try graph.decode(from: data)
-            log.info("[GraphStore] Loaded project graph \(projectID.uuidString.prefix(8)): \(graph.nodeCount) nodes, \(graph.edgeCount) edges")
-            return graph
-        } catch {
-            log.error("[GraphStore] Failed to load project graph \(projectID): \(error)")
-            return nil
-        }
-    }
-
     // MARK: - Debounced Save
 
     func scheduleSave(_ graph: KnowledgeGraph, for documentURL: URL) {
@@ -247,20 +211,6 @@ class GraphStore {
         }
     }
 
-    func deleteProjectGraph(projectID: UUID) {
-        let fileURL = projectGraphFileURL(for: projectID)
-        guard fileManager.fileExists(atPath: fileURL.path) else {
-            log.info("[GraphStore] deleteProjectGraph: no graph on disk for project \(projectID.uuidString.prefix(8))")
-            return
-        }
-        do {
-            try fileManager.removeItem(at: fileURL)
-            log.info("[GraphStore] deleteProjectGraph: removed graph for project \(projectID.uuidString.prefix(8))")
-        } catch {
-            log.error("[GraphStore] deleteProjectGraph: failed for project \(projectID): \(error)")
-        }
-    }
-
     // MARK: - Query
 
     func hasGraph(for documentURL: URL) -> Bool {
@@ -269,23 +219,22 @@ class GraphStore {
 
     // MARK: - Orphan Sweep
 
-    /// Per-doc graph files are named `<sha256HexPrefix16(url)>.json`. The
-    /// sweep is only authorized to delete that family. Every other JSON file
-    /// in `Atlas/graphs/` is owned by a different subsystem and must be left
-    /// alone: `project_*` (project-wide graphs, separate lifecycle),
-    /// `embeddings_*` (`EmbeddingCacheStore`), `etr_audit_*` (resolver audit
-    /// sidecars). Forgetting one here means silent data loss on next launch.
+    /// Per-doc graph files are named `<sha256HexPrefix16(url)>.json`. Legacy
+    /// `project_*.json` files (from the retired write-only project-graph
+    /// pipeline) also qualify — none are alive, so the sweep GCs them.
+    /// Every other JSON file in `Atlas/graphs/` is owned by a different
+    /// subsystem and must be left alone: `embeddings_*` (`EmbeddingCacheStore`),
+    /// `etr_audit_*` (resolver audit sidecars). Forgetting one here means
+    /// silent data loss on next launch.
     static func isSweepablePerDocGraphFile(named name: String) -> Bool {
         guard name.hasSuffix(".json") else { return false }
-        if name.hasPrefix("project_") { return false }
         if name.hasPrefix("embeddings_") { return false }
         if name.hasPrefix("etr_audit_") { return false }
         return true
     }
 
-    /// Deletes per-document graph files whose URL hash is not in `aliveURLs`.
-    /// Project graphs (`project_*.json`) are skipped — those have their own
-    /// lifecycle tied to `ProjectsManager.deleteProject`.
+    /// Deletes per-document graph files whose URL hash is not in `aliveURLs`,
+    /// plus any legacy `project_*.json` files (unconditionally orphan).
     /// Returns the number of files deleted.
     @discardableResult
     func sweepOrphans(aliveURLs: Set<URL>) -> Int {

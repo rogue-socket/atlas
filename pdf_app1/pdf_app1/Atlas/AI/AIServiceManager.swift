@@ -114,7 +114,15 @@ class AIServiceManager {
 
     // MARK: - API Key Management (Keychain)
 
+    // Skip Keychain access under XCTest. The test binary's code signature
+    // differs from the host app's, so macOS prompts for the login-keychain
+    // password on every test run otherwise. No test exercises real API keys.
+    private static let isRunningUnderXCTest: Bool =
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
     func setAPIKey(_ key: String, for backend: AIBackendType) {
+        if Self.isRunningUnderXCTest { return }
+
         let service = "com.atlas.apikey.\(backend.rawValue)"
         let data = key.data(using: .utf8)!
 
@@ -138,6 +146,7 @@ class AIServiceManager {
     }
 
     func getAPIKey(for backend: AIBackendType) -> String? {
+        if Self.isRunningUnderXCTest { return nil }
         // Dev-mode lookup order (Keychain prompts on every fresh process are
         // painful for headless / repeated runs). All sources are local-only.
         //

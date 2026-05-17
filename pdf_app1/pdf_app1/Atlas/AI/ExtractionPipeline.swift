@@ -48,7 +48,6 @@ class ExtractionPipeline {
         pageRange: Range<Int>,
         graph: KnowledgeGraph,
         aiService: AIServiceManager,
-        projectID: UUID? = nil,
         mode: ExtractionMode = .fast
     ) async {
         log.info("=== Starting extraction for \(documentURL.lastPathComponent), pages \(pageRange.lowerBound+1)-\(pageRange.upperBound) ===")
@@ -136,8 +135,7 @@ class ExtractionPipeline {
                     graph: graph,
                     backend: backend,
                     existingLabels: existingLabels,
-                    outlineHints: outlineHints,
-                    projectID: projectID
+                    outlineHints: outlineHints
                 )
                 // Update existing labels for next batch so the LLM doesn't re-extract
                 existingLabels = graph.allNodes.map { $0.label }
@@ -199,7 +197,6 @@ class ExtractionPipeline {
         documentURL: URL,
         graph: KnowledgeGraph,
         aiService: AIServiceManager,
-        projectID: UUID? = nil,
         mode: ExtractionMode = .fast
     ) {
         guard !isProcessing else {
@@ -217,7 +214,6 @@ class ExtractionPipeline {
                 pageRange: 0..<document.pageCount,
                 graph: graph,
                 aiService: aiService,
-                projectID: projectID,
                 mode: mode
             )
         }
@@ -232,8 +228,7 @@ class ExtractionPipeline {
         graph: KnowledgeGraph,
         backend: any AtlasModel,
         existingLabels: [String],
-        outlineHints: [String],
-        projectID: UUID? = nil
+        outlineHints: [String]
     ) async throws {
         // Step 1: Extract text
         let pageResults = textExtractor.extractPages(from: document, pageRange: pageRange)
@@ -487,14 +482,11 @@ class ExtractionPipeline {
             log.info("[Step 6] Skipped edge proposal (only \(conceptLabels.count) concepts)")
         }
 
-        // Step 7: Auto-save
-        if let projectID = projectID {
-            GraphStore.shared.saveProjectGraph(graph, projectID: projectID)
-            log.info("[Step 7] Saved project graph")
-        } else {
-            GraphStore.shared.scheduleSave(graph, for: documentURL)
-            log.info("[Step 7] Scheduled per-document auto-save")
-        }
+        // Step 7: Auto-save. `scheduleSave` scopes via `encodeSubgraph(for:)`
+        // so the per-doc file only contains this doc's anchored nodes
+        // regardless of how big the in-memory project graph is.
+        GraphStore.shared.scheduleSave(graph, for: documentURL)
+        log.info("[Step 7] Scheduled per-document auto-save")
     }
 
     // MARK: - Deep Mode Text Chunking

@@ -15,8 +15,10 @@ final class GraphStoreSweepTests: XCTestCase {
         XCTAssertTrue(GraphStore.isSweepablePerDocGraphFile(named: "b7b3b96e1e929ffe.json"))
     }
 
-    func test_projectGraph_isNotSweepable() {
-        XCTAssertFalse(GraphStore.isSweepablePerDocGraphFile(named: "project_ABE6D4F9-7F9E-4BD8-B977-57D541824DF3.json"))
+    /// Legacy artifact of the retired write-only project-graph pipeline.
+    /// No live writer remains; every `project_*.json` on disk is orphan.
+    func test_legacyProjectGraph_isSweepable() {
+        XCTAssertTrue(GraphStore.isSweepablePerDocGraphFile(named: "project_ABE6D4F9-7F9E-4BD8-B977-57D541824DF3.json"))
     }
 
     func test_embeddingsCache_isNotSweepable() {
