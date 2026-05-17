@@ -92,6 +92,14 @@ enum EdgeType: String, Codable, CaseIterable, Hashable {
     case sameTopic
     case partOf
     case uses
+    // SCE match-kind edges express cross-document relationships flagged by
+    // the LLM via `match_kind` other than `same_entity`. They preserve a
+    // typed link from a new node to a prior-doc node without merging the
+    // two — so a "process_for" relationship (e.g. "X Scheduling" → "X")
+    // stays as a graph edge rather than collapsing into a bad merge.
+    case instanceOf        // current is a specific instance of prior
+    case attributeOf       // current is an attribute/property of prior
+    case processFor        // current is a process/action operating on prior
     // Containment edges express the 4-level fold. Each adjacent pair of
     // levels uses its own edge type so renderer filters can hide them or
     // style them consistently (e.g. drawn faintly, no linkingPhrase label).
@@ -110,6 +118,9 @@ enum EdgeType: String, Codable, CaseIterable, Hashable {
         case .sameTopic: return "Same Topic"
         case .partOf: return "Part Of"
         case .uses: return "Uses"
+        case .instanceOf: return "Instance Of"
+        case .attributeOf: return "Attribute Of"
+        case .processFor: return "Process For"
         case .containsChapter, .containsConcept, .containsEntity: return "Contains"
         }
     }
@@ -125,6 +136,9 @@ enum EdgeType: String, Codable, CaseIterable, Hashable {
         case .sameTopic: return .cyan
         case .partOf: return .indigo
         case .uses: return .mint
+        case .instanceOf: return .teal
+        case .attributeOf: return .pink
+        case .processFor: return .yellow
         case .containsChapter, .containsConcept, .containsEntity: return .secondary
         }
     }
