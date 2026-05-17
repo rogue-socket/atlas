@@ -6,12 +6,17 @@
 //  (mirrors `GraphStore`'s per-project file pattern). Sits next to the
 //  existing `project_<UUID>.json` in `Atlas/graphs/`.
 //
-//  Invalidation has two layers:
-//   1. Whole-file: top-level `modelIdentifier` mismatch ⇒ discard cache.
-//      Guards against mixing vectors from different embedding models
-//      (different vector spaces and often different dimensions).
-//   2. Per-entry: `contentHash` is `sha256(label + ":" + type + ":" + (summary ?? ""))`.
-//      Mismatch ⇒ re-embed just that node. Resolver handles this layer.
+//  Keyed by `contentHash` — `sha256(label + ":" + type + ":" + (summary ?? ""))`
+//  — not by node UUID. Cache hits survive re-extractions that mint new node
+//  UUIDs for unchanged content, and label/type/summary edits correctly miss
+//  (the new hash maps to a fresh embed instead of serving a stale vector).
+//
+//  Invalidation:
+//   - Whole-file: top-level `modelIdentifier` / `vectorDimension` mismatch ⇒
+//     discard cache. Guards against mixing vectors from different embedding
+//     models (different vector spaces, often different dimensions).
+//   - Per-entry: re-key by hash makes per-entry invalidation implicit —
+//     content change ⇒ new hash ⇒ cache miss ⇒ re-embed.
 //
 
 import Foundation
@@ -20,14 +25,8 @@ import os.log
 struct EmbeddingCache: Codable, Sendable {
     var modelIdentifier: String
     var vectorDimension: Int
-    /// Keyed by `ConceptNode.id.uuidString`. JSONEncoder rejects UUID-keyed
-    /// dictionaries, hence the string indirection.
-    var entries: [String: Entry]
-
-    struct Entry: Codable, Sendable {
-        let contentHash: String
-        let vector: [Float]
-    }
+    /// Keyed by `contentHash` (see `EmbeddingResolver.contentHash(for:)`).
+    var entries: [String: [Float]]
 
     static func empty(modelIdentifier: String, vectorDimension: Int) -> EmbeddingCache {
         EmbeddingCache(modelIdentifier: modelIdentifier,
@@ -35,20 +34,18 @@ struct EmbeddingCache: Codable, Sendable {
                        entries: [:])
     }
 
-    func vector(for nodeID: UUID, expectedHash: String) -> [Float]? {
-        guard let entry = entries[nodeID.uuidString] else { return nil }
-        return entry.contentHash == expectedHash ? entry.vector : nil
+    func vector(forHash hash: String) -> [Float]? {
+        entries[hash]
     }
 
-    mutating func put(nodeID: UUID, contentHash: String, vector: [Float]) {
-        entries[nodeID.uuidString] = Entry(contentHash: contentHash, vector: vector)
+    mutating func put(contentHash: String, vector: [Float]) {
+        entries[contentHash] = vector
     }
 
-    /// Drop entries for node IDs no longer present in the live set. Run
-    /// before save to prevent orphan buildup after merges.
-    mutating func retain(_ liveIDs: Set<UUID>) {
-        let liveStrings = Set(liveIDs.map { $0.uuidString })
-        entries = entries.filter { liveStrings.contains($0.key) }
+    /// Drop entries whose hash isn't in the live set. Run before save to
+    /// prevent orphan buildup after re-extractions, merges, or label edits.
+    mutating func retain(_ liveHashes: Set<String>) {
+        entries = entries.filter { liveHashes.contains($0.key) }
     }
 }
 
@@ -68,6 +65,8 @@ enum EmbeddingCacheStore {
 
     /// Load the cache for the given project. Returns nil when the file
     /// doesn't exist or fails to decode (caller treats nil as cold-start).
+    /// Decode failure includes the pre-2026-05-18 UUID-keyed schema —
+    /// those files self-replace on the next save.
     static func load(for projectID: UUID) -> EmbeddingCache? {
         let url = fileURL(for: projectID)
         guard fileManager.fileExists(atPath: url.path) else {
@@ -80,7 +79,7 @@ enum EmbeddingCacheStore {
             log.info("[EmbedCache] Loaded \(cache.entries.count) entries (model=\(cache.modelIdentifier), dim=\(cache.vectorDimension))")
             return cache
         } catch {
-            log.error("[EmbedCache] Failed to load \(url.lastPathComponent): \(error)")
+            log.error("[EmbedCache] Failed to load \(url.lastPathComponent) (likely legacy UUID-keyed schema — cold-start, will replace on next save): \(error)")
             return nil
         }
     }

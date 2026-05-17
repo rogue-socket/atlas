@@ -231,13 +231,14 @@ extension EmbeddingResolver {
                                          vectorDimension: embeddingBackend.vectorDimension)
         }
 
-        // 2. Per-node resolve: cache hit or queue for fresh embed.
+        // 2. Per-node resolve: cache hit (by contentHash) or queue for fresh embed.
         struct Pending { let node: ConceptNode; let hash: String }
         var resolved: [UUID: [Float]] = [:]
         var pending: [Pending] = []
+        let liveHashes: Set<String> = Set(eligible.map { contentHash(for: $0) })
         for node in eligible {
             let h = contentHash(for: node)
-            if let v = cache.vector(for: node.id, expectedHash: h) {
+            if let v = cache.vector(forHash: h) {
                 resolved[node.id] = v
             } else {
                 pending.append(Pending(node: node, hash: h))
@@ -253,13 +254,13 @@ extension EmbeddingResolver {
             }
             for (p, v) in zip(pending, vectors) {
                 resolved[p.node.id] = v
-                cache.put(nodeID: p.node.id, contentHash: p.hash, vector: v)
+                cache.put(contentHash: p.hash, vector: v)
             }
         }
 
-        // 3. Save cache with orphan cleanup (drops entries for nodes
-        //    no longer in the graph — e.g. after a prior merge).
-        cache.retain(Set(eligible.map { $0.id }))
+        // 3. Save cache with orphan cleanup (drops entries whose hash isn't
+        //    in the live set — e.g. after a label edit or content rewrite).
+        cache.retain(liveHashes)
         do {
             try EmbeddingCacheStore.save(cache, for: projectID)
         } catch {
