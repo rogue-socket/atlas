@@ -392,7 +392,22 @@ enum PromptTemplates {
     /// topic." Same-name-but-different-scope cases ("on-site labs" vs
     /// "external labs", "internal audits" vs "external audits") are anti-
     /// examples drawn from the locked-in vitacare quality pairs.
+    /// Public entry point. Currently routes to v2 (the published prompt that
+    /// matches the rubric scores in `prds/2026-05-15_4-level-knowledge-graph.md`
+    /// §"Quality Rubric v2" and the analysis in
+    /// `audits/2026-05-17_etr-prompt-tune.md`).
+    ///
+    /// **To A/B test v3**: change the call below to `mergeAdjudicationV3(...)`.
+    /// v3 is the abstract-pattern variant (no vitacare-specific exemplars in
+    /// the prompt body); see `audits/2026-05-18_v3-prompt-experiment.md` for
+    /// the head-to-head result. Both versions share the pair-format helper and
+    /// the final JSON-array instruction wrapper.
     static func mergeAdjudication(pairs: [(a: ConceptNode, b: ConceptNode)]) -> String {
+        return mergeAdjudicationV2(pairs: pairs)
+    }
+
+    /// Pair formatter shared by every prompt revision.
+    private static func formatAdjudicationBody(_ pairs: [(a: ConceptNode, b: ConceptNode)]) -> String {
         let formatPair: (Int, ConceptNode, ConceptNode) -> String = { i, a, b in
             let summaryA = a.summary?.isEmpty == false ? a.summary! : "(no summary)"
             let summaryB = b.summary?.isEmpty == false ? b.summary! : "(no summary)"
@@ -401,9 +416,18 @@ enum PromptTemplates {
                B: "\(b.label)" (type=\(b.type.rawValue), level=\(b.level.rawValue)) — \(summaryB)
             """
         }
+        return pairs.enumerated().map { formatPair($0.offset, $0.element.a, $0.element.b) }.joined(separator: "\n\n")
+    }
 
-        let body = pairs.enumerated().map { formatPair($0.offset, $0.element.a, $0.element.b) }.joined(separator: "\n\n")
-
+    /// **v2 — published prompt (2026-05-17).** Vitacare-specific MERGE and
+    /// KEEP-SEPARATE exemplars inline. 7/7 in-band rubric recall claim was
+    /// later corrected to 6/7 (`audits/2026-05-17_etr-prompt-tune.md` §A).
+    /// On the 2026-05-18 fresh extraction (different abstraction level), this
+    /// produced 12/52 approvals at floor 0.80 with ~33% eyeball precision —
+    /// the vitacare exemplars don't match new-extraction labels, so the
+    /// patterns under-generalize and over-merge.
+    private static func mergeAdjudicationV2(pairs: [(a: ConceptNode, b: ConceptNode)]) -> String {
+        let body = formatAdjudicationBody(pairs)
         return """
         You are deciding whether candidate pairs of knowledge-graph nodes describe the same real-world thing.
 
@@ -448,6 +472,53 @@ enum PromptTemplates {
           • "Group Programs" ↔ "VitaCare Services"
 
         When uncertain, prefer KEEP SEPARATE (false). Only merge when you can articulate the single real-world thing both labels point at.
+
+        Pairs:
+        \(body)
+
+        Return ONLY a JSON array of \(pairs.count) booleans, one per pair, in the same order. No prose, no explanation, no code fences. Example for 4 pairs: [true, false, true, false]
+        """
+    }
+
+    /// **v3 — abstract-pattern variant (2026-05-18, experimental).** Same
+    /// pattern scaffolding as v2, vitacare-specific exemplars stripped, leaf-
+    /// of-catalog anti-pattern made explicit via word-list heuristic. On the
+    /// same 2026-05-18 fresh extraction this produced 4/52 approvals at floor
+    /// 0.80 (vs v2's 12/52). Correctly rejected 5 of v2's likely-wrong merges,
+    /// kept all 4 cleanest merges, but dropped 1 real merge (SUD Record
+    /// Protections ↔ Behavioral Health Record Privacy — regulatory subset)
+    /// because the abstract patterns don't surface that relationship.
+    /// Still over-merges on 2 umbrella↔umbrella pairs where the leaf-of-
+    /// catalog rule can't asymmetrically detect umbrella vs aspect.
+    /// Full A/B in `audits/2026-05-18_v3-prompt-experiment.md`.
+    private static func mergeAdjudicationV3(pairs: [(a: ConceptNode, b: ConceptNode)]) -> String {
+        let body = formatAdjudicationBody(pairs)
+        return """
+        You are deciding whether candidate pairs of knowledge-graph nodes describe the same real-world thing.
+
+        For each numbered pair, output exactly one boolean: true to merge, false to keep separate.
+
+        The test: could the two labels appear as bullet points under the same heading in a document describing a single process, service, fact, or entity? If yes → merge. If they share a topic word but describe different events, different aspects, or different scope → keep separate.
+
+        MERGE when ANY of these patterns fit. Each pattern names a relationship type and the criterion that must hold:
+
+        - **Paraphrase.** Both labels describe the same operational fact, action, or measurable property — same who, same what, same when, same scope — written with different wording.
+        - **Process ↔ implementation.** One label names a process at the concept level and the other describes how that exact process is carried out. The "what" must be identical at the same scope; only the abstraction level differs.
+        - **Same activity from different angles.** Two labels describe the same activity (same actor + same action + same target), differing only in which side of the activity the label foregrounds. Not to be confused with the leaf-of-catalog anti-pattern below.
+        - **Same role + same task.** Two role descriptions where both the actor and the task are the same.
+
+        KEEP SEPARATE when ANY of these patterns fit. Each pattern names a failure mode the merge prompt is commonly tempted by:
+
+        - **Shared noun, different fact.** The labels share a topic word but address different events, different aspects of the same object, different timeframes, or different scope.
+        - **Different metrics.** Both are numeric outcomes but measure different things, even if related.
+        - **Audience / population mismatch.** One serves an internal audience (staff, employees, vendors) and the other serves an external audience (customers, patients, regulators), even when the underlying activity rhymes.
+        - **Same job-title noun, different people.** Two distinct named roles that share a role-noun ("officer", "coordinator", "lead") are not the same role.
+        - **Adjacent-but-distinct programs.** Two programs of the same general type but differing by delivery modality, population, location, or vendor relationship (internal vs external, on-site vs off-site, etc.).
+        - **Service vs the function that manages it.** A service offering vs the procurement / vendor-management / quality function around that service category.
+        - **LEAF ↔ CATALOG (most common false-positive).** One label is a specific service, program, or item, and the other is the broader umbrella catalog, portfolio, overview, or grouping it sits inside. The relationship is hierarchy (use a hierarchy edge), NOT identity. Heuristic: if label A is a single concrete offering and label B uses words like "overview", "services", "portfolio", "model", "framework", "principles", "areas" — it is almost certainly leaf-of-catalog. Default to false here.
+        - **Object ↔ property of object.** Both labels reference the same physical or organizational object, but one describes an operational use of it and the other describes a compliance, quality, or availability attribute of it.
+
+        When uncertain, prefer KEEP SEPARATE (false). Merge only when you can articulate the single real-world thing both labels point at — without paraphrasing either label to fit the other.
 
         Pairs:
         \(body)
