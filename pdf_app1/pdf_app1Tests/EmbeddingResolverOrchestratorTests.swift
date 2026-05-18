@@ -292,8 +292,8 @@ final class EmbeddingResolverOrchestratorTests: XCTestCase {
         XCTAssertTrue(entry.exactLabelMatch)
         XCTAssertEqual(entry.finalReason, "exactLabel")
         XCTAssertNil(entry.llmVerdict, "Exact-label merge bypasses LLM, so no verdict")
-        XCTAssertTrue(entry.aDoc == "org.pdf" || entry.bDoc == "org.pdf")
-        XCTAssertTrue(entry.aDoc == "cmp.pdf" || entry.bDoc == "cmp.pdf")
+        XCTAssertTrue(entry.aDocs.contains("org.pdf") || entry.bDocs.contains("org.pdf"))
+        XCTAssertTrue(entry.aDocs.contains("cmp.pdf") || entry.bDocs.contains("cmp.pdf"))
     }
 
     func test_resolve_doesNotWriteAuditFile_whenAuditDirNil() async throws {

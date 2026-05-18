@@ -77,11 +77,12 @@ struct MergePlan: Sendable {
 struct ResolverAuditEntry: Codable, Sendable {
     let aID: String
     let aLabel: String
-    let aDoc: String?      // primary source-doc filename (first anchor)
+    let aDocs: [String]    // every distinct source-doc filename, sorted; multi-element
+                           // when the node has been merged across docs in a prior run
     let aLevel: String     // "concept" or "entity"
     let bID: String
     let bLabel: String
-    let bDoc: String?
+    let bDocs: [String]
     let bLevel: String
     let similarity: Float
     let band: String       // "autoMerge" | "adjudication" | "exactLabel"
@@ -148,6 +149,13 @@ enum EmbeddingResolver {
     /// **exact same set** of source documents — that includes the common case
     /// of "both came from the same single doc" and the rarer "both already
     /// merged across the same docs."
+    ///
+    /// Edge case worth knowing: if `a` is single-doc `{X}` and `b` is multi-
+    /// doc `{X, Y}` (e.g., previously merged across docs), the sets differ
+    /// so this returns true — they enter adjudication even though both
+    /// share doc X. The intent is that a previously-spanning canonical `b`
+    /// should be reconsidered against single-doc siblings. Trace in
+    /// `audits/2026-05-18_etr-in-doc-pair-trace.md`.
     static func isCrossDoc(_ a: ConceptNode, _ b: ConceptNode) -> Bool {
         let setA = Set(a.sourceAnchors.map { $0.documentURL })
         let setB = Set(b.sourceAnchors.map { $0.documentURL })
@@ -394,19 +402,26 @@ extension EmbeddingResolver {
     // MARK: - Audit helpers
 
     /// Internal for unit testability. Builds an audit row from two nodes.
+    /// `aDocs`/`bDocs` capture every distinct source-doc filename (sorted),
+    /// so a sidecar reader can see when a pair involves a previously-merged
+    /// multi-doc node — see `isCrossDoc` docstring and
+    /// `audits/2026-05-18_etr-in-doc-pair-trace.md`.
     static func makeAuditEntry(a: ConceptNode, b: ConceptNode,
                                sim: Float, band: String,
                                exactLabel: Bool,
                                llmVerdict: String?,
                                finalReason: String?) -> ResolverAuditEntry {
-        ResolverAuditEntry(
+        let docNames: (ConceptNode) -> [String] = { node in
+            Set(node.sourceAnchors.map { $0.documentURL.lastPathComponent }).sorted()
+        }
+        return ResolverAuditEntry(
             aID: a.id.uuidString,
             aLabel: a.label,
-            aDoc: a.sourceAnchors.first?.documentURL.lastPathComponent,
+            aDocs: docNames(a),
             aLevel: a.level.rawValue,
             bID: b.id.uuidString,
             bLabel: b.label,
-            bDoc: b.sourceAnchors.first?.documentURL.lastPathComponent,
+            bDocs: docNames(b),
             bLevel: b.level.rawValue,
             similarity: sim,
             band: band,
