@@ -406,7 +406,7 @@ enum PromptTemplates {
     /// `audits/2026-05-18_rubric-v3-vitacare.md`. All versions share the
     /// pair-format helper and the final JSON-array instruction wrapper.
     static func mergeAdjudication(pairs: [(a: ConceptNode, b: ConceptNode)]) -> String {
-        return mergeAdjudicationV2(pairs: pairs)
+        return mergeAdjudicationV4(pairs: pairs)
     }
 
     /// Pair formatter shared by every prompt revision.
