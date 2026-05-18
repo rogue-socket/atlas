@@ -124,6 +124,11 @@ final class HeadlessRunner {
             exit(3)
         }
 
+        if let proOverride = ProcessInfo.processInfo.environment["ATLAS_GEMINI_MODEL"], !proOverride.isEmpty {
+            log.info("[Headless] ATLAS_GEMINI_MODEL override: \(proOverride, privacy: .public)")
+            aiService.selectedModel = proOverride
+        }
+
         let runStart = Date()
 
         // Resolve every file's URL up front. Used by --etr-only's project-wide
