@@ -210,7 +210,6 @@ final class ProjectsManager: ObservableObject {
                     GraphStore.shared.deleteGraph(for: url)
                 }
             }
-            GraphStore.shared.deleteProjectGraph(projectID: projectID)
         }
         projects.removeAll { $0.id == projectID }
         if selectedProjectID == projectID {

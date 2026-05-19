@@ -117,7 +117,6 @@ final class HeadlessRunner {
                 pageRange: 0..<pdf.pageCount,
                 graph: graph,
                 aiService: aiService,
-                projectID: project.id,
                 mode: config.mode
             )
             let elapsed = Date().timeIntervalSince(docStart)

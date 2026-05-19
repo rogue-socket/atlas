@@ -131,6 +131,196 @@ final class RecentFilesManagerTests: XCTestCase {
                        "still present — counter should have reset on removeInaccessibleFile")
     }
 
+    /// Data-loss regression: when `resolveBookmark` fails transiently (USB
+    /// unplugged, sandbox revoked, ScopedBookmarksAgent hung — none of which
+    /// mean the file is actually gone), `loadRecentFiles` previously deleted
+    /// the bookmark from persistence immediately, bypassing the 3-launch
+    /// stale counter. The graph orphan sweep then GC'd the per-doc graph file
+    /// because the URL was no longer in any alive-set source.
+    ///
+    /// Expected behavior: the bookmark survives on disk, the URL surfaces in
+    /// `recentFiles` (extracted from the bookmark blob via `pathFromBookmark`,
+    /// no security scope needed), and the index is marked inaccessible so the
+    /// existing 3-launch counter can own the eventual cleanup.
+    func testUnresolvableBookmark_PreservesEntryAndBookmarkForSweep() throws {
+        let suiteName = "RecentFilesManagerTests-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Failed to create UserDefaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let url = URL(fileURLWithPath: "/tmp/atlas-bookmark-recovery-\(UUID().uuidString).pdf")
+
+        // Setup: add a file with a working bookmarker so a real bookmark blob
+        // lands in UserDefaults.
+        let workingBookmarker = URLDataBookmarker()
+        let s1 = RecentFilesManager(userDefaults: defaults, bookmarker: workingBookmarker)
+        s1.addRecentFile(url)
+        XCTAssertEqual(s1.recentFiles, [url])
+
+        let persistedBefore = (try? JSONDecoder().decode([Data].self,
+            from: defaults.data(forKey: AppConstants.recentFilesBookmarksKey) ?? Data())) ?? []
+        XCTAssertEqual(persistedBefore.count, 1, "1 bookmark on disk after add")
+
+        // Simulated "next launch": same UserDefaults, but the resolver now fails.
+        let failingBookmarker = FailingResolveBookmarker()
+        let s2 = RecentFilesManager(userDefaults: defaults, bookmarker: failingBookmarker)
+        waitForFileChecks(s2)
+
+        // (a) Bookmark blob must NOT be deleted from persistence.
+        let persistedAfter = (try? JSONDecoder().decode([Data].self,
+            from: defaults.data(forKey: AppConstants.recentFilesBookmarksKey) ?? Data())) ?? []
+        XCTAssertEqual(persistedAfter.count, 1,
+                       "bookmark must survive a transient resolve failure (got \(persistedAfter.count))")
+
+        // (b) URL must surface in recentFiles (path extracted from bookmark blob)
+        //     so the orphan-sweep alive-set keeps the per-doc graph file.
+        XCTAssertEqual(s2.recentFiles, [url],
+                       "URL must be derivable from bookmark blob even when resolve fails")
+
+        // (c) Index 0 must be marked inaccessible so the 3-launch stale counter
+        //     can own the eventual cleanup.
+        XCTAssertTrue(s2.inaccessibleFiles.contains(0),
+                      "expected index 0 to be marked inaccessible, got \(s2.inaccessibleFiles)")
+    }
+
+    /// Companion: even when `resolveBookmark` fails for 3 launches in a row,
+    /// the stale counter still fires and removes the entry. The fix must not
+    /// break the existing auto-removal contract.
+    func testUnresolvableBookmark_StillAutoRemovedAfterThreeStaleLaunches() throws {
+        let suiteName = "RecentFilesManagerTests-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Failed to create UserDefaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let url = URL(fileURLWithPath: "/tmp/atlas-stale-recovery-\(UUID().uuidString).pdf")
+
+        let s1 = RecentFilesManager(userDefaults: defaults, bookmarker: URLDataBookmarker())
+        s1.addRecentFile(url)
+        waitForFileChecks(s1)
+
+        // Three consecutive failing-resolve launches: counter goes 1, 2, 3.
+        let failing = FailingResolveBookmarker()
+        let s2 = RecentFilesManager(userDefaults: defaults, bookmarker: failing)
+        waitForFileChecks(s2)
+        XCTAssertEqual(s2.recentFiles, [url], "present after 1st stale launch")
+
+        let s3 = RecentFilesManager(userDefaults: defaults, bookmarker: failing)
+        waitForFileChecks(s3)
+        XCTAssertEqual(s3.recentFiles, [url], "present after 2nd stale launch")
+
+        let s4 = RecentFilesManager(userDefaults: defaults, bookmarker: failing)
+        waitForFileChecks(s4)
+        XCTAssertEqual(s4.recentFiles, [], "auto-removed after 3rd stale launch")
+
+        let persistedAfter = (try? JSONDecoder().decode([Data].self,
+            from: defaults.data(forKey: AppConstants.recentFilesBookmarksKey) ?? Data())) ?? []
+        XCTAssertEqual(persistedAfter.count, 0,
+                       "bookmark blob also removed on the auto-remove pass")
+    }
+
+    /// `replaceBookmark` is the back-end of the "Locate…" recovery flow:
+    /// when the user re-grants access to an inaccessible recent via
+    /// NSOpenPanel, we mint a fresh bookmark for the picked URL, swap it
+    /// in place, and clear the inaccessible flag. The entry stays at the
+    /// same index (recents order is preserved).
+    func testReplaceBookmark_RestoresAccessAndClearsInaccessibleFlag() throws {
+        let suiteName = "RecentFilesManagerTests-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Failed to create UserDefaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let oldURL = URL(fileURLWithPath: "/tmp/atlas-old-\(UUID().uuidString).pdf")
+        let newURL = URL(fileURLWithPath: "/tmp/atlas-new-\(UUID().uuidString).pdf")
+
+        let s1 = RecentFilesManager(userDefaults: defaults, bookmarker: URLDataBookmarker())
+        s1.addRecentFile(oldURL)
+
+        // Reboot with a failing resolver → entry is inaccessible.
+        let s2 = RecentFilesManager(userDefaults: defaults, bookmarker: FailingResolveBookmarker())
+        waitForFileChecks(s2)
+        XCTAssertEqual(s2.recentFiles, [oldURL])
+        XCTAssertTrue(s2.inaccessibleFiles.contains(0))
+
+        // User locates the file via NSOpenPanel; we replay that as a direct
+        // call to replaceBookmark. The bookmarker can still mint bookmarks
+        // (NSOpenPanel grants a fresh security scope), even though resolve
+        // would still fail on the next launch.
+        let ok = s2.replaceBookmark(at: 0, with: newURL)
+        XCTAssertTrue(ok, "replaceBookmark should succeed when index is in range")
+
+        XCTAssertEqual(s2.recentFiles, [newURL], "URL must be swapped at the same index")
+        XCTAssertFalse(s2.inaccessibleFiles.contains(0),
+                       "inaccessible flag must clear after the user re-grants access")
+
+        let persisted = (try? JSONDecoder().decode([Data].self,
+            from: defaults.data(forKey: AppConstants.recentFilesBookmarksKey) ?? Data())) ?? []
+        XCTAssertEqual(persisted.count, 1, "still exactly one bookmark on disk")
+    }
+
+    /// `replaceBookmark` must clear the stale-launch counter keyed on the
+    /// OLD path. Otherwise UserDefaults accumulates dead counter entries
+    /// forever, and a re-add of the old path later inherits a stale count.
+    func testReplaceBookmark_ClearsStaleCounterForOldPath() throws {
+        let suiteName = "RecentFilesManagerTests-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Failed to create UserDefaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let oldURL = URL(fileURLWithPath: "/tmp/atlas-old-\(UUID().uuidString).pdf")
+        let newURL = URL(fileURLWithPath: "/tmp/atlas-new-\(UUID().uuidString).pdf")
+
+        // Add + 2 stale launches → counter[oldPath] = 2.
+        let s1 = RecentFilesManager(userDefaults: defaults, bookmarker: URLDataBookmarker())
+        s1.addRecentFile(oldURL)
+        waitForFileChecks(s1)
+        let s2 = RecentFilesManager(userDefaults: defaults, bookmarker: URLDataBookmarker())
+        waitForFileChecks(s2)
+        let s3 = RecentFilesManager(userDefaults: defaults, bookmarker: URLDataBookmarker())
+        waitForFileChecks(s3)
+
+        let counterKey = "RecentFiles.staleLaunchCounter"
+        let counterBefore = defaults.dictionary(forKey: counterKey) as? [String: Int] ?? [:]
+        XCTAssertEqual(counterBefore[oldURL.path], 2, "counter should be at 2 after 2 stale launches")
+
+        XCTAssertTrue(s3.replaceBookmark(at: 0, with: newURL))
+
+        let counterAfter = defaults.dictionary(forKey: counterKey) as? [String: Int] ?? [:]
+        XCTAssertNil(counterAfter[oldURL.path],
+                     "stale counter for the OLD path must be cleared after replaceBookmark")
+        XCTAssertNil(counterAfter[newURL.path],
+                     "new path should not inherit any stale count")
+    }
+
+    /// Out-of-range index returns false and leaves state untouched.
+    func testReplaceBookmark_OutOfRangeReturnsFalse() throws {
+        let suiteName = "RecentFilesManagerTests-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Failed to create UserDefaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let url = URL(fileURLWithPath: "/tmp/atlas-only-\(UUID().uuidString).pdf")
+        let s = RecentFilesManager(userDefaults: defaults, bookmarker: URLDataBookmarker())
+        s.addRecentFile(url)
+
+        XCTAssertFalse(s.replaceBookmark(at: 5, with: URL(fileURLWithPath: "/tmp/x.pdf")))
+        XCTAssertEqual(s.recentFiles, [url], "recents untouched on out-of-range index")
+    }
+
     /// Cross-reboot tracer: a file added in one manager instance is still
     /// present after a "reboot" (new manager with the same UserDefaults).
     func testFilesPersistAcrossReboot() throws {

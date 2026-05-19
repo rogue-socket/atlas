@@ -17,6 +17,12 @@ protocol RecentFilesBookmarking {
     func createBookmark(for url: URL) -> Data?
     func resolveBookmark(_ data: Data, isStale: inout Bool) -> URL?
     func refreshBookmark(for url: URL) -> Data?
+    /// Returns the URL the bookmark blob was originally created for, without
+    /// going through the security-scope daemon. Lets us recover the path of
+    /// an unresolvable bookmark (USB unplugged, sandbox revoked, etc.) so the
+    /// orphan-sweep alive-set still finds the graph file before the 3-launch
+    /// stale counter runs to completion.
+    func pathFromBookmark(_ data: Data) -> URL?
 }
 
 struct SecurityScopedRecentFilesBookmarker: RecentFilesBookmarking {
@@ -34,6 +40,12 @@ struct SecurityScopedRecentFilesBookmarker: RecentFilesBookmarking {
         guard url.startAccessingSecurityScopedResource() else { return nil }
         defer { url.stopAccessingSecurityScopedResource() }
         return try? url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+    }
+
+    func pathFromBookmark(_ data: Data) -> URL? {
+        guard let values = URL.resourceValues(forKeys: [.pathKey], fromBookmarkData: data),
+              let path = values.path else { return nil }
+        return URL(fileURLWithPath: path)
     }
 }
 
@@ -154,7 +166,41 @@ class RecentFilesManager: ObservableObject {
         removeFiles(at: IndexSet(integer: index))
     }
     
-    /// Load recent files from bookmarks. Inaccessible files are kept but tracked in `inaccessibleFiles`.
+    /// Back-end of the "Locate…" recovery flow. When the user re-grants
+    /// access to a previously inaccessible recent via NSOpenPanel, mint a
+    /// fresh bookmark for the picked URL, swap it in at the same index, and
+    /// clear the inaccessible flag + stale-launch counter keyed on the old
+    /// path. Returns false on out-of-range index or createBookmark failure.
+    @discardableResult
+    func replaceBookmark(at index: Int, with newURL: URL) -> Bool {
+        guard index >= 0, index < recentFiles.count else { return false }
+        guard let newBookmark = bookmarker.createBookmark(for: newURL) else { return false }
+
+        var bookmarks: [Data] = []
+        if let existingData = userDefaults.data(forKey: userDefaultsKey),
+           let decoded = try? JSONDecoder().decode([Data].self, from: existingData) {
+            bookmarks = decoded
+        }
+        guard index < bookmarks.count else { return false }
+
+        let oldPath = recentFiles[index].path
+        bookmarks[index] = newBookmark
+        recentFiles[index] = newURL
+        inaccessibleFiles.remove(index)
+
+        var counter = userDefaults.dictionary(forKey: staleLaunchCounterKey) as? [String: Int] ?? [:]
+        counter.removeValue(forKey: oldPath)
+        userDefaults.set(counter, forKey: staleLaunchCounterKey)
+
+        saveBookmarks(bookmarks)
+        return true
+    }
+
+    /// Load recent files from bookmarks. Bookmarks that can't be resolved
+    /// right now are kept on disk and surfaced via the path embedded in the
+    /// bookmark blob (`pathFromBookmark`), marked inaccessible so the existing
+    /// 3-launch stale counter owns the eventual cleanup. Bookmarks whose blob
+    /// can't even yield a path are the only entries we drop here.
     func loadRecentFiles() {
         guard let data = userDefaults.data(forKey: userDefaultsKey),
               var bookmarks = try? JSONDecoder().decode([Data].self, from: data) else {
@@ -166,37 +212,44 @@ class RecentFilesManager: ObservableObject {
         let now = Date()
         let shouldSkipFileCheck = now.timeIntervalSince(lastFileCheckTime) < fileCheckThrottleInterval
 
-        var resolvedURLs: [URL] = []
-        var unresolvedIndices: [Int] = []
-        var inaccessible: Set<Int> = []
+        var loadedURLs: [URL] = []
+        var inaccessibleSet: Set<Int> = []
+        var unrecoverableIndices: [Int] = []   // bookmark blob can't even yield a path → drop
         var didRefreshAny = false
 
         for (index, bookmarkData) in bookmarks.enumerated() {
             var isStale = false
-            guard let url = bookmarker.resolveBookmark(bookmarkData, isStale: &isStale) else {
-                // Bookmark can't be resolved at all — keep in list as inaccessible
-                unresolvedIndices.append(index)
-                continue
-            }
+            if let url = bookmarker.resolveBookmark(bookmarkData, isStale: &isStale) {
+                if isStale, let refreshed = bookmarker.refreshBookmark(for: url) {
+                    bookmarks[index] = refreshed
+                    didRefreshAny = true
+                }
+                loadedURLs.append(url)
 
-            // Persist refreshed bookmark data when stale
-            if isStale, let refreshed = bookmarker.refreshBookmark(for: url) {
-                bookmarks[index] = refreshed
-                didRefreshAny = true
-            }
-
-            resolvedURLs.append(url)
-
-            // Check file existence (throttled)
-            if !shouldSkipFileCheck {
-                let resolvedIndex = resolvedURLs.count - 1
-                fileCheckQueue.async { [weak self] in
-                    if !FileManager.default.fileExists(atPath: url.path) {
-                        DispatchQueue.main.async {
-                            self?.inaccessibleFiles.insert(resolvedIndex)
+                // Check file existence (throttled). If the file is gone, mark
+                // the index inaccessible so the 3-launch counter can fire.
+                if !shouldSkipFileCheck {
+                    let loadedIndex = loadedURLs.count - 1
+                    fileCheckQueue.async { [weak self] in
+                        if !FileManager.default.fileExists(atPath: url.path) {
+                            DispatchQueue.main.async {
+                                self?.inaccessibleFiles.insert(loadedIndex)
+                            }
                         }
                     }
                 }
+            } else if let url = bookmarker.pathFromBookmark(bookmarkData) {
+                // Transient resolve failure (USB unplugged, sandbox quirk,
+                // ScopedBookmarksAgent hung). Keep the bookmark on disk, surface
+                // the URL so orphan-sweep doesn't GC the per-doc graph, and
+                // mark inaccessible so the 3-launch counter owns deletion.
+                loadedURLs.append(url)
+                inaccessibleSet.insert(loadedURLs.count - 1)
+            } else {
+                // Bookmark blob is unrecoverable — neither resolve nor path
+                // extraction works. Rare; drop it so the list doesn't grow
+                // dead entries forever.
+                unrecoverableIndices.append(index)
             }
         }
 
@@ -204,21 +257,19 @@ class RecentFilesManager: ObservableObject {
             lastFileCheckTime = now
         }
 
-        // For unresolved bookmarks, add placeholder URLs so indices stay aligned
-        // Actually, we skip them and track by resolved index — simpler to just remove unresolvable ones
-        if !unresolvedIndices.isEmpty {
-            for index in unresolvedIndices.reversed() {
+        if !unrecoverableIndices.isEmpty {
+            for index in unrecoverableIndices.reversed() {
                 bookmarks.remove(at: index)
             }
         }
 
-        if !unresolvedIndices.isEmpty || didRefreshAny {
+        if !unrecoverableIndices.isEmpty || didRefreshAny {
             saveBookmarks(bookmarks)
         }
 
-        recentFiles = resolvedURLs
-        inaccessible.formUnion(inaccessibleFiles) // keep any previously detected inaccessible entries
-        inaccessibleFiles = inaccessible
+        recentFiles = loadedURLs
+        inaccessibleSet.formUnion(inaccessibleFiles) // keep any previously detected inaccessible entries
+        inaccessibleFiles = inaccessibleSet
     }
 
     /// Increment stale launch counter for inaccessible files and auto-remove those seen stale for 3+ launches.

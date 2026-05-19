@@ -901,52 +901,64 @@ struct MultiDocumentView: View {
                         ForEach(Array(recentFilesManager.recentFiles.enumerated()), id: \.element.path) { index, url in
                             let isInaccessible = recentFilesManager.inaccessibleFiles.contains(index)
                             HStack(spacing: 6) {
-                                Image(systemName: isInaccessible ? "exclamationmark.triangle.fill" : "doc.fill")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(isInaccessible ? .orange : .blue)
-                                    .frame(width: 14)
+                                HStack(spacing: 6) {
+                                    Image(systemName: isInaccessible ? "exclamationmark.triangle.fill" : "doc.fill")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(isInaccessible ? .orange : .blue)
+                                        .frame(width: 14)
 
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(url.lastPathComponent)
-                                        .font(.system(size: 12))
-                                        .lineLimit(1)
-                                    Text(isInaccessible ? "File not accessible" : url.deletingLastPathComponent().lastPathComponent)
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.secondary)
-                                        .lineLimit(1)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(url.lastPathComponent)
+                                            .font(.system(size: 12))
+                                            .lineLimit(1)
+                                        Text(isInaccessible ? "File not accessible" : url.deletingLastPathComponent().lastPathComponent)
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(1)
+                                    }
+
+                                    Spacer()
+                                }
+                                .opacity(isInaccessible ? 0.5 : 1.0)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    let result = documentManager.openDocument(url)
+                                    switch result {
+                                    case .success, .alreadyOpen:
+                                        break
+                                    case .tooManyTabs:
+                                        alertManager.showAlert(title: "Too Many Tabs", message: "Close some tabs before opening a new document.")
+                                    case .fileNotReadable:
+                                        alertManager.showAlert(
+                                            title: "File Not Accessible",
+                                            message: "This file can no longer be accessed. It may have been moved or its access revoked.",
+                                            primaryButton: "Locate…",
+                                            secondaryButton: "Remove from Recents",
+                                            primaryAction: { locateInaccessibleRecent(at: index, originalURL: url) },
+                                            secondaryAction: { recentFilesManager.removeInaccessibleFile(at: index) }
+                                        )
+                                    case .invalidPDF:
+                                        alertManager.showAlert(
+                                            title: "Invalid PDF",
+                                            message: "This file is not a valid PDF document.",
+                                            primaryButton: "Remove from Recents",
+                                            secondaryButton: "Cancel",
+                                            primaryAction: { recentFilesManager.removeInaccessibleFile(at: index) }
+                                        )
+                                    }
                                 }
 
-                                Spacer()
+                                if isInaccessible {
+                                    Button("Locate…") {
+                                        locateInaccessibleRecent(at: index, originalURL: url)
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .controlSize(.small)
+                                    .help("Re-grant access to this file")
+                                }
                             }
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
-                            .opacity(isInaccessible ? 0.5 : 1.0)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                let result = documentManager.openDocument(url)
-                                switch result {
-                                case .success, .alreadyOpen:
-                                    break
-                                case .tooManyTabs:
-                                    alertManager.showAlert(title: "Too Many Tabs", message: "Close some tabs before opening a new document.")
-                                case .fileNotReadable:
-                                    alertManager.showAlert(
-                                        title: "File Not Accessible",
-                                        message: "This file can no longer be accessed. It may have been moved or deleted.",
-                                        primaryButton: "Remove from Recents",
-                                        secondaryButton: "Cancel",
-                                        primaryAction: { recentFilesManager.removeInaccessibleFile(at: index) }
-                                    )
-                                case .invalidPDF:
-                                    alertManager.showAlert(
-                                        title: "Invalid PDF",
-                                        message: "This file is not a valid PDF document.",
-                                        primaryButton: "Remove from Recents",
-                                        secondaryButton: "Cancel",
-                                        primaryAction: { recentFilesManager.removeInaccessibleFile(at: index) }
-                                    )
-                                }
-                            }
                             .contextMenu {
                                 Button("Remove from Recents", role: .destructive) {
                                     recentFilesManager.removeFiles(at: IndexSet(integer: index))
@@ -964,6 +976,43 @@ struct MultiDocumentView: View {
         }
     }
     
+    private func locateInaccessibleRecent(at index: Int, originalURL: URL) {
+        let panel = NSOpenPanel()
+        panel.title = "Locate \(originalURL.lastPathComponent)"
+        panel.message = "Re-grant access to “\(originalURL.lastPathComponent)”"
+        panel.prompt = "Grant Access"
+        panel.allowedContentTypes = [.pdf]
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = originalURL.deletingLastPathComponent()
+        panel.nameFieldStringValue = originalURL.lastPathComponent
+        panel.begin { response in
+            guard response == .OK, let pickedURL = panel.url else { return }
+            // Index may have shifted if other recents mutated while the panel
+            // was open; look the URL up again rather than trusting `index`.
+            let currentIndex = recentFilesManager.recentFiles.firstIndex(of: originalURL) ?? index
+            guard recentFilesManager.replaceBookmark(at: currentIndex, with: pickedURL) else {
+                alertManager.showAlert(
+                    title: "Couldn't Save Bookmark",
+                    message: "Failed to create a security-scoped bookmark for the selected file."
+                )
+                return
+            }
+            let result = documentManager.openDocument(pickedURL)
+            switch result {
+            case .success, .alreadyOpen:
+                break
+            case .tooManyTabs:
+                alertManager.showAlert(title: "Too Many Tabs", message: "Close some tabs before opening a new document.")
+            case .fileNotReadable:
+                alertManager.showAlert(title: "File Not Accessible", message: "Couldn't open the file after locating it.")
+            case .invalidPDF:
+                alertManager.showAlert(title: "Invalid PDF", message: "This file is not a valid PDF document.")
+            }
+        }
+    }
+
     // MARK: - Main Content
     @ViewBuilder
     private var mainContent: some View {

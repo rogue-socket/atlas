@@ -48,7 +48,6 @@ class ExtractionPipeline {
         pageRange: Range<Int>,
         graph: KnowledgeGraph,
         aiService: AIServiceManager,
-        projectID: UUID? = nil,
         mode: ExtractionMode = .fast
     ) async {
         log.info("=== Starting extraction for \(documentURL.lastPathComponent), pages \(pageRange.lowerBound+1)-\(pageRange.upperBound) ===")
@@ -161,8 +160,7 @@ class ExtractionPipeline {
                     existingLabels: existingLabels,
                     outlineHints: outlineHints,
                     priorDocsHeader: priorDocsHeader,
-                    priorDocsLabelMap: priorDocsLabelMap,
-                    projectID: projectID
+                    priorDocsLabelMap: priorDocsLabelMap
                 )
                 let promptTokens = backend.lastResponsePromptTokens.map(String.init) ?? "?"
                 log.info("[SCE] doc=\(documentURL.lastPathComponent, privacy: .public) batch=\(batchNumber) prompt_tokens=\(promptTokens, privacy: .public)")
@@ -219,11 +217,7 @@ class ExtractionPipeline {
         // entity state (encoding happens synchronously at call time), so
         // without this trailing call the per-doc file would never include
         // chapters or the document-summary node.
-        if let projectID = projectID {
-            GraphStore.shared.saveProjectGraph(graph, projectID: projectID)
-        } else {
-            GraphStore.shared.scheduleSave(graph, for: documentURL)
-        }
+        GraphStore.shared.scheduleSave(graph, for: documentURL)
 
         isProcessing = false
         statusMessage = "Done — \(graph.nodeCount) concepts extracted"
@@ -236,7 +230,6 @@ class ExtractionPipeline {
         documentURL: URL,
         graph: KnowledgeGraph,
         aiService: AIServiceManager,
-        projectID: UUID? = nil,
         mode: ExtractionMode = .fast
     ) {
         guard !isProcessing else {
@@ -254,7 +247,6 @@ class ExtractionPipeline {
                 pageRange: 0..<document.pageCount,
                 graph: graph,
                 aiService: aiService,
-                projectID: projectID,
                 mode: mode
             )
         }
@@ -271,8 +263,7 @@ class ExtractionPipeline {
         existingLabels: [String],
         outlineHints: [String],
         priorDocsHeader: String? = nil,
-        priorDocsLabelMap: [String: String] = [:],
-        projectID: UUID? = nil
+        priorDocsLabelMap: [String: String] = [:]
     ) async throws {
         // Step 1: Extract text
         let pageResults = textExtractor.extractPages(from: document, pageRange: pageRange)
@@ -615,14 +606,11 @@ class ExtractionPipeline {
             log.info("[Step 6] Skipped edge proposal (only \(conceptLabels.count) concepts)")
         }
 
-        // Step 7: Auto-save
-        if let projectID = projectID {
-            GraphStore.shared.saveProjectGraph(graph, projectID: projectID)
-            log.info("[Step 7] Saved project graph")
-        } else {
-            GraphStore.shared.scheduleSave(graph, for: documentURL)
-            log.info("[Step 7] Scheduled per-document auto-save")
-        }
+        // Step 7: Auto-save. `scheduleSave` scopes via `encodeSubgraph(for:)`
+        // so the per-doc file only contains this doc's anchored nodes
+        // regardless of how big the in-memory project graph is.
+        GraphStore.shared.scheduleSave(graph, for: documentURL)
+        log.info("[Step 7] Scheduled per-document auto-save")
     }
 
     // MARK: - Deep Mode Text Chunking
