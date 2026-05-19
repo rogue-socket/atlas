@@ -102,4 +102,66 @@ final class HeadlessRunnerConfigTests: XCTestCase {
         XCTAssertEqual(c?.runETR, false)
         XCTAssertEqual(c?.etrThresholds?.autoMerge, 0.92)
     }
+
+    // MARK: - Per-kind thresholds (2026-05-19, backlog (c))
+
+    func test_parse_adjFloorPerKindFlags_buildPerKindMap() {
+        let c = HeadlessRunnerConfig.parse(from: [
+            "--headless-extract", "--project", "p", "--etr",
+            "--adj-floor-cc", "0.88",
+            "--adj-floor-ee", "0.75",
+            "--adj-floor-cl", "0.82"
+        ])
+        let t = c?.etrThresholds
+        XCTAssertEqual(t?.adjudicationFloorPerKind[.conceptConcept], 0.88)
+        XCTAssertEqual(t?.adjudicationFloorPerKind[.entityEntity],   0.75)
+        XCTAssertEqual(t?.adjudicationFloorPerKind[.crossLevel],     0.82)
+        // Flat field falls back to default when no plain --adj-floor was passed.
+        XCTAssertEqual(t?.adjudicationFloor, ResolverThresholds.default.adjudicationFloor)
+    }
+
+    func test_parse_autoMergePerKindFlags_buildPerKindMap() {
+        let c = HeadlessRunnerConfig.parse(from: [
+            "--headless-extract", "--project", "p", "--etr",
+            "--auto-merge-cc", "0.97",
+            "--auto-merge-ee", "0.92"
+        ])
+        let t = c?.etrThresholds
+        XCTAssertEqual(t?.autoMergePerKind[.conceptConcept], 0.97)
+        XCTAssertEqual(t?.autoMergePerKind[.entityEntity],   0.92)
+        XCTAssertNil(t?.autoMergePerKind[.crossLevel],
+                     "Unset kinds should not be present in the override map")
+    }
+
+    func test_parse_perKindFlag_aloneStillBuildsThresholds() {
+        // Without any of the flat threshold flags, a single per-kind override
+        // is still enough to materialize a ResolverThresholds value.
+        let c = HeadlessRunnerConfig.parse(from: [
+            "--headless-extract", "--project", "p",
+            "--adj-floor-cc", "0.90"
+        ])
+        XCTAssertNotNil(c?.etrThresholds)
+        XCTAssertEqual(c?.etrThresholds?.adjudicationFloorPerKind[.conceptConcept], 0.90)
+    }
+
+    func test_parse_invalidPerKindValue_silentlyIgnored() {
+        // Non-numeric value falls through; no override entry is recorded.
+        let c = HeadlessRunnerConfig.parse(from: [
+            "--headless-extract", "--project", "p", "--etr",
+            "--adj-floor-cc", "not-a-float"
+        ])
+        XCTAssertNil(c?.etrThresholds?.adjudicationFloorPerKind[.conceptConcept])
+    }
+
+    func test_parse_flatAndPerKindFlags_coexist() {
+        let c = HeadlessRunnerConfig.parse(from: [
+            "--headless-extract", "--project", "p", "--etr",
+            "--adj-floor", "0.80",
+            "--adj-floor-cc", "0.90"
+        ])
+        let t = c?.etrThresholds
+        XCTAssertEqual(t?.adjudicationFloor, 0.80, "flat field carries the --adj-floor value")
+        XCTAssertEqual(t?.adjudicationFloorPerKind[.conceptConcept], 0.90,
+                       "per-kind override is layered on top")
+    }
 }

@@ -28,8 +28,13 @@ struct HeadlessRunnerConfig {
     let etrThresholds: ResolverThresholds?
 
     /// Parse `--headless-extract --project <name> [--mode fast|deep] [--etr]
-    /// [--auto-merge N] [--adj-floor N] [--adj-batch N]` from CommandLine args.
-    /// Returns nil when the headless flag is absent or project name is missing.
+    /// [--auto-merge N] [--adj-floor N] [--adj-batch N]
+    /// [--adj-floor-cc N] [--adj-floor-ee N] [--adj-floor-cl N]
+    /// [--auto-merge-cc N] [--auto-merge-ee N] [--auto-merge-cl N]`
+    /// from CommandLine args. Per-kind overrides (`-cc`/`-ee`/`-cl` suffixes)
+    /// map to `ResolverThresholds.{auto-merge,adjudicationFloor}PerKind` and
+    /// fall back to the flat field when absent. Returns nil when the headless
+    /// flag is absent or project name is missing.
     static func parse(from args: [String]) -> HeadlessRunnerConfig? {
         guard args.contains("--headless-extract") else { return nil }
         var projectName: String?
@@ -39,6 +44,8 @@ struct HeadlessRunnerConfig {
         var autoMerge: Float?
         var adjFloor: Float?
         var adjBatch: Int?
+        var autoMergePerKind: [EmbeddingResolver.PairKind: Float] = [:]
+        var adjFloorPerKind: [EmbeddingResolver.PairKind: Float] = [:]
         var i = 0
         while i < args.count {
             let a = args[i]
@@ -64,22 +71,46 @@ struct HeadlessRunnerConfig {
             if a == "--adj-batch", i + 1 < args.count {
                 adjBatch = Int(args[i + 1]); i += 2; continue
             }
+            if let kind = perKindFlag(prefix: "--auto-merge", a),
+               i + 1 < args.count, let v = Float(args[i + 1]) {
+                autoMergePerKind[kind] = v; i += 2; continue
+            }
+            if let kind = perKindFlag(prefix: "--adj-floor", a),
+               i + 1 < args.count, let v = Float(args[i + 1]) {
+                adjFloorPerKind[kind] = v; i += 2; continue
+            }
             i += 1
         }
         guard let name = projectName else {
             AtlasLogger.headless.error("[Headless] --headless-extract requires --project <name>")
             return nil
         }
-        let thresholds: ResolverThresholds? = (autoMerge != nil || adjFloor != nil || adjBatch != nil)
+        let anyThresholdFlag = autoMerge != nil || adjFloor != nil || adjBatch != nil
+            || !autoMergePerKind.isEmpty || !adjFloorPerKind.isEmpty
+        let thresholds: ResolverThresholds? = anyThresholdFlag
             ? ResolverThresholds(
                 autoMerge: autoMerge ?? ResolverThresholds.default.autoMerge,
                 adjudicationFloor: adjFloor ?? ResolverThresholds.default.adjudicationFloor,
-                adjudicationBatchSize: adjBatch ?? ResolverThresholds.default.adjudicationBatchSize
+                adjudicationBatchSize: adjBatch ?? ResolverThresholds.default.adjudicationBatchSize,
+                autoMergePerKind: autoMergePerKind,
+                adjudicationFloorPerKind: adjFloorPerKind
             )
             : nil
         return HeadlessRunnerConfig(projectName: name, mode: mode,
                                     runETR: runETR, etrOnly: etrOnly,
                                     etrThresholds: thresholds)
+    }
+
+    /// Map a `--<prefix>-{cc|ee|cl}` suffix to its `PairKind`. Returns nil
+    /// for any string that doesn't match exactly so unrelated flags pass
+    /// through the parser untouched.
+    private static func perKindFlag(prefix: String, _ arg: String) -> EmbeddingResolver.PairKind? {
+        switch arg {
+        case "\(prefix)-cc": return .conceptConcept
+        case "\(prefix)-ee": return .entityEntity
+        case "\(prefix)-cl": return .crossLevel
+        default: return nil
+        }
     }
 }
 
