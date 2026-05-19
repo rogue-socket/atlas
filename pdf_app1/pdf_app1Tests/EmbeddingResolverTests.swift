@@ -222,9 +222,11 @@ final class EmbeddingResolverTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Labcorp"))
         XCTAssertTrue(prompt.contains("(no summary)"))
         XCTAssertTrue(prompt.contains("CCQO of VitaCare"))
-        XCTAssertTrue(prompt.contains("array of 2 booleans"))
-        // Cross-level caveat present
-        XCTAssertTrue(prompt.contains("different abstraction levels"))
+        XCTAssertTrue(prompt.contains("2 booleans"))
+        // Cross-level caveat present. v4 (current delegator) phrases the
+        // Process↔implementation pattern with the singular "abstraction level
+        // differs"; v2/v3 used "different abstraction levels".
+        XCTAssertTrue(prompt.contains("abstraction level"))
     }
 
     func test_parseMergeAdjudication_validJSONArray_returnsBools() throws {
