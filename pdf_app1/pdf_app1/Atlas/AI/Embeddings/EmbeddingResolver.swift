@@ -33,7 +33,26 @@ struct ResolverThresholds: Sendable, Equatable {
     /// positives stayed at zero.
     var adjudicationFloor: Float = 0.80
     var adjudicationBatchSize: Int = 18
+
+    /// Optional per-pair-kind override of `autoMerge`. nil entries fall
+    /// back to the flat field above. Lets a tuning run set
+    /// concept↔concept stricter than entity↔entity (concept labels share
+    /// more topic words → more false-positive risk at the same cosine).
+    /// Backlog item (c), 2026-05-16.
+    var autoMergePerKind: [EmbeddingResolver.PairKind: Float] = [:]
+    /// Optional per-pair-kind override of `adjudicationFloor`. nil entries
+    /// fall back to the flat field above.
+    var adjudicationFloorPerKind: [EmbeddingResolver.PairKind: Float] = [:]
+
     static let `default` = ResolverThresholds()
+
+    func autoMerge(for kind: EmbeddingResolver.PairKind) -> Float {
+        autoMergePerKind[kind] ?? autoMerge
+    }
+
+    func adjudicationFloor(for kind: EmbeddingResolver.PairKind) -> Float {
+        adjudicationFloorPerKind[kind] ?? adjudicationFloor
+    }
 }
 
 // MARK: - Result types
@@ -104,6 +123,26 @@ struct ResolverAudit: Codable, Sendable {
         let autoMerge: Float
         let adjudicationFloor: Float
         let adjudicationBatchSize: Int
+        /// Per-pair-kind overrides surfaced in the audit so a reader can see
+        /// which floor actually applied to a given pair. Empty when the run
+        /// used flat thresholds only. Optional in JSON for back-compat with
+        /// pre-2026-05-19 audit sidecars.
+        let autoMergePerKind: [String: Float]?
+        let adjudicationFloorPerKind: [String: Float]?
+    }
+}
+
+// MARK: - Pair kind
+
+extension EmbeddingResolver {
+    /// Categorizes a candidate pair by the levels of its two nodes. Only
+    /// `.concept` and `.entity` are ETR-eligible (see `isEligible`), so the
+    /// possible combinations collapse to three buckets. Used to look up
+    /// per-kind threshold overrides on `ResolverThresholds`.
+    enum PairKind: String, Sendable, Hashable, CaseIterable, Codable {
+        case conceptConcept   // both nodes at `.concept` level
+        case entityEntity     // both nodes at `.entity` level
+        case crossLevel       // one concept + one entity
     }
 }
 
@@ -184,11 +223,40 @@ enum EmbeddingResolver {
         return pairs
     }
 
+    /// Flat classify — used when callers don't have a `PairKind` handy
+    /// (e.g. existing unit tests). Reads only `thresholds.autoMerge` and
+    /// `thresholds.adjudicationFloor`; per-kind overrides are ignored.
     static func classify(similarity: Float,
                          thresholds: ResolverThresholds) -> ClassificationBand {
         if similarity >= thresholds.autoMerge { return .autoMerge }
         if similarity >= thresholds.adjudicationFloor { return .adjudication }
         return .reject
+    }
+
+    /// Pair-kind-aware classify. Looks up
+    /// `thresholds.autoMerge(for: kind)` and `adjudicationFloor(for: kind)`,
+    /// which fall back to the flat fields when no per-kind override is set.
+    /// `resolve` calls this; tests prefer this form when they're exercising
+    /// per-level split behavior.
+    static func classify(similarity: Float,
+                         pairKind kind: PairKind,
+                         thresholds: ResolverThresholds) -> ClassificationBand {
+        if similarity >= thresholds.autoMerge(for: kind) { return .autoMerge }
+        if similarity >= thresholds.adjudicationFloor(for: kind) { return .adjudication }
+        return .reject
+    }
+
+    /// Categorize a pair by the levels of its two nodes. Both `.concept` →
+    /// `.conceptConcept`; both `.entity` → `.entityEntity`; one each →
+    /// `.crossLevel`. Pairs containing a non-eligible node (`.document` or
+    /// `.chapter`) should be excluded by the caller (`isEligible`); we still
+    /// bucket them defensively into `.crossLevel` rather than crash.
+    static func pairKind(_ a: ConceptNode, _ b: ConceptNode) -> PairKind {
+        switch (a.level, b.level) {
+        case (.concept, .concept): return .conceptConcept
+        case (.entity,  .entity):  return .entityEntity
+        default:                   return .crossLevel
+        }
     }
 
     /// Case-insensitive label match force-merges regardless of similarity.
@@ -303,7 +371,8 @@ extension EmbeddingResolver {
                 }
                 continue
             }
-            switch classify(similarity: sim, thresholds: thresholds) {
+            let kind = pairKind(a, b)
+            switch classify(similarity: sim, pairKind: kind, thresholds: thresholds) {
             case .autoMerge:
                 autoMerges.append(MergeDecision(aID: aID, bID: bID, similarity: sim, reason: .highSimilarity))
                 if auditOutputDir != nil {
@@ -448,9 +517,17 @@ extension EmbeddingResolver {
             timestamp: timestamp,
             modelIdentifier: modelIdentifier,
             vectorDimension: vectorDimension,
-            thresholds: .init(autoMerge: thresholds.autoMerge,
-                              adjudicationFloor: thresholds.adjudicationFloor,
-                              adjudicationBatchSize: thresholds.adjudicationBatchSize),
+            thresholds: .init(
+                autoMerge: thresholds.autoMerge,
+                adjudicationFloor: thresholds.adjudicationFloor,
+                adjudicationBatchSize: thresholds.adjudicationBatchSize,
+                autoMergePerKind: thresholds.autoMergePerKind.isEmpty
+                    ? nil
+                    : Dictionary(uniqueKeysWithValues: thresholds.autoMergePerKind.map { ($0.key.rawValue, $0.value) }),
+                adjudicationFloorPerKind: thresholds.adjudicationFloorPerKind.isEmpty
+                    ? nil
+                    : Dictionary(uniqueKeysWithValues: thresholds.adjudicationFloorPerKind.map { ($0.key.rawValue, $0.value) })
+            ),
             eligibleNodeCount: eligibleCount,
             pairsEvaluated: pairCount,
             entries: entries
