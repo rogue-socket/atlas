@@ -92,6 +92,11 @@ protocol AtlasModel: Sendable {
     var modelIdentifier: String { get }
     var isAvailable: Bool { get }
 
+    /// Verify the backend is reachable before a run starts. Default: no-op.
+    /// Backends with an out-of-process dependency (e.g. a local sidecar)
+    /// override this to fail fast with an actionable error.
+    func preflight() async throws
+
     func extractConcepts(from text: String, context: ExtractionContext) async throws -> [RawConcept]
     func proposeEdges(between concepts: [String], context: String) async throws -> [RawEdge]
     func summarizeConcept(_ label: String, sourceText: String) async throws -> String
@@ -105,6 +110,8 @@ protocol AtlasModel: Sendable {
 }
 
 extension AtlasModel {
+    func preflight() async throws { }
+
     func proposeMerges(
         documentAConcepts: [(label: String, summary: String?)],
         documentBConcepts: [(label: String, summary: String?)]

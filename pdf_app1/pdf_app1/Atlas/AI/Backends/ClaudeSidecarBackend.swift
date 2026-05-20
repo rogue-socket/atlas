@@ -31,6 +31,27 @@ final class ClaudeSidecarBackend: LLMBackend, @unchecked Sendable {
         self.session = URLSession(configuration: config)
     }
 
+    /// Ping the sidecar's `/health` endpoint so a down sidecar fails fast with
+    /// one actionable error, instead of N silent per-batch network failures.
+    func preflight() async throws {
+        let url = URL(string: "\(baseURL)/health")!
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 5
+        do {
+            let (_, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                throw AIError.modelUnavailable(
+                    "Claude sidecar at \(baseURL) responded unexpectedly — restart it: node claude-sidecar/server.mjs")
+            }
+        } catch let error as AIError {
+            throw error
+        } catch {
+            log.error("[ClaudeSidecar] Health check failed: \(error.localizedDescription)")
+            throw AIError.modelUnavailable(
+                "Claude sidecar is not running at \(baseURL). Start it with 'node claude-sidecar/server.mjs', or install the auto-start LaunchAgent (see claude-sidecar/README.md).")
+        }
+    }
+
     func transport(prompt: String) async throws -> String {
         log.info("[ClaudeSidecar] POST \(self.baseURL)/extract (prompt: \(prompt.count) chars, model: \(self.modelIdentifier))")
 
