@@ -424,6 +424,8 @@ F1:        2·P·R / (P+R) = ____
 
 > **When to use v2 over v1:** for any ETR run scoring. v1 is preserved above as historical record of the first attempt + the anti-example cross-referencing mistake.
 
+> **Automated scoring:** these 40 v2 pairs are hardcoded in `RubricScorer.swift`. Run `pdf_app1 --headless-extract --score-rubric <graph.json>` to score a run's output graph and log a precision/recall scorecard — it matches rubric labels to nodes by embedding similarity, so it survives the label drift that breaks exact-label scoring across re-extractions.
+
 > **Doc abbreviations:** CLI = clinical_services_and_pricing, COM = compliance_quality_and_security, ORG = organization_and_people, PAT = patient_experience_and_operations.
 
 ### v2 SHOULD-MERGE — 20 cross-doc pairs

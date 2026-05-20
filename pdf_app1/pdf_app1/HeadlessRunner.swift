@@ -26,6 +26,9 @@ struct HeadlessRunnerConfig {
     let etrOnly: Bool
     /// Optional threshold overrides. `nil` = use `ResolverThresholds.default`.
     let etrThresholds: ResolverThresholds?
+    /// When set, ignore extraction/ETR entirely: load the graph JSON at this
+    /// path and score it against the vitacare quality rubric (see `RubricScorer`).
+    let scoreRubricPath: String?
 
     /// Parse `--headless-extract --project <name> [--mode fast|deep] [--etr]
     /// [--auto-merge N] [--adj-floor N] [--adj-batch N]
@@ -33,14 +36,20 @@ struct HeadlessRunnerConfig {
     /// [--auto-merge-cc N] [--auto-merge-ee N] [--auto-merge-cl N]`
     /// from CommandLine args. Per-kind overrides (`-cc`/`-ee`/`-cl` suffixes)
     /// map to `ResolverThresholds.{auto-merge,adjudicationFloor}PerKind` and
-    /// fall back to the flat field when absent. Returns nil when the headless
-    /// flag is absent or project name is missing.
+    /// fall back to the flat field when absent.
+    ///
+    /// `--score-rubric <path>` is a standalone mode: it scores the graph JSON
+    /// at `<path>` against the quality rubric and needs no `--project`.
+    ///
+    /// Returns nil when the headless flag is absent, or when neither
+    /// `--project` nor `--score-rubric` is given.
     static func parse(from args: [String]) -> HeadlessRunnerConfig? {
         guard args.contains("--headless-extract") else { return nil }
         var projectName: String?
         var mode: ExtractionMode = .fast
         var runETR = false
         var etrOnly = false
+        var scoreRubricPath: String?
         var autoMerge: Float?
         var adjFloor: Float?
         var adjBatch: Int?
@@ -62,6 +71,9 @@ struct HeadlessRunnerConfig {
             if a == "--etr-only" {
                 runETR = true; etrOnly = true; i += 1; continue
             }
+            if a == "--score-rubric", i + 1 < args.count {
+                scoreRubricPath = args[i + 1]; i += 2; continue
+            }
             if a == "--auto-merge", i + 1 < args.count {
                 autoMerge = Float(args[i + 1]); i += 2; continue
             }
@@ -81,8 +93,18 @@ struct HeadlessRunnerConfig {
             }
             i += 1
         }
-        guard let name = projectName else {
-            AtlasLogger.headless.error("[Headless] --headless-extract requires --project <name>")
+        // --score-rubric scores a graph file and needs no project; every
+        // other mode requires --project <name>.
+        let resolvedName: String?
+        if let projectName {
+            resolvedName = projectName
+        } else if scoreRubricPath != nil {
+            resolvedName = ""
+        } else {
+            resolvedName = nil
+        }
+        guard let name = resolvedName else {
+            AtlasLogger.headless.error("[Headless] --headless-extract requires --project <name> (or --score-rubric <path>)")
             return nil
         }
         let anyThresholdFlag = autoMerge != nil || adjFloor != nil || adjBatch != nil
@@ -98,7 +120,8 @@ struct HeadlessRunnerConfig {
             : nil
         return HeadlessRunnerConfig(projectName: name, mode: mode,
                                     runETR: runETR, etrOnly: etrOnly,
-                                    etrThresholds: thresholds)
+                                    etrThresholds: thresholds,
+                                    scoreRubricPath: scoreRubricPath)
     }
 
     /// Map a `--<prefix>-{cc|ee|cl}` suffix to its `PairKind`. Returns nil
@@ -125,6 +148,13 @@ final class HeadlessRunner {
              projectsManager: ProjectsManager,
              aiService: AIServiceManager,
              graph: KnowledgeGraph) async {
+        // --score-rubric: score an existing graph file against the quality
+        // rubric; needs neither a project nor extraction. RubricScorer exits.
+        if let rubricPath = config.scoreRubricPath {
+            await RubricScorer.run(graphPath: rubricPath, aiService: aiService, graph: graph)
+            return
+        }
+
         log.info("[Headless] start: project=\(config.projectName, privacy: .public) mode=\(config.mode.rawValue, privacy: .public)")
 
         // Wait for ProjectsManager to hydrate (async load). Cap at 10s.
