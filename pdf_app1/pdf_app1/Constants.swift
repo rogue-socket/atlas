@@ -112,6 +112,8 @@ struct AppConstants {
     static let aiModelKey = "atlas.ai.model"
     /// UserDefaults key for Ollama base URL override
     static let ollamaBaseURLKey = "atlas.ollama.baseURL"
+    /// UserDefaults key for the Claude sidecar base URL override
+    static let claudeSidecarURLKey = "atlas.claudeSidecar.baseURL"
 }
 
 // MARK: - Notification Names
