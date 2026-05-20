@@ -254,6 +254,31 @@ class ExtractionPipeline {
 
     // MARK: - Batch Processing
 
+    /// Per-claim SCE diagnostic. Logs the raw `prior_label_match` / `match_kind`
+    /// the LLM emitted and how `resolveMatchAction` resolved it — so a run log
+    /// distinguishes "LLM chose same_entity" (match_kind same_entity/nil) from
+    /// typed-edge claims, and surfaces claims that failed to resolve (label
+    /// drift). Absence of any of these lines means the LLM made no cross-doc
+    /// claims; absence of the per-doc `match_summary` means SCE never ran.
+    private func logSCEMatchClaim(
+        kind: String,
+        label: String,
+        priorLabelMatch: String?,
+        matchKind: String?,
+        action: PromptTemplates.SCEMatchAction
+    ) {
+        let resolved: String
+        switch action {
+        case .noMatch:
+            resolved = "UNRESOLVED (claimed label not in prior-docs map, or unknown kind)"
+        case .mergeByRename(let canonical):
+            resolved = "merge → \"\(canonical)\""
+        case .typedEdge(let canonical, let edgeType):
+            resolved = "typed-edge \(edgeType.rawValue) → \"\(canonical)\""
+        }
+        log.info("[SCE] \(kind, privacy: .public) resolveMatchAction: label=\"\(label, privacy: .public)\" prior_label_match=\"\(priorLabelMatch ?? "nil", privacy: .public)\" match_kind=\"\(matchKind ?? "nil", privacy: .public)\" → \(resolved, privacy: .public)")
+    }
+
     private func processBatch(
         document: PDFDocument,
         documentURL: URL,
@@ -380,12 +405,17 @@ class ExtractionPipeline {
             let effectiveLevel: NodeLevel = .concept
 
             // SCE Option D+E: resolve action from (prior_label_match, match_kind).
-            if rawConcept.priorLabelMatch != nil { scePriorMatchClaims += 1 }
             let conceptAction = PromptTemplates.resolveMatchAction(
                 priorLabelMatch: rawConcept.priorLabelMatch,
                 matchKind: rawConcept.matchKind,
                 priorDocsLabelMap: priorDocsLabelMap
             )
+            if rawConcept.priorLabelMatch != nil {
+                scePriorMatchClaims += 1
+                logSCEMatchClaim(kind: "concept", label: rawConcept.label,
+                                 priorLabelMatch: rawConcept.priorLabelMatch,
+                                 matchKind: rawConcept.matchKind, action: conceptAction)
+            }
             let conceptLookupLabel: String
             switch conceptAction {
             case .mergeByRename(let canonical):
@@ -470,12 +500,17 @@ class ExtractionPipeline {
                 let entityType = rawEntity.type.asConceptType(default: .definition)
 
                 // SCE Option D+E: same action-based branching for entities.
-                if rawEntity.priorLabelMatch != nil { scePriorMatchClaims += 1 }
                 let entityAction = PromptTemplates.resolveMatchAction(
                     priorLabelMatch: rawEntity.priorLabelMatch,
                     matchKind: rawEntity.matchKind,
                     priorDocsLabelMap: priorDocsLabelMap
                 )
+                if rawEntity.priorLabelMatch != nil {
+                    scePriorMatchClaims += 1
+                    logSCEMatchClaim(kind: "entity", label: rawEntity.label,
+                                     priorLabelMatch: rawEntity.priorLabelMatch,
+                                     matchKind: rawEntity.matchKind, action: entityAction)
+                }
                 let entityLookupLabel: String
                 switch entityAction {
                 case .mergeByRename(let canonical):
