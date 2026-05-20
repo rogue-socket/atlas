@@ -13,10 +13,11 @@ Built entirely with Apple frameworks. No Electron, no web views, no external dep
 - **PDF Viewer** - Full-featured reader with markup tools (highlight / underline / strikethrough, area highlights, ink, shapes — rectangle / circle / line / arrow, sticky notes, move/resize), search, bookmarks, thumbnails, multi-tab, comparison mode, print, and undo/redo
 - **Knowledge Map** - AI extracts concepts from your PDFs in 5-page batches and renders them as a force-directed graph (Fruchterman-Reingold) with semantic zoom levels: document → chapter → concept → entity
 - **Bidirectional Sync** - Scroll the PDF and the active concept lights up on the map. Click a map node and the PDF jumps to the source passage with a color-matched pulse highlight
-- **Cross-Document Correlations** - Add multiple PDFs to a project. Atlas merges shared concepts across documents using fuzzy matching and optional LLM-powered semantic merge proposals
+- **Ask Your Documents** - A chat panel answers questions about the open PDF using your configured AI backend, with citations linked back to the source passages
+- **Cross-Document Correlations** *(in development)* - Planned: add multiple PDFs to a project and have Atlas merge shared concepts across documents via fuzzy matching and optional LLM-powered semantic merge proposals. The merge engine (`GraphMergeEngine`) and proposal UI exist in the codebase but are not yet wired into the shipping build
 - **OCR Fallback** - Scanned PDFs with no embedded text are automatically detected; Vision OCR extracts text page-by-page so the AI pipeline can still analyze them
 - **Pluggable AI** - Bring your own API key for Claude, OpenAI, Gemini, or run locally via Ollama. API keys stored in macOS Keychain
-- **Projects** - Organize PDFs into projects with per-document and batch extraction, correlation stats, and a project-level sidebar showing processing state
+- **Projects** - Organize PDFs into projects with per-document and batch extraction, and a project-level sidebar showing processing state
 - **Export** - Export your knowledge graph to Obsidian (wikilinks), Markdown, or JSON
 - **Session Restore** - Persisted graphs load automatically when you reopen a document. Window state and split-pane layout are restored across launches
 
@@ -97,7 +98,7 @@ ollama pull llama3.1
 5. **Source Anchoring** - Each concept's text span is mapped back to a PDF bounding box. Concepts without valid anchors are rejected (hallucination mitigation)
 6. **Graph Rendering** - Force-directed layout (Fruchterman-Reingold) with hierarchical grouping positions nodes. Entities are attracted 3x toward parent concepts. SwiftUI Canvas renders with frustum culling and zoom-dependent LOD (dots → boxes → labels → summaries)
 7. **Bidirectional Sync** - PDF scroll events update the active node; node clicks navigate the PDF with an 800ms pulse animation and color-coded highlight
-8. **Cross-Document Merge** - Within a project, shared concepts across PDFs are identified via Levenshtein similarity (>0.5) with optional LLM semantic matching, and presented as merge proposals
+8. **Cross-Document Merge** *(planned — not yet in the shipping build)* - Within a project, shared concepts across PDFs would be identified via Levenshtein similarity (>0.5) with optional LLM semantic matching, and presented as merge proposals
 
 ## Project Structure
 
@@ -106,6 +107,7 @@ pdf_app1/pdf_app1/
   PDFViewerApp.swift              App entry point, environment injection
   MultiDocumentView.swift         Main UI: sidebar + split pane detail
   PDFViewerView.swift             PDF viewer + annotation engine
+  PDFViewRepresentable.swift      PDFKit NSViewRepresentable bridge + annotation gestures
   DocumentManager.swift           Multi-tab document state
   ProjectsManager.swift           Project management + bookmarks
   ProjectViews.swift              Project explorer views
@@ -120,25 +122,29 @@ pdf_app1/pdf_app1/
 
   Atlas/
     Models/
-      ConceptTypes.swift          ConceptType, EdgeType, ReadingState, PaneMode enums
+      ConceptTypes.swift          Graph enums: ConceptType, EdgeType, NodeLevel, SemanticZoomLevel, ReadingState, PaneMode, …
       KnowledgeGraph.swift        Core graph: ConceptNode, GraphEdge, SourceAnchor
     Annotations/
       AnnotationGeometry.swift    Pure-value geometry for annotation move/resize (translate, resize, handle hit-test)
+      PDFAnnotation+Kind.swift    PDFAnnotation extension — annotation kind/type helpers
     Persistence/
-      GraphStore.swift            Per-document/project JSON persistence (debounced saves)
-      GraphMergeEngine.swift      Cross-document entity resolution + LLM merge proposals
+      GraphStore.swift            Per-document JSON persistence (debounced saves)
+      GraphMergeEngine.swift      Cross-document entity resolution + LLM merge proposals (dormant — not wired in)
     AI/
-      AtlasModelProtocol.swift    AI backend protocol (4 operations)
+      AtlasModelProtocol.swift    AI backend protocol (`AtlasModel`) + AIBackendType
       PromptTemplates.swift       All LLM prompts (extraction + merge)
       AIServiceManager.swift      Backend selection, Keychain keys, response caching
       ExtractionPipeline.swift    Fast pipeline: pages → concepts → graph, with progress + cancel
-      DeepExtractionPipeline.swift  Deeper multi-pass extraction with richer relationships
+      DeepExtractionPipeline.swift  Deeper 3-pass extraction with richer relationships
       ExtractionMode.swift        Fast vs deep extraction selector
+      ChapterExtraction.swift     Produces .chapter-level nodes for a document
+      ChapterEdgeAggregation.swift  Synthesises chapter↔chapter edges from concept edges
       TextExtractor.swift         PDFKit text extraction + Vision OCR fallback
       LayoutAnalyzer.swift        Heuristic block classifier (heading/body/etc)
       JSONRepair.swift            LLM response cleanup (fence stripping, truncation repair)
       AtlasLogger.swift           Structured os_log logging across subsystems
       Backends/
+        LLMBackend.swift          Shared protocol + defaults for HTTP-backed providers
         ClaudeBackend.swift       Anthropic Messages API
         OpenAIBackend.swift       OpenAI-compatible (also Ollama, LM Studio)
         GeminiBackend.swift       Google Gemini API
@@ -147,28 +153,37 @@ pdf_app1/pdf_app1/
       MapCanvasRenderer.swift     SwiftUI Canvas graph renderer with LOD
       ForceDirectedLayout.swift   Fruchterman-Reingold with hierarchical grouping
       BarnesHutQuadTree.swift     Quadtree-based O(n log n) repulsion approximation
+      LevelBandSeeder.swift       Seeds initial node positions into per-level bands
       NodeSizing.swift            Node radius / label sizing helpers
       MapInteraction.swift        Pan, zoom, click, drag, scroll-wheel zoom
-      DensityManager.swift        Node collapse/expand by semantic zoom level
+      DensityManager.swift        Filters visible nodes to the active semantic zoom level
       ScrollWheelOverlay.swift    AppKit scroll-wheel capture for zoom-toward-cursor
     Sync/
       BidirectionalSyncManager.swift  PDF ↔ map sync coordination
       ScrollTracker.swift              PDF page change monitoring (debounced)
       HighlightSyncBridge.swift        Persistent color-coded highlight ↔ node bridging
     UI/
-      SplitPaneContainer.swift    Two-pane resizable layout (debounced resize)
+      SplitPaneContainer.swift    Two-pane PDF|Map layout (draggable divider, 25–85% clamp)
       AISettingsView.swift        AI backend configuration
       CommandPaletteView.swift    Cmd+K fuzzy search overlay
       MapSearchView.swift         Map-specific concept search
       UnifiedSearchManager.swift  Context-aware search dispatcher
       ConceptDetailPopover.swift  Node detail: summary, sources, edges
+      ChatPanelView.swift         AI Q&A panel — ask questions about the open PDF
+      ChatViewModel.swift         Chat state + answerQuestion calls, citation resolution
+      PDFOutlinePanel.swift       PDF table-of-contents / outline sidebar panel
+      AnnotationListPanel.swift   Sidebar panel listing the document's annotations
       FirstRunView.swift          Onboarding experience
       MapToolbar.swift            Map pane toolbar (zoom, filter, export)
-      MergeProposalView.swift     Accept/reject concept merge proposals (bulk accept)
-      ProjectCorrelationSidebar.swift  Project sidebar with correlation stats
+      MergeProposalView.swift     Accept/reject concept merge proposals (dormant — never instantiated)
+      ProjectCorrelationSidebar.swift  Project sidebar with correlation stats (dormant — never instantiated)
       PDFToolbarBridge.swift      Observable state bridge: PDF viewer publishes toolbar state/actions for the sidebar to render
     Export/
       ExportManager.swift         Export to Obsidian, Markdown, JSON
+    Utils/
+      Debouncer.swift             Generic debounce utility
+      String+Hash.swift           SHA256 hex hashing on String
+      String+EnumDecoding.swift   Tolerant String→enum decoding for LLM output
 ```
 
 ## Data & Privacy
