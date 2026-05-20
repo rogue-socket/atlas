@@ -21,7 +21,7 @@
 - `ExtractionPipeline`: Fast pipeline. Processes PDFs in 5-page batches. Extracts text → sends to LLM → parses JSON response into nodes/edges. Deduplicates across batches.
 - `DeepExtractionPipeline`: 3-pass deeper extraction (facts → cluster/dedup → cross-reference). `ExtractionMode` (`.fast` / `.deep`) is stored in `@AppStorage("atlas.extraction.mode")`; the picker lives in `KnowledgeMapView`.
 - `PromptTemplates`: Structured prompt requesting concepts (3-8), entities (1-5 per concept), edges, with exact `textSpan` quotes.
-- `AIServiceManager`: Multi-backend support (Claude, OpenAI, Gemini, Ollama) via the `AtlasModel` protocol. API keys in Keychain, response caching via SHA256 hash.
+- `AIServiceManager`: 5 backends — Claude, OpenAI, Gemini, Ollama, and Claude-subscription (a local Node sidecar, `claude-sidecar/server.mjs`, wrapping `claude -p` headless — no API key) — via the `AtlasModel` protocol. API keys in Keychain, response caching via SHA256 hash.
 
 ### Annotations (`Atlas/Annotations/`)
 - `AnnotationGeometry`: Pure-value module for annotation move/resize math. `DragHandle` enum (8 corner/edge handles + `.body`); `translated`, `resized`, and `handle(at:)` hit-test, with page-bounds + min-size clamping. Consumed by `.select` `AnnotationMode` in `PDFViewRepresentable.handleSelectPan` for body-drag-to-translate and corner/edge-drag-to-resize.
