@@ -60,6 +60,11 @@ class AIServiceManager {
             let baseURL = UserDefaults.standard.string(forKey: AppConstants.ollamaBaseURLKey) ?? "http://localhost:11434"
             log.info("[AIService] Using Ollama at \(baseURL)")
             return OpenAIBackend(apiKey: "", model: selectedModel, baseURL: baseURL + "/v1", displayName: "Ollama")
+        case .claudeSubscription:
+            let baseURL = UserDefaults.standard.string(forKey: AppConstants.claudeSidecarURLKey)
+                ?? AIBackendType.claudeSubscription.defaultBaseURL
+            log.info("[AIService] Using Claude sidecar at \(baseURL)")
+            return ClaudeSidecarBackend(baseURL: baseURL, model: selectedModel)
         }
     }
 
@@ -160,7 +165,7 @@ class AIServiceManager {
     }
 
     private func updateConfiguredState() {
-        if selectedBackendType == .ollama {
+        if !selectedBackendType.requiresAPIKey {
             isConfigured = true
         } else {
             isConfigured = getAPIKey(for: selectedBackendType) != nil

@@ -166,6 +166,7 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
     case openai = "OpenAI"
     case gemini = "Gemini"
     case ollama = "Ollama"
+    case claudeSubscription = "ClaudeSubscription"
 
     var id: String { rawValue }
 
@@ -175,12 +176,13 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
         case .openai: return "OpenAI"
         case .gemini: return "Google Gemini"
         case .ollama: return "Ollama (Local)"
+        case .claudeSubscription: return "Claude (Subscription)"
         }
     }
 
     var requiresAPIKey: Bool {
         switch self {
-        case .ollama: return false
+        case .ollama, .claudeSubscription: return false
         default: return true
         }
     }
@@ -191,6 +193,7 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
         case .openai: return "https://api.openai.com"
         case .gemini: return "https://generativelanguage.googleapis.com"
         case .ollama: return "http://localhost:11434"
+        case .claudeSubscription: return "http://127.0.0.1:8765"
         }
     }
 
@@ -200,6 +203,7 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
         case .openai: return ["gpt-4o", "gpt-4o-mini", "gpt-4.1-mini"]
         case .gemini: return ["gemini-2.5-pro", "gemini-2.5-flash"]
         case .ollama: return ["llama3.1", "mistral", "qwen2.5"]
+        case .claudeSubscription: return ["opus", "sonnet", "haiku"]
         }
     }
 }
