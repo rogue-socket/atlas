@@ -29,6 +29,22 @@ struct HeadlessRunnerConfig {
     /// When set, ignore extraction/ETR entirely: load the graph JSON at this
     /// path and score it against the vitacare quality rubric (see `RubricScorer`).
     let scoreRubricPath: String?
+    /// When set, ignore extraction: load every per-doc graph JSON in this
+    /// directory, merge them, and run the hybrid resolver against the merged
+    /// graph. Self-contained — needs no project or security-scoped bookmarks.
+    let hybridResolveDir: String?
+
+    init(projectName: String, mode: ExtractionMode, runETR: Bool, etrOnly: Bool,
+         etrThresholds: ResolverThresholds?, scoreRubricPath: String?,
+         hybridResolveDir: String? = nil) {
+        self.projectName = projectName
+        self.mode = mode
+        self.runETR = runETR
+        self.etrOnly = etrOnly
+        self.etrThresholds = etrThresholds
+        self.scoreRubricPath = scoreRubricPath
+        self.hybridResolveDir = hybridResolveDir
+    }
 
     /// Parse `--headless-extract --project <name> [--mode fast|deep] [--etr]
     /// [--auto-merge N] [--adj-floor N] [--adj-batch N]
@@ -50,6 +66,7 @@ struct HeadlessRunnerConfig {
         var runETR = false
         var etrOnly = false
         var scoreRubricPath: String?
+        var hybridResolveDir: String?
         var autoMerge: Float?
         var adjFloor: Float?
         var adjBatch: Int?
@@ -73,6 +90,9 @@ struct HeadlessRunnerConfig {
             }
             if a == "--score-rubric", i + 1 < args.count {
                 scoreRubricPath = args[i + 1]; i += 2; continue
+            }
+            if a == "--hybrid-resolve", i + 1 < args.count {
+                hybridResolveDir = args[i + 1]; i += 2; continue
             }
             if a == "--auto-merge", i + 1 < args.count {
                 autoMerge = Float(args[i + 1]); i += 2; continue
@@ -98,7 +118,7 @@ struct HeadlessRunnerConfig {
         let resolvedName: String?
         if let projectName {
             resolvedName = projectName
-        } else if scoreRubricPath != nil {
+        } else if scoreRubricPath != nil || hybridResolveDir != nil {
             resolvedName = ""
         } else {
             resolvedName = nil
@@ -121,7 +141,8 @@ struct HeadlessRunnerConfig {
         return HeadlessRunnerConfig(projectName: name, mode: mode,
                                     runETR: runETR, etrOnly: etrOnly,
                                     etrThresholds: thresholds,
-                                    scoreRubricPath: scoreRubricPath)
+                                    scoreRubricPath: scoreRubricPath,
+                                    hybridResolveDir: hybridResolveDir)
     }
 
     /// Map a `--<prefix>-{cc|ee|cl}` suffix to its `PairKind`. Returns nil
@@ -152,6 +173,11 @@ final class HeadlessRunner {
         // rubric; needs neither a project nor extraction. RubricScorer exits.
         if let rubricPath = config.scoreRubricPath {
             await RubricScorer.run(graphPath: rubricPath, aiService: aiService, graph: graph)
+            return
+        }
+
+        if let hybridDir = config.hybridResolveDir {
+            await runHybridResolve(dir: hybridDir, aiService: aiService, graph: graph)
             return
         }
 
@@ -327,5 +353,72 @@ final class HeadlessRunner {
         let result = EmbeddingMergeApplier.apply(plan, to: graph)
         let etrElapsed = Date().timeIntervalSince(etrStart)
         log.info("[Headless] ETR done in \(String(format: "%.1f", etrElapsed))s: plan=\(plan.decisions.count) merges + \(plan.relations.count) relations; applied=\(result.groupsApplied) groups, removed=\(result.nodesRemoved) nodes, rewrote=\(result.edgesRewritten) edges, deduped=\(result.edgesDeduplicated), relations=\(result.relationsAdded); post-graph=\(graph.nodeCount)n/\(graph.edgeCount)e")
+    }
+
+    /// `--hybrid-resolve <dir>`: load every per-doc graph JSON in `dir`, merge
+    /// them, and run the hybrid resolver (ETR backbone + SCE typed-relation
+    /// adjudication) against the merged graph. Self-contained end-to-end
+    /// exercise of the hybrid pipeline — needs no project or bookmarks, so it
+    /// runs anywhere the graph files and the configured backends are present.
+    private func runHybridResolve(dir: String,
+                                  aiService: AIServiceManager,
+                                  graph: KnowledgeGraph) async {
+        let dirURL = URL(fileURLWithPath: dir, isDirectory: true)
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: dirURL, includingPropertiesForKeys: nil) else {
+            log.error("[Hybrid] cannot read directory: \(dir, privacy: .public)")
+            exit(4)
+        }
+        // Per-doc graph files only — skip embedding caches, audit sidecars,
+        // and legacy project-wide files.
+        let graphFiles = entries.filter { url in
+            let name = url.lastPathComponent
+            return name.hasSuffix(".json")
+                && !name.hasPrefix("embeddings_")
+                && !name.hasPrefix("etr_audit_")
+                && !name.hasPrefix("project_")
+        }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        guard !graphFiles.isEmpty else {
+            log.error("[Hybrid] no per-doc graph JSON files in \(dir, privacy: .public)")
+            exit(4)
+        }
+        log.info("[Hybrid] loading \(graphFiles.count) graph file(s) from \(dir, privacy: .public)")
+
+        struct StoredEnvelope: Decodable { let payload: Data }
+        var loadedDocs = 0
+        for file in graphFiles {
+            guard let fileData = try? Data(contentsOf: file) else {
+                log.warning("[Hybrid] skip unreadable: \(file.lastPathComponent, privacy: .public)")
+                continue
+            }
+            // A GraphStore file is a StoredGraph envelope whose `payload` holds
+            // the CodableRepresentation; a bare export is the representation
+            // itself. Try the envelope first, fall back to the whole file.
+            let payload = (try? JSONDecoder().decode(StoredEnvelope.self, from: fileData))?.payload ?? fileData
+            let docGraph = KnowledgeGraph()
+            do {
+                try docGraph.decode(from: payload)
+            } catch {
+                log.warning("[Hybrid] skip undecodable \(file.lastPathComponent, privacy: .public): \(error.localizedDescription)")
+                continue
+            }
+            graph.merge(from: docGraph)
+            loadedDocs += 1
+            log.info("[Hybrid]   + \(file.lastPathComponent, privacy: .public): \(docGraph.nodeCount)n/\(docGraph.edgeCount)e → merged total \(graph.nodeCount)n/\(graph.edgeCount)e")
+        }
+        guard loadedDocs > 0, graph.nodeCount > 0 else {
+            log.error("[Hybrid] nothing loaded — no decodable graphs")
+            exit(4)
+        }
+
+        let projectID = UUID()
+        log.info("[Hybrid] merged \(loadedDocs) doc(s) → \(graph.nodeCount)n/\(graph.edgeCount)e; synthetic projectID=\(projectID.uuidString, privacy: .public)")
+        let cfg = HeadlessRunnerConfig(projectName: "", mode: .fast,
+                                       runETR: true, etrOnly: true,
+                                       etrThresholds: nil, scoreRubricPath: nil)
+        await runETR(config: cfg, aiService: aiService, graph: graph, projectID: projectID)
+        log.info("[Hybrid] done — resolved graph: \(graph.nodeCount)n/\(graph.edgeCount)e")
+        try? await Task.sleep(for: .milliseconds(500))
+        exit(0)
     }
 }
