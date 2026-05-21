@@ -34,7 +34,7 @@
 
 ### Persistence (`Atlas/Persistence/`)
 - `GraphStore`: Per-document JSON in `~/Library/Application Support/Atlas/graphs/` (filename = SHA256 of URL). Debounced saves (1s).
-- `GraphMergeEngine`: dormant. Cross-doc merging now goes through `KnowledgeGraph.node(matching:)` baseline plus the SCE/ETR experiments on feature branches. `MergeProposalView` is never instantiated.
+- `GraphMergeEngine`: dormant. Cross-doc merging now goes through `KnowledgeGraph.node(matching:)` baseline plus the SCE/ETR/hybrid experiments on feature branches (`feature/sce-cross-doc`, `feature/etr-cross-doc`, `feature/hybrid-cross-doc`). `MergeProposalView` is never instantiated.
 
 ### Other Key Files
 - `MultiDocumentView.swift`: Tab management, sidebar sections (open docs, projects, recents), comparison mode.
