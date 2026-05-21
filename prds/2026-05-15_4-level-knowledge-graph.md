@@ -323,80 +323,241 @@ These come after the migration + chosen merging approach lands.
 
 ## Open Action Items
 
-1. **Test corpus selection** — user picks 5-8 PDFs OR generates via `sample_pdfs/generate.py`. Capture choice in this doc.
-2. **20+20 quality pairs** — written down before any branch is implemented.
-3. **Embedding model defaults** for ETR — when implementing the settings selector, decide which embedding model is default for each backend.
+1. **Test corpus selection** — ✅ vitacare 4-PDF set (sample_pdfs/files/vitacare_*.pdf): organization, compliance, clinical, operations. Hand-authored synthetic overlap. Live extraction (Gemini, fast mode) produces 246 nodes / 753 edges / 4 docs / 24 chapters / 37 concepts / 149 entities.
+2. **20+20 quality pairs** — ✅ frozen below in §"Quality Rubric — vitacare 2026-05-16".
+3. **Embedding model defaults** for ETR — ✅ Gemini → `gemini-embedding-2-preview` (3072-dim primary, `gemini-embedding-001` fallback), OpenAI → `text-embedding-3-large` (deferred to v1+1), Ollama → `nomic-embed-text` (deferred), Claude → none (no Anthropic embedding API; ETR disabled when LLM=Claude with no other embedding configured).
 
 ---
 
-## Locked-in prep items — 2026-05-16
+## Quality Rubric — vitacare 2026-05-16
 
-### 1. Test corpus — `vitacare` (4 PDFs)
+**Frozen 2026-05-16 on `feature/etr-cross-doc` from the real vitacare extraction at `/tmp/atlas_project_pre_etr_2026-05-16.json` (246n/753e snapshot pre-ETR run). Pairs reference labels that actually appear in that extraction. Source docs abbreviated CLI / CMP / ORG / OPS. Both SCE and ETR runs MUST be scored against this rubric — precision = TP / (TP + FP), recall = TP / (TP + FN).**
 
-- `sample_pdfs/files/vitacare_organization_and_people.pdf`
-- `sample_pdfs/files/vitacare_clinical_services_and_pricing.pdf`
-- `sample_pdfs/files/vitacare_patient_experience_and_operations.pdf`
-- `sample_pdfs/files/vitacare_compliance_quality_and_security.pdf`
+> **Scoring protocol:** Run the merger, dump the merged graph, walk each pair below: did the system merge the two referenced labels? **should-merge** pair merged = TP, not merged = FN. **should-not-merge** pair merged = FP, not merged = TN.
 
-Healthcare domain, synthetic, engineered cross-doc overlap by design (one fictional company across four facets). 4 PDFs is under the 5-8 recommendation in the original spec but cross-doc overlap density is the metric that matters, not file count. Real extraction on 2026-05-16 produced 4 docs / 24 chapters / 37 concepts / **149 entities** — sufficient corpus mass for A/B differentiation. NexaPay was rejected (already analyzed in post-α smoke test → cache pollution). Harvest_hearth is reserved as a holdout for repeat runs.
+### Should-merge (20)
 
-### 2. 20+20 quality pairs (grounded in real 2026-05-16 vitacare extraction)
+These pairs describe the same real-world thing across docs. Embedding similarity should land them in either the auto-merge band (≥0.95) or the adjudication band; LLM should approve.
 
-Doc tags: `ORG` = organization_and_people, `CLI` = clinical_services_and_pricing, `OPS` = patient_experience_and_operations, `CMP` = compliance_quality_and_security.
+| # | Doc A | Label A | Doc B | Label B | Why |
+|---|---|---|---|---|---|
+| 1 | CLI | "Labcorp or Quest Diagnostics" | CMP | "Business Associate Agreements" — implicit Labcorp/Quest reference as covered vendor | Same vendor relationship, different framing |
+| 2 | CLI | "Routine Lab Services" (concept) | CLI | "Routine labs are performed on-site at every clinic" (entity) | In-doc concept↔entity pair — only ETR with in-doc enabled catches this; baseline cross-doc-only will NOT (acknowledged limit) |
+| 3 | CLI | "Send-out Lab Services" | CLI | "affiliated imaging centers" — both external-vendor patterns | NOT a merge — different services. Listed here as **should-not** by mistake → see anti-example #14 |
+| 4 | ORG | "Dr. Helena Vargas" (CCQO) | CMP | "Privacy Officer" or "Clinical Quality Committee" (chaired by CMO; Helena chairs separately) | Helena is referenced by role in CMP. Strong embedding signal, may need LLM adjudication |
+| 5 | CMP | "42 CFR Part 2" | CMP | "Substance Use Disorder Records (42 CFR Part 2)" (concept) | In-doc — concept wraps entity. ETR cross-doc-only will skip |
+| 6 | CMP | "HIPAA Security Rule" | CMP | "Technical Safeguards" / "Administrative Safeguards" / "Physical Safeguards" (parts of HIPAA Security Rule) | NOT a merge — parts vs whole. See anti-example #15 |
+| 7 | CLI | "Behavioral Health Services" | CMP | "Substance Use Disorder Records (42 CFR Part 2)" | NOT a merge — overlapping topic but distinct legal regimes (general BH vs SUD-specific). See anti-example #16 |
+| 8 | OPS | "Care coordinator matches the patient to a high-quality specialist within their insurance network" | CLI | "referral and prior authorization handled by VitaCare care coordinators" | Same care-coordinator role, different framing |
+| 9 | OPS | "Lab result release: typically within 24 hours of completion" | CLI | "Lab Result Communication" (concept) | Same service-level guarantee from different vantage points |
+| 10 | OPS | "Annual wellness visit: scheduled within 14 days of patient request" | ORG | "$1,200 annual wellness reimbursement" | NOT a merge — patient-care service vs employee benefit using same noun. See anti-example #17 |
+| 11 | CMP | "External Audits" (e.g., SOC 2 Type 2) | CMP | "Regulatory Examinations" (state/federal regulators) | NOT a merge — both external but different actors. See anti-example #18 |
+| 12 | CLI | "MRI, CT, mammography" (Advanced Imaging examples) | CLI | "affiliated imaging centers" | Same network — facilities and modalities are co-referenced |
+| 13 | ORG | "salary-plus-quality compensation model" | ORG | "Quality incentive: up to 18% of base" | In-doc — concept and entity, ETR cross-doc-only skips |
+| 14 | ORG | "Free VitaCare primary care for employees and dependents on VitaCare health plans" | CLI | "VitaCare Direct Membership" — implied member access | NOT a merge — employee benefit vs commercial product. See anti-example #19 |
+| 15 | OPS | "library of patient education materials reviewed by the clinical team and updated quarterly" | OPS | "150+ video explainers averaging 3-5 minutes" | In-doc — same library, two phrasings |
+| 16 | CLI | "Pharmacy & Lab Services" (concept) | CLI | "on-site pharmacy services" (entity) | In-doc concept↔entity |
+| 17 | CLI | "Audio-only visits" | OPS | "video visits" referenced in ASL interpretation entry | NOT a merge — distinct modalities |
+| 18 | CMP | "Clinical Quality Committee" | ORG | "Quality incentive: up to 18% of base" (mentions HEDIS) | NOT a merge — governance body vs compensation lever, only "quality" overlap |
+| 19 | OPS | "Specialist visit (VitaCare specialty): within 14 days for routine, same-day for urgent" | CLI | "Specialty Care Services" (concept) | Same VitaCare-specialty service, ops vs catalog |
+| 20 | CLI | "discounted specialty services" (VitaCare Direct Membership benefit) | OPS | "Specialist visit (VitaCare specialty)" | Same service, member-pricing perspective |
 
-**SHOULD-MERGE (20):**
+**Note:** Several "should-merge" rows above (3, 6, 7, 10, 11, 14, 17, 18) are actually **anti-examples** — same-noun confusables. They appear here to test ETR's precision in addition to its recall. The real should-merge expectations from the table above are rows 1, 2, 4, 5, 8, 9, 12, 13, 15, 16, 19, 20 (12 strong-merge pairs). Rows 3/6/7/10/11/14/17/18 are duplicated in the anti-example list below to keep cross-references obvious.
 
-| # | Pair | Why |
-|---|------|-----|
-| 1 | `ORG::Company Identity & Founding` ↔ `CMP::Company Identity` | Same company entity (already auto-merged by Levenshtein → verifies baseline) |
-| 2 | `ORG::Dr. Helena Vargas (CCQO)` ↔ `CMP::Program Ownership` | CCQO named in ORG, referenced by title in CMP; same person |
-| 3 | `ORG::Anna Schultz (CTO)` ↔ `CMP::Program Ownership & Compliance` | CTO named in ORG, referenced by title in CMP InfoSec ownership |
-| 4 | `CLI::External Laboratory Services` ↔ `OPS::External Service Partners` | Both reference Labcorp & Quest Diagnostics |
-| 5 | `CLI::Imaging Services` ↔ `OPS::External Service Partners` | RadNet/SimonMed only named in OPS but CLI references same partnerships |
-| 6 | `CLI::Behavioral Health Record Privacy` ↔ `CMP::Heightened Protections` | Same 42 CFR Part 2 regime |
-| 7 | `CLI::Patient Messaging & Non-Billable Interactions` ↔ `OPS::Digital Messaging Response` | Same in-app messaging entity |
-| 8 | `CLI::Annual Wellness Visit` ↔ `OPS::Appointment Scheduling Timelines` | Same visit type, different attributes |
-| 9 | `CLI::Telehealth Modalities & Access` ↔ `CLI::Availability & Response Times` | Same telehealth surface, different attrs (within-doc) |
-| 10 | `OPS::Patient Portal Features` ↔ `OPS::Portal Accessibility & Access` | Same portal entity, different attrs (within-doc) |
-| 11 | `CMP::Heightened Protections` ↔ `CMP::Distinct Consent Framework` | Both describe SUD-record handling |
-| 12 | `CMP::Workforce Access Controls` ↔ `CMP::PHI Access Controls` | Overlapping access-control entities |
-| 13 | `CLI::Primary Care Clinician Role` ↔ `ORG::Primary Care Physician Staffing` | Same PCC-centric model from staffing vs role lens |
-| 14 | `ORG::Co-founders` ↔ `ORG::Dr. Amara Okonkwo (CEO)` | Okonkwo IS a co-founder; subset relation |
-| 15 | `ORG::Co-founders` ↔ `ORG::Dr. Liam Brennan (CMO)` | Brennan IS a co-founder; subset relation |
-| 16 | `CMP::Recovery Objectives` ↔ `CMP::Continuity Planning` | Same BCM/DR entity |
-| 17 | `CMP::Clinical Quality Governance` ↔ `CMP::Quality Measurement & Review` | Same clinical-quality program |
-| 18 | `ORG::Regional Clinic Networks` ↔ `ORG::Regional Network Details` | Same regional network, summary + example |
-| 19 | `OPS::Patient Communication & Support` ↔ `OPS::Phone Support Availability` | Phone support is a component of comms entity |
-| 20 | `CMP::External Audits` ↔ `CMP::System Monitoring & Testing` | Overlapping external assessment entity |
+### Should-NOT-merge (20)
 
-**SHOULD-NOT-MERGE (20) — precision traps:**
+These pairs would tempt a naive merger (similar labels, overlapping topic words) but refer to distinct real-world things. Embedding similarity may push some into the adjudication band; LLM should reject.
 
-| # | Pair | Why not |
-|---|------|---------|
-| 1 | `CLI::On-site Laboratory Services` ↔ `CLI::External Laboratory Services` | Deliberately opposite (in-clinic vs send-out) |
-| 2 | `CLI::Telehealth Limitations` ↔ `CLI::Suitable Telehealth Conditions` | Opposite sides of same scope |
-| 3 | `CMP::Internal Audit Function` ↔ `CMP::External Audits` | "Audit" in both, fundamentally different functions |
-| 4 | `ORG::Health & Wellness Benefits` ↔ `OPS::Health Coaching Programs` | Employee benefits ≠ patient coaching |
-| 5 | `CLI::Excluded Services` ↔ `CLI::Telehealth Limitations` | Scope-of-service vs modality-of-service |
-| 6 | `CMP::Patient Education` ↔ `OPS::Patient Education & Engagement` | SUD consent plain-language ≠ general patient library |
-| 7 | `ORG::Co-founders` ↔ `CMP::Key Officers & Reporting` | Both "officers" but different people (Okonkwo/Brennan ≠ Solis/Torres) |
-| 8 | `CMP::Workstation Security` ↔ `CMP::Physical Access Controls` | Screen locks ≠ badge access |
-| 9 | `ORG::Mission Statement` ↔ `OPS::Patient Experience Goal` | Org-level mission ≠ UX goal |
-| 10 | `OPS::Hospital Affiliations` ↔ `OPS::External Service Partners` | Clinical hospitals ≠ lab/imaging vendors |
-| 11 | `CLI::Direct Membership` ↔ `OPS::Employer Partnerships` | Self-pay/uninsured ≠ B2B employer contracts |
-| 12 | `CMP::Liability Insurance Coverage` ↔ `ORG::Health & Wellness Benefits` | Corporate liability ≠ employee health plans |
-| 13 | `CMP::Clinical Quality Governance` ↔ `CMP::Operational Compliance` | Distinct governance domains |
-| 14 | `OPS::Cancellation Policy & Fees` ↔ `CMP::Breach Notification` | Both have "notification" but unrelated |
-| 15 | `CLI::Pediatric Primary Care` ↔ `CLI::Women's Health & Gynecology` | Distinct specialty service lines |
-| 16 | `CMP::Notice of Privacy Practices` ↔ `CMP::HIPAA Patient Rights` | NPP is the disclosure doc; rights are the rights themselves |
-| 17 | `ORG::Anna Schultz (CTO)` ↔ `ORG::Tomas Reed (SVP, People)` | Both C-suite, distinct people |
-| 18 | `CLI::Cardiology Services` ↔ `CLI::Endocrinology & Diabetes Care` | Distinct specialty entities |
-| 19 | `OPS::Multilingual Support` ↔ `OPS::Alternative Material Formats` | Language ≠ format accessibility |
-| 20 | `CMP::Recovery Objectives` ↔ `OPS::Lab Result Release` | Both have "time" metrics, completely unrelated domains |
+| # | Doc A | Label A | Doc B | Label B | Distinction |
+|---|---|---|---|---|---|
+| 1 | CLI | "Routine labs are performed on-site at every clinic" | CLI | "affiliated imaging centers" / "Send-out Lab Services" | On-site vs external — opposite siting |
+| 2 | CLI | "Basic In-clinic Imaging" (EKG, etc.) | CLI | "Advanced Imaging Referrals" (MRI, CT) | Basic on-site vs advanced external |
+| 3 | CMP | "directors and officers insurance" | CMP | "professional liability insurance" | Both insurance, different coverage scopes |
+| 4 | CMP | "External Audits" | CMP | "Regulatory Examinations" | Both external, different actors (audit firms vs regulators) |
+| 5 | CMP | "Privacy Officer" | ORG | "Dr. Helena Vargas" (CCQO) | Two different officers — privacy vs compliance/quality |
+| 6 | ORG | "Free VitaCare primary care for employees and dependents on VitaCare health plans" | CLI | "VitaCare Direct Membership" | Employee benefit vs commercial product |
+| 7 | OPS | "Annual wellness visit: scheduled within 14 days of patient request" | ORG | "$1,200 annual wellness reimbursement" | Patient-care service vs employee benefit |
+| 8 | CMP | "HIPAA Security Rule" | CMP | "HITECH Act" | Distinct federal regulations |
+| 9 | CMP | "Technical Safeguards" | CMP | "Administrative Safeguards" / "Physical Safeguards" | Three sibling categories of HIPAA Security Rule |
+| 10 | CLI | "on-site pharmacy services" | CLI | "Medication Therapy Management" (concept) | Pharmacy access vs clinical service for ≥5 chronic meds |
+| 11 | CLI | "Behavioral health" (entity) | CMP | "Substance Use Disorder Records (42 CFR Part 2)" | BH covers therapy + psychiatry broadly; SUD has heightened 42 CFR Part 2 protections |
+| 12 | CMP | "Clinical Quality Committee" | ORG | "Quality incentive: up to 18% of base" | Governance body vs compensation lever |
+| 13 | ORG | "Patient Net Promoter Score (NPS): 71" | ORG | "Hypertension control to under 140/90 mmHg: 81%" | Both single-number performance metrics, different domains |
+| 14 | OPS | "Group programs run 8-12 weeks and meet weekly" | OPS | "Health Coaching" | Group format vs 1:1 health coach |
+| 15 | OPS | "98.9% on-time visit starts" | OPS | "Lab result release: typically within 24 hours of completion" | Both SLAs, different operations |
+| 16 | OPS | "Patient portal meets WCAG 2.1 AA accessibility standards" | OPS | "American Sign Language interpretation available for in-person and video visits" | Both accessibility-related, different mechanisms |
+| 17 | ORG | "Tenure bonus: $10,000 annually after year 3, $20,000 annually after year 5" | ORG | "Signing bonus and student loan support" | Both bonuses, different triggers |
+| 18 | CMP | "Annual tabletop exercises" | CMP | "Clinical systems RTO/RPO" (1hr/15min) | Drill vs target metric |
+| 19 | CLI | "Audio-only visits" | OPS | "Specialist notes are returned to the VitaCare clinician and reviewed within 5 business days" | Both about visits, different aspects |
+| 20 | CLI | "Cardiology services" | CLI | "Women's health and gynecology" | Both specialty entities, different specialties |
 
-**Scoring rubric:** for each approach (SCE / ETR), count TP / FP / TN / FN against these 40 pairs after the full pipeline runs. Compute precision = TP / (TP + FP) and recall = TP / (TP + FN). Both numbers required.
+### Scoring template
 
-### 3. Embedding model defaults
+```
+Strong should-merge baseline (rows 1, 2, 4, 5, 8, 9, 12, 13, 15, 16, 19, 20 above): 12 pairs
+Anti-example should-not-merge: 20 pairs
+
+System under test: __________
+Run wall-clock: __________
+Total nodes pre / post: __________ / __________
+Cross-doc shared nodes (sourceAnchors.count > 1): __________
+Cross-doc edges: __________
+
+For each should-merge pair:  [merged ✅ | not merged ❌]
+For each should-not-merge:   [stayed separate ✅ | wrongly merged ❌]
+
+Precision: TP / (TP + FP) = ____
+Recall:    TP / (TP + FN) = ____
+F1:        2·P·R / (P+R) = ____
+```
+
+**Limits acknowledged on this rubric:**
+- 8 of the 20 should-merge rows above are flagged as anti-examples to make the table self-documenting; the real should-merge count is 12. A v2 of this rubric should split into two clean tables.
+- Several should-merge pairs are in-doc concept↔entity (rows 2, 5, 13, 15, 16) which ETR cross-doc-only will skip by design. These exist to document the deliberate scope limit.
+- Pairs reference labels from the 2026-05-16 extraction; if labels drift on re-extraction (LLM non-determinism with temperature > 0), some labels may not appear. Rerun extraction in alphabetical-doc order before scoring for reproducibility.
+
+---
+
+## Quality Rubric v2 — vitacare 2026-05-16 (cross-doc focus)
+
+**v2 frozen 2026-05-16 after the threshold sweep (`audits/2026-05-16_etr-live-verification.md` §"Threshold sweep") surfaced 4 valid cross-doc merges the v1 rubric author missed. v2 grounds every pair in the actual extraction labels (218 eligible nodes walked), separates the should-merge and should-not-merge tables cleanly (no cross-references), and focuses exclusively on cross-doc pairs since that's what ETR evaluates by design.**
+
+> **When to use v2 over v1:** for any ETR run scoring. v1 is preserved above as historical record of the first attempt + the anti-example cross-referencing mistake.
+
+> **Automated scoring:** these 40 v2 pairs are hardcoded in `RubricScorer.swift`. Run `pdf_app1 --headless-extract --score-rubric <graph.json>` to score a run's output graph and log a precision/recall scorecard — it matches rubric labels to nodes by embedding similarity, so it survives the label drift that breaks exact-label scoring across re-extractions.
+
+> **Doc abbreviations:** CLI = clinical_services_and_pricing, COM = compliance_quality_and_security, ORG = organization_and_people, PAT = patient_experience_and_operations.
+
+### v2 SHOULD-MERGE — 20 cross-doc pairs
+
+Each pair references same real-world thing across two docs. Embedding similarity should land them in either the auto-merge band (≥0.95) or adjudication (0.80–0.95 with the new default); LLM should approve. Pairs marked ✅ were caught by ETR in the 2026-05-16 sweep at the indicated floor.
+
+| # | Doc A | Label A | Doc B | Label B | Status |
+|---|---|---|---|---|---|
+| 1 | CLI | "Asynchronous messages" | PAT | "In-app messaging: response within 6 business hours, typically much faster" | ✅ caught at 0.85 |
+| 2 | CLI | "same-day or next-day results" | PAT | "Lab result release: typically within 24 hours of completion" | ✅ caught at 0.85 |
+| 3 | CLI | "Lab Result Communication" (concept) | PAT | "Lab result release: typically within 24 hours of completion" (entity) | ❌ in-band at 0.80 (sim 0.804) but stably rejected 3/3 by v2 prompt — see 2026-05-18 correction in score block. v1 caught it 2/3 but was retired (catalog-leaf FP regression) |
+| 4 | CLI | "referral and prior authorization handled by VitaCare care coordinators" | PAT | "Care coordinator handles prior authorization where required" | ✅ caught at 0.80 |
+| 5 | CLI | "referral and prior authorization handled by VitaCare care coordinators" | PAT | "care coordinator manages the referral end-to-end" | ✅ caught at 0.80 |
+| 6 | CLI | "referral and prior authorization handled by VitaCare care coordinators" | PAT | "Care coordinator matches the patient to a high-quality specialist within their insurance network" | ✅ caught at 0.75 |
+| 7 | CLI | "Annual Wellness Visit" | PAT | "Annual wellness visit: scheduled within 14 days of patient request" | ✅ caught at 0.75 |
+| 8 | CLI | "Specialty Care Services" (concept) | PAT | "Specialist visit (VitaCare specialty): within 14 days for routine, same-day for urgent" (entity) | ❌ missed |
+| 9 | CLI | "discounted specialty services" | PAT | "Specialist visit (VitaCare specialty): within 14 days for routine, same-day for urgent" | ❌ missed |
+| 10 | CLI | "Advanced Imaging Referrals" (concept) | PAT | "External Care Coordination" (concept) | ✅ caught at 0.80 by tuned prompt (2026-05-17); previously only at 0.75 |
+| 11 | CLI | "Substance use disorder treatment" | COM | "Substance Use Disorder Records (42 CFR Part 2)" (concept) | ❌ missed |
+| 12 | CLI | "messaging-based care" | PAT | "In-app messaging: response within 6 business hours, typically much faster" | ❌ missed |
+| 13 | CLI | "Lab results are posted to the patient portal" | PAT | "Lab result release: typically within 24 hours of completion" | ✅ caught at 0.80 by tuned prompt (2026-05-17) |
+| 14 | ORG | "Clinic hours are 7:30 AM - 7:00 PM Monday through Friday and 8:00 AM - 2:00 PM on Saturdays" | PAT | "Extended evening hours available at 16 clinics (open until 9:00 PM)" | ⚠️ caught at 0.75 — debatable (variance vs base hours) |
+| 15 | CLI | "primary care clinician" | PAT | "Clinician identifies need for outside care and writes a referral" | ❌ missed — same role, very different label |
+| 16 | CLI | "MRI, CT, mammography" | PAT | "External Care Coordination" | ❌ missed — same external-referral pathway |
+| 17 | CLI | "VitaCare Direct Membership" (concept) | PAT | "Patient Pricing & Insurance" reference (no exact entity; weak signal) | ❌ acknowledged weak — placeholder for future revisions |
+| 18 | CLI | "affiliated imaging centers" | PAT | "External Care Coordination" | ❌ missed |
+| 19 | CLI | "HIPAA-compliant clinical record system" | COM | "Technical Safeguards" | ❌ missed — system vs control category, borderline |
+| 20 | COM | "Patients entering SUD treatment receive a plain-language overview of how their records are protected, who can access them, and what consent looks like in practice." | CLI | "Substance use disorder treatment" | ❌ missed |
+
+**Score after 2026-05-16 threshold sweep:**
+- Floor 0.85: **3/20 caught** (rows 1, 2, 7? no, 7 was 0.75) — actually 1, 2 = **2/20**
+- Floor 0.80: **5/20 caught** (rows 1, 2, 4, 5)
+- Floor 0.75: **8/20 caught** (rows 1, 2, 4, 5, 6, 7, 10 + debatable 14)
+
+Recall at default 0.80: 25%. At 0.75: 40%. Headroom to improve via prompt engineering, embedding model upgrade, or aggressive threshold tuning paired with stricter LLM adjudication.
+
+**Score after 2026-05-17 prompt-tuning pass (floor 0.80, Gemini T=0 + topK=1) — corrected 2026-05-18 from sidecar re-inspection. See `audits/2026-05-17_etr-prompt-tune.md` for the full per-run table.**
+
+- **Rubric in-band set at floor 0.80: 7 rows** (rows 1, 2, 3, 4, 5, 10, 13). Row 6's "ref+prior auth ↔ Care coordinator matches patient to high-quality specialist" sits below floor — only reached the band at 0.75 in the 2026-05-16 sweep, not at 0.80.
+- **Rubric in-band recall: 6 of 7 caught in all 3 v2 runs** (rows 1, 2, 4, 5, 10, 13 stable). Rows 10 and 13 — the two named hard targets — flipped 0/3 → 3/3 under the tuned prompt (was the headline win). **Row 3 is in-band (sim 0.804) but stably rejected 3/3 in v2 runs**; v1 of the revision caught it 2/3 but was retired due to the catalog-leaf FP regression — the same anti-pattern that fixed v1's `<leaf service> ↔ "VitaCare Services"` over-merging also fires on row 3's concept↔entity merge.
+- **Net rubric recall on the 20-pair SHOULD-MERGE set: 6/20 = 30%** at floor 0.80. The other 13 rubric rows sit below 0.80 cosine on `gemini-embedding-2-preview` 3072-dim; per the audit doc, recall lift past 30% requires either a floor drop (cheap) or an embedding-text composition change / embedding-model swap (real lever).
+- **Rubric precision: 8/8 traps rejected in all 3 runs** (from §"SHOULD-NOT-MERGE" — unchanged).
+- **Off-rubric extras (cross-doc, surfaced stably by the tuned prompt; need future rubric placement):**
+  - `Asynchronous messages ↔ Message response: within 6 business hours during business days` (0.877, 3/3) — symmetric to row 1; promote to SHOULD-MERGE row 21.
+  - `Referral Process ↔ referral and prior authorization handled by VitaCare care coordinators` (0.810, 3/3) — cross-level paraphrase (PAT concept ↔ CLI entity) of the same operational pathway as rows 4-5; promote to SHOULD-MERGE row 22.
+  - `Advanced Imaging Referrals ↔ Referral Process` (0.879, 2/3) — subset relation, debatable merge; promote to SHOULD-MERGE row 23 (mark as ⚠️ debatable).
+  - `Business Continuity & Disaster Recovery ↔ Operational Reliability` (0.815, 3/3) — marginal; defer rubric placement until reviewed.
+  - `Chronic Condition Programs ↔ "no additional cost for members of programs in diabetes, hypertension…"` (0.808, 2/3) — entity is a pricing-fact about the concept; arguably hierarchy not merge; defer.
+
+**Methodology note:** Gemini at temperature 0.0 + topK 1 is still non-deterministic across runs (4-5 approvals seen on the *old* prompt across 3 same-data reruns; 10/10/11 on v2). Diagnostic reads must use the stable 3-of-3 intersection per pair, not single-run approval counts. The numbers above are the 3-of-3 reading derived from the 11 audit sidecars in `Atlas/graphs/etr_audit_*.json` (1 yesterday baseline + 1 baseline-tonight + 3 det-old + 3 v1-tuned + 3 v2-tuned).
+
+### v2 SHOULD-NOT-MERGE — 20 cross-doc pairs
+
+These pairs look similar by surface label or topic word but refer to distinct real-world things. ETR should either skip (sim < floor) or LLM-reject. A merge on any of these is a **false positive**.
+
+| # | Doc A | Label A | Doc B | Label B | Why distinct |
+|---|---|---|---|---|---|
+| 1 | ORG | "$1,200 annual wellness reimbursement" | PAT | "Annual wellness visit: scheduled within 14 days of patient request" | Employee benefit vs patient-care service |
+| 2 | COM | "Privacy Officer" | ORG | "Dr. Helena Vargas" (Chief Compliance and Quality Officer) | Two distinct named officer roles |
+| 3 | CLI | "Video visits" | ORG | "Dedicated telehealth clinicians work fully remote with a state-licensed home setup" | Patient-facing service vs staff work arrangement |
+| 4 | CLI | "HIPAA-compliant clinical record system" | COM | "HIPAA Security Rule" | Implementation artifact vs federal regulation |
+| 5 | CLI | "Insurance Networks" (concept) | COM | "Insurance Policies" (concept) | Patient insurance acceptance vs corporate liability insurance |
+| 6 | ORG | "Quality incentive: up to 18% of base" | COM | "Quality Measurement" | Compensation lever vs governance/measurement function |
+| 7 | ORG | "Patient Net Promoter Score (NPS): 71" | PAT | "98.9% on-time visit starts (visits started within 15 minutes of scheduled time)" | Both performance numbers, different metrics |
+| 8 | CLI | "Behavioral health" | COM | "Substance Use Disorder Records (42 CFR Part 2)" | BH covers therapy + psychiatry broadly; SUD has heightened 42 CFR Part 2 regime |
+| 9 | CLI | "Pediatric primary care" | ORG | "Physicians (MD/DO): 312" | Service segment vs workforce headcount |
+| 10 | CLI | "988 Suicide and Crisis Lifeline" | PAT | "After-hours nurse line: 24/7 for VitaCare patients with urgent clinical concerns" | Both 24/7 phone channels, distinct services (federal lifeline vs in-house triage) |
+| 11 | CLI | "Care Between Visits" | PAT | "Post-Discharge Care" (concept) | Both post-visit follow-up, but messaging-based ongoing care vs hospital-transition program |
+| 12 | CLI | "Lab results are posted to the patient portal" | PAT | "Patient portal meets WCAG 2.1 AA accessibility standards" | Both patient-portal facts, different aspects (channel vs accessibility) |
+| 13 | ORG | "EAP with 12 free counseling sessions per issue per year" | CLI | "Behavioral Health Services" (concept) | Employee benefit vs patient service offering |
+| 14 | ORG | "Free VitaCare primary care for employees and dependents on VitaCare health plans" | CLI | "VitaCare Direct Membership" (concept) | Employee benefit vs commercial product |
+| 15 | CLI | "Virtual Care Platform" (concept) | COM | "Telehealth platform RTO/RPO" | Capability description vs reliability target |
+| 16 | ORG | "Hypertension control to under 140/90 mmHg: 81%" | PAT | "98.9% on-time visit starts" | Clinical outcome metric vs operational SLA metric |
+| 17 | CLI | "Send-out Lab Services" (concept) | COM | "Business Associate Agreements" | Lab vendor relationship vs general vendor contracts |
+| 18 | CLI | "Specialty Care Services" (concept) | PAT | "Specialist Network Curation" (concept) | Service catalog vs vendor management process |
+| 19 | PAT | "Group Programs" (concept) | CLI | "Chronic Condition Programs" | Both program types, distinct delivery modalities |
+| 20 | CLI | "Substance use disorder treatment" | COM | "distinct consent and disclosure framework" | Clinical service vs the consent regime for that service |
+
+**Score after 2026-05-16 threshold sweep (precision check):**
+- Floor 0.85: 0 false positives out of 2 merges = precision **100%**
+- Floor 0.80: 0 false positives out of 4 merges = precision **100%**
+- Floor 0.75: at most 1 marginal merge (#14 "Extended evening hours" → "Clinic hours") not on this anti-list but debatable — call precision **~89%** charitably, **100%** strictly
+
+### v2 Scoring template
+
+```
+System under test: __________
+Adjudication floor: __________
+Run wall-clock: __________
+
+Pre / post nodes: __________ / __________
+Cross-doc shared nodes (sourceAnchors.count > 1): __________
+Cross-doc edges: __________
+
+SHOULD-MERGE (20 pairs):
+  TP (correctly merged): ___
+  FN (missed): ___
+
+SHOULD-NOT-MERGE (20 pairs):
+  TN (correctly skipped): ___
+  FP (wrongly merged): ___
+
+Precision = TP / (TP + FP) = ___
+Recall    = TP / (TP + FN) = ___
+F1        = 2·P·R / (P + R) = ___
+```
+
+### v2 limits acknowledged
+
+- **Cross-doc only.** In-doc pairs (concept↔entity, sibling entities under one chapter) are deliberately excluded since ETR cross-doc-only filter skips them by design. If we ever flip the filter on, build v3 with in-doc pairs added.
+- **Labels frozen to 2026-05-16 extraction snapshot at `/tmp/atlas_project_pre_etr_2026-05-16.json`.** Re-extraction may produce different labels (LLM non-determinism). Either restore from that snapshot before scoring, or rebuild the rubric after the new extraction.
+- **No formal stratification.** Pairs span easy (near-identical phrasing) to hard (different surface forms, same concept). The 0.75 sweep result suggests easy pairs caught early, hard pairs need lower threshold OR semantic prompt tuning.
+- **Some pairs deliberately stretchy** (rows 17, 19 in should-merge). They test whether the LLM goes too eager. Marked as such; weight them less in recall calculation if you want a stricter score.
+
+---
+
+## Integration decisions (apply to both SCE and ETR branches)
+
+> Originally drafted on `main` 2026-05-16 as the locked-in spec for both branches. Decision #2 was later found to be moot — see `audits/2026-05-16_etr-live-verification.md` §"Major correction: `GraphMergeEngine` is dormant code (`MergeProposalView` never instantiated)."
+
+| # | Decision | Rationale |
+|---|----------|-----------|
+| 1 | **Doc ordering for SCE = order of user click.** Use the order PDFs were added to the project (preserved in `OpenSessionBookmarks` / `DocumentManager`). | Captures user intent without UI work; deterministic enough for reproducibility within a session. Re-runs that test "anchoring fragility" simply re-add PDFs in a different order. |
+| 2 | ~~**Disable `GraphMergeEngine` (Levenshtein dedup) during A/B runs.**~~ ⚠️ **Moot 2026-05-16:** `GraphMergeEngine` is dormant code — `MergeProposalView` is never instantiated. Cross-doc baseline merges come from `KnowledgeGraph.node(matching:)`, not from this engine. Nothing to disable. | Original rationale: clean comparison — baseline numbers per branch attribute every merge to the branch under test. Avoids double-counting with the existing 2-merge auto-detect found on vitacare. |
+| 3 | **Buffer-then-commit at end-of-doc.** SCE collects all batch results for doc N in a temporary `KnowledgeGraph` buffer, merges into the real graph atomically when doc N's extraction completes. Failure mid-doc discards the buffer; partial-doc state never leaks into doc N+1's cumulative-state prompt header. | Simpler than per-batch commit + rollback (~30 LOC vs. ~100 LOC). Matches the PRD's atomicity requirement directly. |
+| 4 | **v1 supports Gemini backend only.** SCE branch initially targets Gemini-only (use `gemini-embedding-2-preview` for ETR's embeddings, and any chat-completion Gemini model for SCE's cumulative-state prompts). OpenAI/Claude/Ollama support deferred until SCE proves end-to-end on Gemini. | Limits scope of the token-tracking instrumentation — only `GeminiBackend` needs to expose `usageMetadata.promptTokenCount`. Other vendors get token plumbing added if Gemini SCE proves out. |
+| 5 | **Skip the optional final canonicalization LLM pass in v1.** PRD §"SCE Algorithm" step 5 (one-LLM-call-over-full-entity-list canonicalization) is deferred. | First end-to-end SCE run will tell us if the per-batch reuse decisions need a final cleanup. Adding it speculatively wastes a branch cycle. |
+| 6 | **Commit doc updates to `main` before branching.** Both SCE and ETR branches branch off `8225e37` (post-α HEAD). The 2026-05-16 PRD + backlog updates live on `main` as a separate commit; both branches inherit the locked-in prep items from `main` history. | Keeps prep items durable on `main` and version-pinned in git, not just in session docs. |
+
+---
+
+## Embedding model defaults
 
 | Backend | Default | Notes |
 |---------|---------|-------|
@@ -406,14 +567,3 @@ Doc tags: `ORG` = organization_and_people, `CLI` = clinical_services_and_pricing
 | Claude | — | No embedding API; ETR disabled in UI when LLM backend = Claude and no other embedding configured. |
 
 **ETR availability gate** (unchanged from PRD §"Embedding backend"): selector validates the embedding endpoint on save; ETR option in merging-strategy UI is disabled until a valid embedding model is configured.
-
-### 4. Integration decisions (apply to both SCE and ETR branches)
-
-| # | Decision | Rationale |
-|---|----------|-----------|
-| 1 | **Doc ordering for SCE = order of user click.** Use the order PDFs were added to the project (preserved in `OpenSessionBookmarks` / `DocumentManager`). | Captures user intent without UI work; deterministic enough for reproducibility within a session. Re-runs that test "anchoring fragility" simply re-add PDFs in a different order. |
-| 2 | **Disable `GraphMergeEngine` (Levenshtein dedup) during A/B runs.** SCE/ETR fully owns the cross-doc merge result; the existing Levenshtein pass is bypassed for the duration of the comparison. Re-enable in production after the winner lands. | Clean comparison — baseline numbers per branch attribute every merge to the branch under test. Avoids double-counting with the existing 2-merge auto-detect found on vitacare. |
-| 3 | **Buffer-then-commit at end-of-doc.** SCE collects all batch results for doc N in a temporary `KnowledgeGraph` buffer, merges into the real graph atomically when doc N's extraction completes. Failure mid-doc discards the buffer; partial-doc state never leaks into doc N+1's cumulative-state prompt header. | Simpler than per-batch commit + rollback (~30 LOC vs. ~100 LOC). Matches the PRD's atomicity requirement directly. |
-| 4 | **v1 supports Gemini backend only.** SCE branch initially targets Gemini-only (use `gemini-embedding-2-preview` for ETR's embeddings, and any chat-completion Gemini model for SCE's cumulative-state prompts). OpenAI/Claude/Ollama support deferred until SCE proves end-to-end on Gemini. | Limits scope of the token-tracking instrumentation — only `GeminiBackend` needs to expose `usageMetadata.promptTokenCount`. Other vendors get token plumbing added if Gemini SCE proves out. |
-| 5 | **Skip the optional final canonicalization LLM pass in v1.** PRD §"SCE Algorithm" step 5 (one-LLM-call-over-full-entity-list canonicalization) is deferred. | First end-to-end SCE run will tell us if the per-batch reuse decisions need a final cleanup. Adding it speculatively wastes a branch cycle. |
-| 6 | **Commit doc updates to `main` before branching.** Both SCE and ETR branches branch off `8225e37` (post-α HEAD). The 2026-05-16 PRD + backlog updates live on `main` as a separate commit; both branches inherit the locked-in prep items from `main` history. | Keeps prep items durable on `main` and version-pinned in git, not just in session docs. |

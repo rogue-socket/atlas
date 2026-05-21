@@ -380,4 +380,280 @@ enum PromptTemplates {
         Return valid JSON only.
         """
     }
+
+    // MARK: - ETR Merge Adjudication
+
+    /// Prompt the LLM with N candidate pairs in the 0.85–0.95 similarity band
+    /// (per `ResolverThresholds`) and ask whether each pair should be merged.
+    /// Expected output is a JSON array of N booleans in input order.
+    ///
+    /// Cross-level pairs (one `.concept` + one `.entity`) are explicitly
+    /// called out in the prompt — same-real-world-thing only, not "similar
+    /// topic." Same-name-but-different-scope cases ("on-site labs" vs
+    /// "external labs", "internal audits" vs "external audits") are anti-
+    /// examples drawn from the locked-in vitacare quality pairs.
+    /// Public entry point. Currently routes to v4 (the conservative-biased
+    /// prompt promoted per `audits/2026-05-18_v4-prompt-experiment.md`).
+    /// v4 wins on stable precision and trap rate on both vitacare and
+    /// harvest_hearth, at the cost of recall on brand-voice corpora —
+    /// see `audits/2026-05-18_v4-holdout-harvest-hearth.md`.
+    ///
+    /// **To A/B test v2, v3, or v5**: change the call below to
+    /// `mergeAdjudicationV{2,3,5}(...)`. v2 is the original published
+    /// prompt; v3 is the abstract-pattern variant (recall-biased on
+    /// brand-voice corpora); v5 attempted to close v4's harvest recall
+    /// gap with a brand-value↔implementing-program category but only
+    /// recovered 1 of 6 target merges and worsened worst-case trap count
+    /// (`audits/2026-05-18_v5-prompt-experiment.md`). All versions share
+    /// the pair-format helper and the final JSON-array instruction wrapper.
+    static func mergeAdjudication(pairs: [(a: ConceptNode, b: ConceptNode)]) -> String {
+        return mergeAdjudicationV4(pairs: pairs)
+    }
+
+    /// Pair formatter shared by every prompt revision.
+    private static func formatAdjudicationBody(_ pairs: [(a: ConceptNode, b: ConceptNode)]) -> String {
+        let formatPair: (Int, ConceptNode, ConceptNode) -> String = { i, a, b in
+            let summaryA = a.summary?.isEmpty == false ? a.summary! : "(no summary)"
+            let summaryB = b.summary?.isEmpty == false ? b.summary! : "(no summary)"
+            return """
+            \(i + 1). A: "\(a.label)" (type=\(a.type.rawValue), level=\(a.level.rawValue)) — \(summaryA)
+               B: "\(b.label)" (type=\(b.type.rawValue), level=\(b.level.rawValue)) — \(summaryB)
+            """
+        }
+        return pairs.enumerated().map { formatPair($0.offset, $0.element.a, $0.element.b) }.joined(separator: "\n\n")
+    }
+
+    /// **v2 — published prompt (2026-05-17).** Vitacare-specific MERGE and
+    /// KEEP-SEPARATE exemplars inline. 7/7 in-band rubric recall claim was
+    /// later corrected to 6/7 (`audits/2026-05-17_etr-prompt-tune.md` §A).
+    /// On the 2026-05-18 fresh extraction (different abstraction level), this
+    /// produced 12/52 approvals at floor 0.80 with ~33% eyeball precision —
+    /// the vitacare exemplars don't match new-extraction labels, so the
+    /// patterns under-generalize and over-merge.
+    private static func mergeAdjudicationV2(pairs: [(a: ConceptNode, b: ConceptNode)]) -> String {
+        let body = formatAdjudicationBody(pairs)
+        return """
+        You are deciding whether candidate pairs of knowledge-graph nodes describe the same real-world thing.
+
+        For each numbered pair, output exactly one boolean: true to merge, false to keep separate.
+
+        The test: could the two labels appear as bullet points under the same heading in a corporate handbook describing a single process, service, fact, or entity? If yes → merge. If they share a topic word but describe different events or different aspects → keep separate.
+
+        MERGE when:
+        - Both labels describe the same operational fact with different framings, e.g.:
+          • "Asynchronous messages" ↔ "In-app messaging: response within 6 business hours" (same in-app messaging service)
+          • "Lab result release: typically within 24 hours" ↔ "same-day or next-day results" (same lab-result delivery SLA)
+          • "Lab results are posted to the patient portal" ↔ "Lab result release: typically within 24 hours" (same lab-result release event, one names the channel, one names the timing)
+        - One label is a concept naming a process and the other is an entity describing how that process happens, e.g.:
+          • "Referral Process" ↔ "referral and prior authorization handled by VitaCare care coordinators"
+        - One label names a specific instance of a broader operational pathway and they are operationally the same activity, e.g.:
+          • "Advanced Imaging Referrals" ↔ "External Care Coordination" (advanced imaging is referred externally via the care-coordination pathway)
+          The test for this case: the two labels must describe the SAME activity from different angles, not a leaf service and the broader catalog that contains it.
+        - Two entity labels describe the same role or actor performing the same task, e.g.:
+          • "Care coordinator handles prior authorization" ↔ "care coordinator manages the referral end-to-end"
+
+        KEEP SEPARATE when:
+        - The labels share a noun (lab, portal, audit, insurance, officer, program, network) but describe different events or different aspects, e.g.:
+          • "Lab results are posted to the patient portal" ↔ "Patient portal meets WCAG 2.1 AA accessibility standards" (same portal, different facts: release event vs accessibility standard)
+          • "Insurance Networks" (accepted payors) ↔ "Insurance Policies" (corporate liability insurance)
+          • "internal audits" ↔ "external audits"
+          • A list of co-founders ↔ a list of compliance officers (different people, same role-noun)
+          • "on-site labs" ↔ "external labs" (different vendors, different locations)
+        - One is a metric or outcome and the other is a different metric, even if both are operational numbers, e.g.:
+          • "98.9% on-time visit starts" ↔ "Patient Net Promoter Score: 71"
+          • "Hypertension control to under 140/90 mmHg: 81%" ↔ "98.9% on-time visit starts"
+        - One is an employee/staff benefit and the other is a patient-facing service, e.g.:
+          • "Free VitaCare primary care for employees and dependents" ↔ "includes all primary care visits" (commercial product)
+        - One is a service catalog item and the other is a vendor-management process, e.g.:
+          • "Specialty Care Services" ↔ "Specialist Network Curation"
+        - Both are program types but with distinct delivery modalities or populations, e.g.:
+          • "Group Programs" ↔ "Chronic Condition Programs"
+          • "Health Coaching" ↔ "Chronic Condition Programs"
+        - One label is a leaf service or program and the other is the broader catalog or umbrella it sits inside (use a hierarchy edge, not a merge), e.g.:
+          • "Post-Discharge Care" ↔ "VitaCare Services" (specific service inside the umbrella service catalog)
+          • "Health Coaching" ↔ "VitaCare Services"
+          • "External Care Coordination" ↔ "VitaCare Services"
+          • "Group Programs" ↔ "VitaCare Services"
+
+        When uncertain, prefer KEEP SEPARATE (false). Only merge when you can articulate the single real-world thing both labels point at.
+
+        Pairs:
+        \(body)
+
+        Return ONLY a JSON array of \(pairs.count) booleans, one per pair, in the same order. No prose, no explanation, no code fences. Example for 4 pairs: [true, false, true, false]
+        """
+    }
+
+    /// **v3 — abstract-pattern variant (2026-05-18, experimental).** Same
+    /// pattern scaffolding as v2, vitacare-specific exemplars stripped, leaf-
+    /// of-catalog anti-pattern made explicit via word-list heuristic. On the
+    /// same 2026-05-18 fresh extraction this produced 4/52 approvals at floor
+    /// 0.80 (vs v2's 12/52). Correctly rejected 5 of v2's likely-wrong merges,
+    /// kept all 4 cleanest merges, but dropped 1 real merge (SUD Record
+    /// Protections ↔ Behavioral Health Record Privacy — regulatory subset)
+    /// because the abstract patterns don't surface that relationship.
+    /// Still over-merges on 2 umbrella↔umbrella pairs where the leaf-of-
+    /// catalog rule can't asymmetrically detect umbrella vs aspect.
+    /// Full A/B in `audits/2026-05-18_v3-prompt-experiment.md`.
+    private static func mergeAdjudicationV3(pairs: [(a: ConceptNode, b: ConceptNode)]) -> String {
+        let body = formatAdjudicationBody(pairs)
+        return """
+        You are deciding whether candidate pairs of knowledge-graph nodes describe the same real-world thing.
+
+        For each numbered pair, output exactly one boolean: true to merge, false to keep separate.
+
+        The test: could the two labels appear as bullet points under the same heading in a document describing a single process, service, fact, or entity? If yes → merge. If they share a topic word but describe different events, different aspects, or different scope → keep separate.
+
+        MERGE when ANY of these patterns fit. Each pattern names a relationship type and the criterion that must hold:
+
+        - **Paraphrase.** Both labels describe the same operational fact, action, or measurable property — same who, same what, same when, same scope — written with different wording.
+        - **Process ↔ implementation.** One label names a process at the concept level and the other describes how that exact process is carried out. The "what" must be identical at the same scope; only the abstraction level differs.
+        - **Same activity from different angles.** Two labels describe the same activity (same actor + same action + same target), differing only in which side of the activity the label foregrounds. Not to be confused with the leaf-of-catalog anti-pattern below.
+        - **Same role + same task.** Two role descriptions where both the actor and the task are the same.
+
+        KEEP SEPARATE when ANY of these patterns fit. Each pattern names a failure mode the merge prompt is commonly tempted by:
+
+        - **Shared noun, different fact.** The labels share a topic word but address different events, different aspects of the same object, different timeframes, or different scope.
+        - **Different metrics.** Both are numeric outcomes but measure different things, even if related.
+        - **Audience / population mismatch.** One serves an internal audience (staff, employees, vendors) and the other serves an external audience (customers, patients, regulators), even when the underlying activity rhymes.
+        - **Same job-title noun, different people.** Two distinct named roles that share a role-noun ("officer", "coordinator", "lead") are not the same role.
+        - **Adjacent-but-distinct programs.** Two programs of the same general type but differing by delivery modality, population, location, or vendor relationship (internal vs external, on-site vs off-site, etc.).
+        - **Service vs the function that manages it.** A service offering vs the procurement / vendor-management / quality function around that service category.
+        - **LEAF ↔ CATALOG (most common false-positive).** One label is a specific service, program, or item, and the other is the broader umbrella catalog, portfolio, overview, or grouping it sits inside. The relationship is hierarchy (use a hierarchy edge), NOT identity. Heuristic: if label A is a single concrete offering and label B uses words like "overview", "services", "portfolio", "model", "framework", "principles", "areas" — it is almost certainly leaf-of-catalog. Default to false here.
+        - **Object ↔ property of object.** Both labels reference the same physical or organizational object, but one describes an operational use of it and the other describes a compliance, quality, or availability attribute of it.
+
+        When uncertain, prefer KEEP SEPARATE (false). Merge only when you can articulate the single real-world thing both labels point at — without paraphrasing either label to fit the other.
+
+        Pairs:
+        \(body)
+
+        Return ONLY a JSON array of \(pairs.count) booleans, one per pair, in the same order. No prose, no explanation, no code fences. Example for 4 pairs: [true, false, true, false]
+        """
+    }
+
+    /// **v4 — noise-reduction over v3 (2026-05-18, experimental).**
+    /// Two targeted edits to v3, motivated by `audits/2026-05-18_v3-prompt-experiment.md`:
+    /// (1) Leaf-of-catalog rule recast as **asymmetric scope containment** —
+    ///     fires when one label is strictly inside the other's scope, regardless
+    ///     of which side carries the umbrella words. Stabilizes rejection of
+    ///     umbrella↔umbrella pairs like "VitaCare Overview & Service Model"
+    ///     ↔ "Core Care Principles" (rubric pairs #4 and #8 in
+    ///     `audits/2026-05-18_rubric-v3-vitacare.md`).
+    /// (2) New MERGE category **"Regulatory subset"** + paired KEEP-SEPARATE
+    ///     "Parallel regimes that share a noun" anti-pattern. Names the
+    ///     SUD ↔ BH privacy pattern (rubric pair #11) explicitly; in the 3-of-3
+    ///     A/B (`audits/2026-05-18_v4-prompt-experiment.md`) v4 ties v3 on
+    ///     stable recall but wins on union-of-approvals noise envelope
+    ///     (6 vs 11 pairs over 3 runs) and worst-case behavior (4 vs 10
+    ///     approvals max).
+    /// Everything else carries forward from v3 unchanged.
+    private static func mergeAdjudicationV4(pairs: [(a: ConceptNode, b: ConceptNode)]) -> String {
+        let body = formatAdjudicationBody(pairs)
+        return """
+        You are deciding whether candidate pairs of knowledge-graph nodes describe the same real-world thing.
+
+        For each numbered pair, output exactly one boolean: true to merge, false to keep separate.
+
+        The test: could the two labels appear as bullet points under the same heading in a document describing a single process, service, fact, or entity? If yes → merge. If they share a topic word but describe different events, different aspects, or different scope → keep separate.
+
+        MERGE when ANY of these patterns fit. Each pattern names a relationship type and the criterion that must hold:
+
+        - **Paraphrase.** Both labels describe the same operational fact, action, or measurable property — same who, same what, same when, same scope — written with different wording.
+        - **Process ↔ implementation.** One label names a process at the concept level and the other describes how that exact process is carried out. The "what" must be identical at the same scope; only the abstraction level differs.
+        - **Same activity from different angles.** Two labels describe the same activity (same actor + same action + same target), differing only in which side of the activity the label foregrounds. Not to be confused with the leaf-of-catalog anti-pattern below.
+        - **Same role + same task.** Two role descriptions where both the actor and the task are the same.
+        - **Regulatory subset.** One label names a regulatory regime, policy framework, or compliance program; the other names a stricter subset of that regime that applies to a narrower data class, population, or jurisdiction and is layered on top of the broader one. Both labels point at the same governed object viewed at two scopes of regulation. Examples of the abstract pattern: a general privacy program and the heightened protections for one record class within it; a baseline access-control framework and the stricter consent regime for a regulated subset; a tax regime and a jurisdiction-specific overlay on top of it. Merge here when the narrower regime is genuinely a subset (not a parallel regime that happens to share a noun).
+
+        KEEP SEPARATE when ANY of these patterns fit. Each pattern names a failure mode the merge prompt is commonly tempted by:
+
+        - **Shared noun, different fact.** The labels share a topic word but address different events, different aspects of the same object, different timeframes, or different scope.
+        - **Different metrics.** Both are numeric outcomes but measure different things, even if related.
+        - **Audience / population mismatch.** One serves an internal audience (staff, employees, vendors) and the other serves an external audience (customers, patients, regulators), even when the underlying activity rhymes.
+        - **Same job-title noun, different people.** Two distinct named roles that share a role-noun ("officer", "coordinator", "lead") are not the same role.
+        - **Adjacent-but-distinct programs.** Two programs of the same general type but differing by delivery modality, population, location, or vendor relationship (internal vs external, on-site vs off-site, etc.).
+        - **Service vs the function that manages it.** A service offering vs the procurement / vendor-management / quality function around that service category.
+        - **LEAF ↔ CATALOG (most common false-positive).** One label is strictly inside the other's scope: it is one item, program, principle, or aspect contained within the broader umbrella the other label names. The relationship is hierarchy (use a hierarchy edge), NOT identity. The asymmetry test that matters is *scope containment*, not which side uses umbrella words: if everything label A refers to is also referred to by label B but not vice versa (or vice versa), it is leaf-of-catalog. This includes umbrella ↔ umbrella pairs where one umbrella is broader than the other (e.g., a whole-company service catalog ↔ a sub-aspect like care philosophy, care model, or experience design — the catalog is broader even though both sides carry umbrella words like "overview", "model", "principles", "design"). Default to false whenever you suspect one side's scope is strictly inside the other's.
+        - **Object ↔ property of object.** Both labels reference the same physical or organizational object, but one describes an operational use of it and the other describes a compliance, quality, or availability attribute of it.
+        - **Parallel regimes that share a noun (not a regulatory subset).** Distinguish from the Regulatory-subset MERGE category above: this anti-pattern is two governance frameworks that share a topic word but operate independently (e.g., a corporate liability insurance program ↔ a patient health-insurance acceptance list both labeled "insurance"; an internal audit function ↔ an external audit function). Keep separate when neither regime is contained within the other.
+
+        When uncertain, prefer KEEP SEPARATE (false). Merge only when you can articulate the single real-world thing both labels point at — without paraphrasing either label to fit the other.
+
+        Pairs:
+        \(body)
+
+        Return ONLY a JSON array of \(pairs.count) booleans, one per pair, in the same order. No prose, no explanation, no code fences. Example for 4 pairs: [true, false, true, false]
+        """
+    }
+
+    /// **v5 — recall recovery for brand-voice corpora (2026-05-18, experimental).**
+    /// Extends v4 with one new MERGE category designed to close the harvest_hearth
+    /// recall gap surfaced in `audits/2026-05-18_v4-holdout-harvest-hearth.md`
+    /// without regressing v4's vitacare wins:
+    /// **"Brand value ↔ canonical implementing program."** One label is a
+    /// stated principle/value/commitment, the other is the named program or
+    /// service that operationalizes that same principle *in its entirety*.
+    /// Designed to recover pairs like `Repair and Resell ↔ Hearth Again
+    /// Resale Program` (harvest rubric #65) without accidentally catching
+    /// vitacare's `Cultural Principles ↔ Primary Care Management` (vitacare
+    /// rubric #17) — the discriminator is the "canonical / sole implementation"
+    /// test: if removing the named program would leave the principle still
+    /// fulfillable by other programs, the relationship is umbrella, not identity.
+    private static func mergeAdjudicationV5(pairs: [(a: ConceptNode, b: ConceptNode)]) -> String {
+        let body = formatAdjudicationBody(pairs)
+        return """
+        You are deciding whether candidate pairs of knowledge-graph nodes describe the same real-world thing.
+
+        For each numbered pair, output exactly one boolean: true to merge, false to keep separate.
+
+        The test: could the two labels appear as bullet points under the same heading in a document describing a single process, service, fact, or entity? If yes → merge. If they share a topic word but describe different events, different aspects, or different scope → keep separate.
+
+        MERGE when ANY of these patterns fit. Each pattern names a relationship type and the criterion that must hold:
+
+        - **Paraphrase.** Both labels describe the same operational fact, action, or measurable property — same who, same what, same when, same scope — written with different wording.
+        - **Process ↔ implementation.** One label names a process at the concept level and the other describes how that exact process is carried out. The "what" must be identical at the same scope; only the abstraction level differs.
+        - **Same activity from different angles.** Two labels describe the same activity (same actor + same action + same target), differing only in which side of the activity the label foregrounds. Not to be confused with the leaf-of-catalog anti-pattern below.
+        - **Same role + same task.** Two role descriptions where both the actor and the task are the same.
+        - **Regulatory subset.** One label names a regulatory regime, policy framework, or compliance program; the other names a stricter subset of that regime that applies to a narrower data class, population, or jurisdiction and is layered on top of the broader one. Both labels point at the same governed object viewed at two scopes of regulation. Examples of the abstract pattern: a general privacy program and the heightened protections for one record class within it; a baseline access-control framework and the stricter consent regime for a regulated subset; a tax regime and a jurisdiction-specific overlay on top of it. Merge here when the narrower regime is genuinely a subset (not a parallel regime that happens to share a noun).
+        - **Brand value ↔ canonical implementing program.** One label states a brand value, principle, or commitment (often a short declarative phrase: "Repair and Resell", "Honest Sourcing", "Pay Fairly", "Durable over Disposable"). The other label is the named program, service, or system that operationalizes that exact principle. Merge ONLY when the program is the canonical / comprehensive realization of the principle — i.e., the program's scope and the principle's scope match. **Critical discriminator:** apply the substitution test — "if this specific program were removed from the company, could other distinct programs still fulfill the principle in full?" If yes (the program is one of several ways to honor the principle), KEEP SEPARATE — that is the umbrella anti-pattern below. If no (the principle is undeliverable without this exact program; the program's name directly names the activities the principle describes), MERGE.
+
+        KEEP SEPARATE when ANY of these patterns fit. Each pattern names a failure mode the merge prompt is commonly tempted by:
+
+        - **Shared noun, different fact.** The labels share a topic word but address different events, different aspects of the same object, different timeframes, or different scope.
+        - **Different metrics.** Both are numeric outcomes but measure different things, even if related.
+        - **Audience / population mismatch.** One serves an internal audience (staff, employees, vendors) and the other serves an external audience (customers, patients, regulators), even when the underlying activity rhymes.
+        - **Same job-title noun, different people.** Two distinct named roles that share a role-noun ("officer", "coordinator", "lead") are not the same role.
+        - **Adjacent-but-distinct programs.** Two programs of the same general type but differing by delivery modality, population, location, or vendor relationship (internal vs external, on-site vs off-site, etc.).
+        - **Service vs the function that manages it.** A service offering vs the procurement / vendor-management / quality function around that service category.
+        - **LEAF ↔ CATALOG (most common false-positive).** One label is strictly inside the other's scope: it is one item, program, principle, or aspect contained within the broader umbrella the other label names. The relationship is hierarchy (use a hierarchy edge), NOT identity. The asymmetry test that matters is *scope containment*, not which side uses umbrella words: if everything label A refers to is also referred to by label B but not vice versa (or vice versa), it is leaf-of-catalog. This includes umbrella ↔ umbrella pairs where one umbrella is broader than the other (e.g., a whole-company service catalog ↔ a sub-aspect like care philosophy, care model, or experience design — the catalog is broader even though both sides carry umbrella words like "overview", "model", "principles", "design"). Default to false whenever you suspect one side's scope is strictly inside the other's.
+        - **Principle ↔ one-of-many implementations.** A stated principle/value/commitment paired with a specific policy, metric, or sub-program that is one of several distinct ways to honor that principle. Example pattern: a "pay fairly" principle paired with a specific "living wage" policy — the wage is one component of paying fairly, not the totality. Apply the substitution test from the Brand-value MERGE category above in reverse: if removing this implementation would leave the principle still fulfillable by other distinct programs, the relationship is one-of-many → keep separate.
+        - **Object ↔ property of object.** Both labels reference the same physical or organizational object, but one describes an operational use of it and the other describes a compliance, quality, or availability attribute of it.
+        - **Parallel regimes that share a noun (not a regulatory subset).** Distinguish from the Regulatory-subset MERGE category above: this anti-pattern is two governance frameworks that share a topic word but operate independently (e.g., a corporate liability insurance program ↔ a patient health-insurance acceptance list both labeled "insurance"; an internal audit function ↔ an external audit function). Keep separate when neither regime is contained within the other.
+
+        When uncertain, prefer KEEP SEPARATE (false). Merge only when you can articulate the single real-world thing both labels point at — without paraphrasing either label to fit the other.
+
+        Pairs:
+        \(body)
+
+        Return ONLY a JSON array of \(pairs.count) booleans, one per pair, in the same order. No prose, no explanation, no code fences. Example for 4 pairs: [true, false, true, false]
+        """
+    }
+
+    /// Parse the adjudication response into `[Bool]`. Tolerates leading/
+    /// trailing whitespace and ```json code fences. Throws when the JSON is
+    /// invalid, not an array, or the array length doesn't match `expectedCount`
+    /// (callers can't safely map decisions back to pairs on a length mismatch).
+    static func parseMergeAdjudicationResponse(_ raw: String,
+                                               expectedCount: Int) throws -> [Bool] {
+        let cleaned = JSONRepair.cleanAndRepair(raw)
+        guard let data = cleaned.data(using: .utf8) else {
+            throw AIError.decodingError("adjudication response not UTF-8")
+        }
+        guard let bools = try JSONSerialization.jsonObject(with: data) as? [Bool] else {
+            throw AIError.decodingError("adjudication response not [Bool]: \(cleaned.prefix(120))")
+        }
+        guard bools.count == expectedCount else {
+            throw AIError.decodingError("adjudication response length \(bools.count) != expected \(expectedCount)")
+        }
+        return bools
+    }
 }

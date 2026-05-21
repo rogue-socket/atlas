@@ -52,7 +52,8 @@ final class GeminiBackend: LLMBackend, @unchecked Sendable {
                 ]
             ],
             "generationConfig": [
-                "temperature": 0.1,
+                "temperature": 0.0,
+                "topK": 1,
                 "maxOutputTokens": 32768,
                 "responseMimeType": "application/json"
             ]
