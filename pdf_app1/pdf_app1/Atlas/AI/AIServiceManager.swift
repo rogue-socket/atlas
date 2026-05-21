@@ -104,9 +104,10 @@ class AIServiceManager {
                 return nil
             }
             return GeminiEmbeddingBackend(apiKey: apiKey, model: selectedEmbeddingModel)
-        case .claude:
-            // Claude has no embedding API as of 2026-05; ETR must use a
-            // different vendor when the chat backend is Claude.
+        case .claude, .claudeSubscription:
+            // Claude has no embedding API as of 2026-05 (neither the API nor
+            // the subscription sidecar); ETR must use a different vendor when
+            // the chat backend is Claude.
             log.warning("[AIService] Claude has no embedding API — ETR unavailable with this selection")
             return nil
         case .openai, .ollama:
