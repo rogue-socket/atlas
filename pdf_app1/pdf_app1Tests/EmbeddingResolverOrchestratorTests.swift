@@ -335,8 +335,9 @@ final class EmbeddingResolverOrchestratorTests: XCTestCase {
         let backend = FakeEmbeddingBackend(dim: 2) { text in
             text.contains("Telehealth") ? [1, 0] : [0.87, sqrt(1 - 0.87 * 0.87)]
         }
-        // LLM approves (returns [true])
-        let llm = FlakyLLMBackend(failureCount: 0, successResponse: "[true]")
+        // LLM returns a hybrid "merge" verdict for the single pair.
+        let llm = FlakyLLMBackend(failureCount: 0,
+                                  successResponse: #"[{"pair": 1, "verdict": "merge", "direction": "ab"}]"#)
 
         _ = try await EmbeddingResolver.resolve(graph: g, projectID: projectID,
                                                 embeddingBackend: backend,
@@ -351,7 +352,7 @@ final class EmbeddingResolverOrchestratorTests: XCTestCase {
         )
         XCTAssertEqual(audit.entries.count, 1)
         XCTAssertEqual(audit.entries[0].band, "adjudication")
-        XCTAssertEqual(audit.entries[0].llmVerdict, "approved")
+        XCTAssertEqual(audit.entries[0].llmVerdict, "merge")
         XCTAssertEqual(audit.entries[0].finalReason, "llmAdjudicated")
     }
 

@@ -656,4 +656,88 @@ enum PromptTemplates {
         }
         return bools
     }
+
+    // MARK: - Hybrid adjudication (ETR backbone + SCE typed-relation taxonomy)
+
+    /// **Hybrid adjudication (2026-05-21).** ETR's merge/keep decision plus
+    /// SCE's typed-relation taxonomy. For each candidate pair the model
+    /// returns one of five verdicts: `merge` (collapse the pair),
+    /// `instance_of` / `attribute_of` / `process_for` (keep both nodes,
+    /// record a directed typed edge), or `keep` (no relationship). The MERGE
+    /// catalog carries forward from v4; three of v4's keep-separate anti-
+    /// patterns that name a real structural relationship (leaf↔catalog,
+    /// object↔property, service↔managing-function) become typed verdicts.
+    static func mergeAdjudicationHybrid(pairs: [(a: ConceptNode, b: ConceptNode)]) -> String {
+        let body = formatAdjudicationBody(pairs)
+        return """
+        You are classifying candidate pairs of knowledge-graph nodes. Each pair has a node A and a node B.
+
+        For each numbered pair, choose exactly one verdict:
+        - "merge" — A and B are the SAME real-world thing, written differently.
+        - "instance_of" — NOT the same thing: one is a specific item/program/principle, the other is the broader category, catalog, or umbrella that contains it.
+        - "attribute_of" — NOT the same thing: one is a property, metric, quality, or compliance attribute OF the object the other names.
+        - "process_for" — NOT the same thing: one is a process, function, or managing activity that operates ON or SERVES the thing the other names.
+        - "keep" — NOT the same thing and no clear containment / attribute / process relationship; they merely share a topic word.
+
+        Choose "merge" when ANY of these fit:
+        - Paraphrase: same operational fact, action, or measurable property — same who/what/when/scope — different wording.
+        - Process ↔ implementation: one names a process, the other describes how that exact process is carried out; identical "what", only abstraction differs.
+        - Same activity from different angles: same actor + action + target, different foreground.
+        - Same role + same task.
+        - Regulatory subset: a regime and a stricter subset of THAT SAME regime layered on the same governed object.
+
+        Otherwise choose the typed relationship when one fits:
+        - instance_of: one label is strictly inside the other's scope — a single concrete offering/program/principle/aspect vs the catalog, portfolio, or umbrella grouping it belongs to.
+        - attribute_of: both labels reference the same object, but one names an operational use and the other a property/metric/compliance-or-quality attribute of it.
+        - process_for: one names a service or object and the other names the procurement, vendor-management, quality, or governance function that manages it.
+
+        Otherwise choose "keep" — they only share a noun:
+        - Shared noun but different fact; different metrics; internal-vs-external audience mismatch; same job-title noun but different people; adjacent-but-distinct programs (different modality/population/vendor); parallel regimes that share a word where neither contains the other.
+
+        When uncertain between "merge" and a typed relation, prefer the typed relation. When uncertain between a typed relation and "keep", prefer "keep".
+
+        DIRECTION — for the three typed verdicts only, report which node is the specific / dependent side:
+        - instance_of: direction "ab" if A is the specific item and B is the category; "ba" if reversed.
+        - attribute_of: direction "ab" if A is the attribute and B is the object; "ba" if reversed.
+        - process_for: direction "ab" if A is the process/function and B is the thing served; "ba" if reversed.
+        For "merge" and "keep", direction is ignored — use "ab".
+
+        Pairs:
+        \(body)
+
+        Return ONLY a JSON array of \(pairs.count) objects, one per pair, in order. Each object: {"pair": <1-based number>, "verdict": "merge|instance_of|attribute_of|process_for|keep", "direction": "ab|ba"}. No prose, no code fences. Example: [{"pair": 1, "verdict": "merge", "direction": "ab"}, {"pair": 2, "verdict": "instance_of", "direction": "ba"}]
+        """
+    }
+
+    /// Parse a hybrid-adjudication response into exactly `expectedCount`
+    /// `AdjudicationResult`s. Lenient by design — unlike `parseMergeAdjudicationResponse`
+    /// this does NOT hard-fail a whole batch on a length mismatch (one of the
+    /// ETR robustness gaps). Objects are matched to pairs by their 1-based
+    /// `pair` field, falling back to array position when `pair` is absent.
+    /// Any pair with no usable object, an unknown verdict, or a malformed
+    /// entry defaults to `.keep` / `.ab` (the conservative no-op). Throws
+    /// only when the response is not a JSON array at all.
+    static func parseHybridAdjudicationResponse(_ raw: String,
+                                                expectedCount: Int) throws -> [AdjudicationResult] {
+        let cleaned = JSONRepair.cleanAndRepair(raw)
+        guard let data = cleaned.data(using: .utf8),
+              let array = try JSONSerialization.jsonObject(with: data) as? [Any] else {
+            throw AIError.decodingError("hybrid adjudication response not a JSON array: \(cleaned.prefix(120))")
+        }
+        var byPair: [Int: AdjudicationResult] = [:]
+        for (idx, element) in array.enumerated() {
+            guard let obj = element as? [String: Any] else { continue }
+            let pair = (obj["pair"] as? Int)
+                ?? (obj["pair"] as? NSNumber)?.intValue
+                ?? (idx + 1)
+            let verdict = (obj["verdict"] as? String)
+                .flatMap { AdjudicationVerdict(rawValue: $0.lowercased()) } ?? .keep
+            let direction = (obj["direction"] as? String)
+                .flatMap { PairDirection(rawValue: $0.lowercased()) } ?? .ab
+            byPair[pair] = AdjudicationResult(verdict: verdict, direction: direction)
+        }
+        return (0..<expectedCount).map { i in
+            byPair[i + 1] ?? AdjudicationResult(verdict: .keep, direction: .ab)
+        }
+    }
 }

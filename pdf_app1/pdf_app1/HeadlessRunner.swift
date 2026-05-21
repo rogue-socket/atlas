@@ -326,6 +326,6 @@ final class HeadlessRunner {
 
         let result = EmbeddingMergeApplier.apply(plan, to: graph)
         let etrElapsed = Date().timeIntervalSince(etrStart)
-        log.info("[Headless] ETR done in \(String(format: "%.1f", etrElapsed))s: plan=\(plan.decisions.count) decisions; applied=\(result.groupsApplied) groups, removed=\(result.nodesRemoved) nodes, rewrote=\(result.edgesRewritten) edges, deduped=\(result.edgesDeduplicated); post-graph=\(graph.nodeCount)n/\(graph.edgeCount)e")
+        log.info("[Headless] ETR done in \(String(format: "%.1f", etrElapsed))s: plan=\(plan.decisions.count) merges + \(plan.relations.count) relations; applied=\(result.groupsApplied) groups, removed=\(result.nodesRemoved) nodes, rewrote=\(result.edgesRewritten) edges, deduped=\(result.edgesDeduplicated), relations=\(result.relationsAdded); post-graph=\(graph.nodeCount)n/\(graph.edgeCount)e")
     }
 }

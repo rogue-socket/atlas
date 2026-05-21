@@ -33,12 +33,22 @@ enum EmbeddingMergeApplier {
         let nodesRemoved: Int
         let edgesRewritten: Int
         let edgesDeduplicated: Int
+        let relationsAdded: Int
+
+        init(groupsApplied: Int, nodesRemoved: Int, edgesRewritten: Int,
+             edgesDeduplicated: Int, relationsAdded: Int = 0) {
+            self.groupsApplied = groupsApplied
+            self.nodesRemoved = nodesRemoved
+            self.edgesRewritten = edgesRewritten
+            self.edgesDeduplicated = edgesDeduplicated
+            self.relationsAdded = relationsAdded
+        }
     }
 
     /// Apply `plan` to `graph` in place. Returns counts for the audit log.
     @discardableResult
     static func apply(_ plan: MergePlan, to graph: KnowledgeGraph) -> ApplyResult {
-        guard !plan.decisions.isEmpty else {
+        guard !plan.decisions.isEmpty || !plan.relations.isEmpty else {
             return ApplyResult(groupsApplied: 0, nodesRemoved: 0, edgesRewritten: 0, edgesDeduplicated: 0)
         }
 
@@ -145,6 +155,24 @@ enum EmbeddingMergeApplier {
                 byKey[key] = rewrittenEdge
             }
         }
+        // 7. Materialize hybrid typed relations as new directed edges. Remap
+        //    endpoints through idRemap (a relation node may have merged away),
+        //    drop self-relations and endpoints that no longer exist, and dedup
+        //    against the rewritten edges by (source, target, type).
+        var relationsAdded = 0
+        for rel in plan.relations {
+            let s = idRemap[rel.sourceID] ?? rel.sourceID
+            let t = idRemap[rel.targetID] ?? rel.targetID
+            if s == t { continue }
+            guard graph.nodes[s] != nil, graph.nodes[t] != nil else { continue }
+            let key = EdgeKey(s: s, t: t, type: rel.edgeType)
+            if byKey[key] == nil {
+                byKey[key] = GraphEdge(sourceNodeID: s, targetNodeID: t, type: rel.edgeType,
+                                       confidence: Double(rel.similarity), label: "etr-relation")
+                relationsAdded += 1
+            }
+        }
+
         for edge in byKey.values {
             graph.addEdge(edge)
         }
@@ -153,9 +181,10 @@ enum EmbeddingMergeApplier {
             groupsApplied: groups.values.filter { $0.count >= 2 }.count,
             nodesRemoved: nodesRemoved,
             edgesRewritten: rewritten,
-            edgesDeduplicated: dedupedRemovals
+            edgesDeduplicated: dedupedRemovals,
+            relationsAdded: relationsAdded
         )
-        log.info("[ETR] applied: \(result.groupsApplied) groups, removed \(result.nodesRemoved) nodes, rewrote \(result.edgesRewritten) edges, deduplicated \(result.edgesDeduplicated)")
+        log.info("[ETR] applied: \(result.groupsApplied) groups, removed \(result.nodesRemoved) nodes, rewrote \(result.edgesRewritten) edges, deduplicated \(result.edgesDeduplicated), added \(result.relationsAdded) typed relations")
         return result
     }
 

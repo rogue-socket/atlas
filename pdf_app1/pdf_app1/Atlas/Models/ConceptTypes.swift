@@ -99,6 +99,13 @@ enum EdgeType: String, Codable, CaseIterable, Hashable {
     case containsConcept   // Chapter → Concept
     case containsEntity    // Concept → Entity
 
+    // Hybrid cross-document typed relations. Emitted by the ETR-style
+    // adjudicator (see EmbeddingResolver) when two near-duplicate nodes are
+    // NOT the same thing but hold a SCE-style typed relationship.
+    case instanceOf        // specific item → general category / catalog
+    case attributeOf       // property → the object it describes
+    case processFor        // process / managing function → thing it serves
+
     var displayName: String {
         switch self {
         case .dependsOn: return "Depends On"
@@ -111,6 +118,9 @@ enum EdgeType: String, Codable, CaseIterable, Hashable {
         case .partOf: return "Part Of"
         case .uses: return "Uses"
         case .containsChapter, .containsConcept, .containsEntity: return "Contains"
+        case .instanceOf: return "Instance Of"
+        case .attributeOf: return "Attribute Of"
+        case .processFor: return "Process For"
         }
     }
 
@@ -126,6 +136,9 @@ enum EdgeType: String, Codable, CaseIterable, Hashable {
         case .partOf: return .indigo
         case .uses: return .mint
         case .containsChapter, .containsConcept, .containsEntity: return .secondary
+        case .instanceOf: return .teal
+        case .attributeOf: return .brown
+        case .processFor: return .pink
         }
     }
 

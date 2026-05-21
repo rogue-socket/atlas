@@ -69,6 +69,52 @@ enum MergeReason: String, Codable, Sendable {
     case llmAdjudicated   // LLM said merge inside the adjudication band
 }
 
+// MARK: - Hybrid adjudication (ETR backbone + SCE typed-relation taxonomy)
+
+/// Verdict the hybrid adjudicator returns for one candidate pair: ETR's
+/// merge/keep, extended with SCE's three typed-relation kinds. A `merge`
+/// collapses the pair; a typed verdict keeps both nodes but records a
+/// directed `GraphEdge`; `keep` does nothing.
+enum AdjudicationVerdict: String, Codable, Sendable, Equatable {
+    case merge
+    case keep
+    case instanceOf  = "instance_of"
+    case attributeOf = "attribute_of"
+    case processFor  = "process_for"
+
+    /// EdgeType for the three typed verdicts; nil for `merge` / `keep`.
+    var edgeType: EdgeType? {
+        switch self {
+        case .instanceOf:   return .instanceOf
+        case .attributeOf:  return .attributeOf
+        case .processFor:   return .processFor
+        case .merge, .keep: return nil
+        }
+    }
+}
+
+/// Direction a typed relation runs for a candidate pair `(a, b)`:
+/// `.ab` → edge a→b, `.ba` → edge b→a.
+enum PairDirection: String, Codable, Sendable, Equatable {
+    case ab
+    case ba
+}
+
+/// One parsed adjudication answer for a candidate pair.
+struct AdjudicationResult: Codable, Sendable, Equatable {
+    let verdict: AdjudicationVerdict
+    let direction: PairDirection
+}
+
+/// A typed cross-doc relationship the adjudicator found between two nodes it
+/// declined to merge. Stage 4 materializes it as a directed `GraphEdge`.
+struct RelationDecision: Sendable, Equatable {
+    let sourceID: UUID
+    let targetID: UUID
+    let edgeType: EdgeType
+    let similarity: Float
+}
+
 struct MergeCandidate: Sendable, Equatable {
     let aID: UUID
     let bID: UUID
@@ -84,7 +130,18 @@ struct MergeDecision: Sendable, Equatable {
 
 struct MergePlan: Sendable {
     let decisions: [MergeDecision]
+    /// Typed cross-doc relations from hybrid adjudication. Empty for runs
+    /// with no LLM backend (adjudication band is dropped entirely).
+    let relations: [RelationDecision]
     let thresholds: ResolverThresholds
+
+    init(decisions: [MergeDecision],
+         relations: [RelationDecision] = [],
+         thresholds: ResolverThresholds) {
+        self.decisions = decisions
+        self.relations = relations
+        self.thresholds = thresholds
+    }
 }
 
 // MARK: - Audit trail (followup #3 from 2026-05-16 sweep)
@@ -391,8 +448,9 @@ extension EmbeddingResolver {
         }
         log.info("[ETR] auto-merges: \(autoMerges.count); adjudication candidates: \(adjudicationCandidates.count)")
 
-        // 5. LLM adjudication for the 0.85-0.95 band.
+        // 5. Hybrid LLM adjudication for the band — merge / keep / typed relation.
         var adjudicated: [MergeDecision] = []
+        var relations: [RelationDecision] = []
         if !adjudicationCandidates.isEmpty {
             guard let llm = llmBackend else {
                 log.info("[ETR] no LLM backend provided; dropping \(adjudicationCandidates.count) adjudication candidates")
@@ -429,13 +487,29 @@ extension EmbeddingResolver {
                     log.error("[ETR] batch shrink — node lookup failure (\(pairsForPrompt.count)/\(batch.count)); skipping batch")
                     continue
                 }
-                let prompt = PromptTemplates.mergeAdjudication(pairs: pairsForPrompt)
+                let prompt = PromptTemplates.mergeAdjudicationHybrid(pairs: pairsForPrompt)
                 let raw = try await generateWithRetry(llm: llm, prompt: prompt)
-                let decisions = try PromptTemplates.parseMergeAdjudicationResponse(raw, expectedCount: pairsForPrompt.count)
-                for (cand, merge) in zip(batch, decisions) {
-                    if merge {
+                let results = try PromptTemplates.parseHybridAdjudicationResponse(raw, expectedCount: pairsForPrompt.count)
+                var mergeCount = 0, relationCount = 0
+                for (cand, result) in zip(batch, results) {
+                    switch result.verdict {
+                    case .merge:
                         adjudicated.append(MergeDecision(aID: cand.aID, bID: cand.bID,
                                                          similarity: cand.similarity, reason: .llmAdjudicated))
+                        mergeCount += 1
+                    case .instanceOf, .attributeOf, .processFor:
+                        if let edgeType = result.verdict.edgeType {
+                            // direction.ab → edge a→b; .ba → edge b→a.
+                            let (src, tgt) = result.direction == .ab
+                                ? (cand.aID, cand.bID)
+                                : (cand.bID, cand.aID)
+                            relations.append(RelationDecision(sourceID: src, targetID: tgt,
+                                                              edgeType: edgeType,
+                                                              similarity: cand.similarity))
+                            relationCount += 1
+                        }
+                    case .keep:
+                        break
                     }
                     if auditOutputDir != nil,
                        let a = nodesByID[cand.aID], let b = nodesByID[cand.bID] {
@@ -443,16 +517,16 @@ extension EmbeddingResolver {
                             a: a, b: b, sim: cand.similarity,
                             band: "adjudication",
                             exactLabel: false,
-                            llmVerdict: merge ? "approved" : "rejected",
-                            finalReason: merge ? MergeReason.llmAdjudicated.rawValue : nil))
+                            llmVerdict: result.verdict.rawValue,
+                            finalReason: result.verdict == .merge ? MergeReason.llmAdjudicated.rawValue : nil))
                     }
                 }
-                log.info("[ETR] adjudication batch [\(batchStart)..<\(batchStart + batch.count)]: \(decisions.filter { $0 }.count)/\(decisions.count) approved")
+                log.info("[ETR] adjudication batch [\(batchStart)..<\(batchStart + batch.count)]: \(mergeCount) merge, \(relationCount) relation, \(batch.count - mergeCount - relationCount) keep")
             }
         }
 
         let all = autoMerges + adjudicated
-        log.info("[ETR] final merge plan: \(all.count) decisions (auto=\(autoMerges.count), adjudicated=\(adjudicated.count))")
+        log.info("[ETR] final plan: \(all.count) merges (auto=\(autoMerges.count), adjudicated=\(adjudicated.count)), \(relations.count) typed relations")
 
         if let dir = auditOutputDir {
             writeAudit(entries: auditEntries,
@@ -465,7 +539,7 @@ extension EmbeddingResolver {
                        dir: dir)
         }
 
-        return MergePlan(decisions: all, thresholds: thresholds)
+        return MergePlan(decisions: all, relations: relations, thresholds: thresholds)
     }
 
     // MARK: - Audit helpers
