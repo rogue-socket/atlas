@@ -677,10 +677,11 @@ extension EmbeddingResolver {
     /// Embedding-free candidate generation: cross-doc pairs whose labels share
     /// significant tokens. Score is token Jaccard. A pair is kept when it
     /// shares `minShared`+ significant tokens; results are sorted by score
-    /// descending and capped at `limit` to bound LLM-adjudication cost. Used
-    /// when no embedding backend is available (the hybrid runs Claude-only).
+    /// descending and capped at `limit` — so the cap keeps the highest-overlap
+    /// pairs and `minShared: 1` is a recall floor, not the real selector.
+    /// Used when no embedding backend is available (the hybrid runs Claude-only).
     static func lexicalCandidatePairs(among nodes: [ConceptNode],
-                                      minShared: Int = 2,
+                                      minShared: Int = 1,
                                       limit: Int = 60) -> [MergeCandidate] {
         let toks = nodes.map { lexicalTokens($0.label) }
         var out: [MergeCandidate] = []
