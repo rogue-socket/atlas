@@ -253,4 +253,28 @@ final class HybridResolverTests: XCTestCase {
         XCTAssertEqual(ab.targetID, ba.sourceID)
         XCTAssertNotEqual(ab.sourceID, ab.targetID)
     }
+
+    // MARK: - Lexical (embedding-free) candidate generation
+
+    func test_lexicalTokens_lowercasesAndDropsStopwordsAndShortTokens() {
+        let toks = EmbeddingResolver.lexicalTokens("The Substance Use Disorder Program")
+        XCTAssertEqual(toks, ["substance", "use", "disorder", "program"])
+    }
+
+    func test_lexicalCandidatePairs_pairsCrossDocNodesSharingTokens() {
+        let a = node("Behavioral Health Services", doc: "/a.pdf")
+        let b = node("Behavioral Health Privacy", doc: "/b.pdf")
+        let c = node("Lab Result Release", doc: "/b.pdf")
+        let cands = EmbeddingResolver.lexicalCandidatePairs(among: [a, b, c])
+        XCTAssertEqual(cands.count, 1, "only a↔b share ≥2 significant tokens across docs")
+        XCTAssertEqual(Set([cands[0].aID, cands[0].bID]), Set([a.id, b.id]))
+        XCTAssertGreaterThan(cands[0].similarity, 0)
+    }
+
+    func test_lexicalCandidatePairs_skipsSameDocPairs() {
+        let a = node("Behavioral Health Services", doc: "/same.pdf")
+        let b = node("Behavioral Health Privacy", doc: "/same.pdf")
+        XCTAssertTrue(EmbeddingResolver.lexicalCandidatePairs(among: [a, b]).isEmpty,
+                      "same-doc pairs are not cross-doc candidates")
+    }
 }

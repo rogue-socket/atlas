@@ -33,10 +33,14 @@ struct HeadlessRunnerConfig {
     /// directory, merge them, and run the hybrid resolver against the merged
     /// graph. Self-contained — needs no project or security-scoped bookmarks.
     let hybridResolveDir: String?
+    /// When true, `--hybrid-resolve` generates candidate pairs lexically
+    /// (shared label tokens) instead of by embedding cosine — runs the hybrid
+    /// entirely on the Claude backend with no embedding provider.
+    let hybridLexical: Bool
 
     init(projectName: String, mode: ExtractionMode, runETR: Bool, etrOnly: Bool,
          etrThresholds: ResolverThresholds?, scoreRubricPath: String?,
-         hybridResolveDir: String? = nil) {
+         hybridResolveDir: String? = nil, hybridLexical: Bool = false) {
         self.projectName = projectName
         self.mode = mode
         self.runETR = runETR
@@ -44,6 +48,7 @@ struct HeadlessRunnerConfig {
         self.etrThresholds = etrThresholds
         self.scoreRubricPath = scoreRubricPath
         self.hybridResolveDir = hybridResolveDir
+        self.hybridLexical = hybridLexical
     }
 
     /// Parse `--headless-extract --project <name> [--mode fast|deep] [--etr]
@@ -67,6 +72,7 @@ struct HeadlessRunnerConfig {
         var etrOnly = false
         var scoreRubricPath: String?
         var hybridResolveDir: String?
+        var hybridLexical = false
         var autoMerge: Float?
         var adjFloor: Float?
         var adjBatch: Int?
@@ -93,6 +99,9 @@ struct HeadlessRunnerConfig {
             }
             if a == "--hybrid-resolve", i + 1 < args.count {
                 hybridResolveDir = args[i + 1]; i += 2; continue
+            }
+            if a == "--lexical" {
+                hybridLexical = true; i += 1; continue
             }
             if a == "--auto-merge", i + 1 < args.count {
                 autoMerge = Float(args[i + 1]); i += 2; continue
@@ -142,7 +151,8 @@ struct HeadlessRunnerConfig {
                                     runETR: runETR, etrOnly: etrOnly,
                                     etrThresholds: thresholds,
                                     scoreRubricPath: scoreRubricPath,
-                                    hybridResolveDir: hybridResolveDir)
+                                    hybridResolveDir: hybridResolveDir,
+                                    hybridLexical: hybridLexical)
     }
 
     /// Map a `--<prefix>-{cc|ee|cl}` suffix to its `PairKind`. Returns nil
@@ -177,7 +187,8 @@ final class HeadlessRunner {
         }
 
         if let hybridDir = config.hybridResolveDir {
-            await runHybridResolve(dir: hybridDir, aiService: aiService, graph: graph)
+            await runHybridResolve(dir: hybridDir, lexical: config.hybridLexical,
+                                   aiService: aiService, graph: graph)
             return
         }
 
@@ -361,6 +372,7 @@ final class HeadlessRunner {
     /// exercise of the hybrid pipeline — needs no project or bookmarks, so it
     /// runs anywhere the graph files and the configured backends are present.
     private func runHybridResolve(dir: String,
+                                  lexical: Bool,
                                   aiService: AIServiceManager,
                                   graph: KnowledgeGraph) async {
         let dirURL = URL(fileURLWithPath: dir, isDirectory: true)
@@ -413,10 +425,30 @@ final class HeadlessRunner {
 
         let projectID = UUID()
         log.info("[Hybrid] merged \(loadedDocs) doc(s) → \(graph.nodeCount)n/\(graph.edgeCount)e; synthetic projectID=\(projectID.uuidString, privacy: .public)")
-        let cfg = HeadlessRunnerConfig(projectName: "", mode: .fast,
-                                       runETR: true, etrOnly: true,
-                                       etrThresholds: nil, scoreRubricPath: nil)
-        await runETR(config: cfg, aiService: aiService, graph: graph, projectID: projectID)
+
+        if lexical {
+            // Embedding-free path: lexical candidate generation + hybrid Claude
+            // adjudication. Runs entirely on the LLM backend — no embedding
+            // provider, no Gemini quota dependency.
+            guard let llm = aiService.createBackend() else {
+                log.error("[Hybrid] --lexical: no LLM backend configured")
+                exit(3)
+            }
+            log.info("[Hybrid] lexical mode — embedding-free candidate generation, Claude-only")
+            do {
+                let plan = try await EmbeddingResolver.resolveLexical(graph: graph, llmBackend: llm)
+                let result = EmbeddingMergeApplier.apply(plan, to: graph)
+                log.info("[Hybrid] lexical resolve: plan=\(plan.decisions.count) merges + \(plan.relations.count) relations; applied=\(result.groupsApplied) groups, removed=\(result.nodesRemoved) nodes, deduped=\(result.edgesDeduplicated), relations=\(result.relationsAdded)")
+            } catch {
+                log.error("[Hybrid] lexical resolve failed: \(error.localizedDescription, privacy: .public)")
+            }
+        } else {
+            let cfg = HeadlessRunnerConfig(projectName: "", mode: .fast,
+                                           runETR: true, etrOnly: true,
+                                           etrThresholds: nil, scoreRubricPath: nil)
+            await runETR(config: cfg, aiService: aiService, graph: graph, projectID: projectID)
+        }
+
         log.info("[Hybrid] done — resolved graph: \(graph.nodeCount)n/\(graph.edgeCount)e")
         try? await Task.sleep(for: .milliseconds(500))
         exit(0)
