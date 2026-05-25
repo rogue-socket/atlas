@@ -94,5 +94,5 @@ embedding dependency entirely.
 - The lexical candidate generator is demonstration-grade (token Jaccard,
   sorted, capped at 60). A production candidate channel would add structural
   signals (shared edges, acronym expansion) or restore embeddings.
-- Branch not pushed; not merged to `main`. Relation to Decision #11
-  ("winner merges to `main`") undecided.
+- Branch pushed to `origin` 2026-05-22; not merged to `main`. Relation to
+  Decision #11 ("winner merges to `main`") undecided.

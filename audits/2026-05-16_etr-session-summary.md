@@ -1,12 +1,12 @@
 # ETR Session Summary — 2026-05-16
 
-> **Branch:** `feature/etr-cross-doc` at `b10b163` (13 ahead of `main`, NOT pushed)
+> **Branch:** `feature/etr-cross-doc` at `b10b163` (13 ahead of `main`, NOT pushed at time of writing; current status 2026-05-26: synced to `origin/feature/etr-cross-doc` at `fa0bce9`)
 > **Companion docs (all on this branch):**
 > - `audits/2026-05-16_etr-step1-status.md` — initial status + 5 design questions, all resolved
 > - `audits/2026-05-16_etr-step1-plan.md` — initial file-touch plan
 > - `audits/2026-05-16_etr-live-verification.md` — live run + threshold sweep results
 > - `prds/2026-05-15_4-level-knowledge-graph.md` §"Quality Rubric v2" — frozen scoring rubric
-> **Cross-branch reference:** `feature/sce-cross-doc` at `8c69c32` — SCE step 1 (parallel approach), also not pushed
+> **Cross-branch reference:** `feature/sce-cross-doc` at `8c69c32` — SCE step 1 (parallel approach), also not pushed at time of writing; current status 2026-05-26: synced to `origin/feature/sce-cross-doc` at `4810d41`
 
 ## What this doc is
 
@@ -130,7 +130,7 @@ Combine the two in production, not pick a winner.
 
 ## What's NOT done
 
-1. **Branches not pushed.** Both `feature/sce-cross-doc` (8 commits) and `feature/etr-cross-doc` (13 commits) are local-only. Push needs explicit user sign-off (visible action).
+1. **Branch push status changed after this doc.** At time of writing both `feature/sce-cross-doc` and `feature/etr-cross-doc` were local-only. Current status 2026-05-26: both branches are synced to origin (`4810d41` and `fa0bce9` respectively); the A/B result and merge-back decision remain open.
 2. **No audit sidecar generated yet.** Audit logging landed after the sweep. Next `--etr-only` run will produce one. Useful for prompt-tuning the adjudication template based on what the LLM rejected.
 3. **No recall-improvement experiments.** Each is its own session, API-cost-heavy. Candidates: prompt tuning, embedding model swap, per-level threshold split, in-doc pair support.
 4. **Side-track bugs on `main` untouched all session.** (a) Orphan-sweep deletes valid graphs when bookmark fails to resolve at startup — data-loss bug. (b) Per-doc save dormant when `projectID` is set.

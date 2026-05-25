@@ -113,7 +113,7 @@ The PRD's 12 rubric rows still off-rubric ("not in band") at floor 0.80 are the 
 
 ## What's NOT done
 
-1. **Push** — both commits are already on `origin/feature/etr-cross-doc`. (Branch is in sync; the session-summary doc's "not pushed" claim is also out of date now.)
+1. **Push** — both commits are already on `origin/feature/etr-cross-doc`. Branch is in sync; the older session-summary docs now carry a 2026-05-26 current-status correction.
 2. **`main` merge** — branch is **21 ahead / 19 behind `main`**. Same backlog as `feature/sce-cross-doc`. Includes morning's data-loss fix, Locate UX, project-graph cleanup. Should be merged in before the next ETR experiment.
 3. **Floor-0.75 v2 rerun.** Cheap (warm cache, embeddings cached) — one `--etr-only --adj-floor 0.75` invocation. Would produce sidecar #12 directly comparable to the 0.75 old-prompt sweep in the live-verification doc.
 4. **Embedding-model swap experiment.** API-cost-heavy. Defer.

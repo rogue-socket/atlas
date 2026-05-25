@@ -1,6 +1,6 @@
 # ETR Live Verification — vitacare 2026-05-16
 
-> **Branch:** `feature/etr-cross-doc` at `099a873` (10 ahead of `main`, not pushed)
+> **Branch:** `feature/etr-cross-doc` at `099a873` (10 ahead of `main`, not pushed at time of writing; current status 2026-05-26: synced to `origin/feature/etr-cross-doc` at `fa0bce9`)
 > **Corpus:** vitacare 4-PDF project (test_proj), pre-existing extraction at 246n / 753e
 > **Authority:** PRD §"Quality Rubric — vitacare 2026-05-16" (same branch, `099a873`)
 > **Companion docs:** `2026-05-16_etr-step1-status.md` (decisions), `2026-05-16_etr-step1-plan.md` (file-touch list)
@@ -180,7 +180,7 @@ cp /tmp/atlas_project_pre_etr_2026-05-16.json \
 
 3. **In-doc pair scope deserves reconsideration.** 5 of 12 strong-merge rubric rows are in-doc concept↔entity pairs that ETR cross-doc-only skips by design. Adding in-doc support (one-line filter change in `pairsToCompare`) would close that gap, but expands LLM adjudication cost.
 
-4. **Branches not pushed.** Both `feature/sce-cross-doc` (8 commits) and `feature/etr-cross-doc` (10 commits) are local-only. Should push for safety + remote A/B comparison.
+4. **Branch push status changed after this doc.** At time of writing both `feature/sce-cross-doc` and `feature/etr-cross-doc` were local-only. Current status 2026-05-26: both are synced to origin (`4810d41` and `fa0bce9` respectively); remote A/B comparison is no longer blocked on pushing.
 
 ## On-disk state after this session
 
