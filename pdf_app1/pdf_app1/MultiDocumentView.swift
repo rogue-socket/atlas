@@ -393,18 +393,10 @@ struct MultiDocumentView: View {
             .opacity(0)
         )
         .onChange(of: documentManager.selectedDocumentID) { _, _ in
-            if let doc = documentManager.selectedDocument {
-                syncManager.setDocumentURL(doc.url)
-                syncManager.setGraph(knowledgeGraph)
-                loadGraphIfNeeded(for: doc.url)
-            }
+            configureSelectedDocument()
         }
         .onAppear {
-            if let doc = documentManager.selectedDocument {
-                syncManager.setDocumentURL(doc.url)
-                syncManager.setGraph(knowledgeGraph)
-                loadGraphIfNeeded(for: doc.url)
-            }
+            configureSelectedDocument()
         }
     }
     
@@ -1498,6 +1490,13 @@ struct MultiDocumentView: View {
     }
 
     // MARK: - Graph Persistence
+
+    private func configureSelectedDocument() {
+        guard let doc = documentManager.selectedDocument else { return }
+        syncManager.setDocumentURL(doc.url)
+        syncManager.setGraph(knowledgeGraph)
+        loadGraphIfNeeded(for: doc.url)
+    }
 
     /// Load the persisted graph for `documentURL` and merge it into the
     /// in-memory project graph (preserving nodes loaded for other open
