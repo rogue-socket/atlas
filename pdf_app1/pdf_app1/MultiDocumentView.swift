@@ -371,8 +371,7 @@ struct MultiDocumentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .closeOtherTabs)) { notification in
             if let currentDocument = notification.object as? PDFDocumentItem {
-                documentManager.documents.removeAll { $0.id != currentDocument.id }
-                documentManager.selectedDocumentID = currentDocument.id
+                documentManager.closeOtherDocuments(keeping: currentDocument)
             }
         }
         // Pane mode keyboard shortcuts
