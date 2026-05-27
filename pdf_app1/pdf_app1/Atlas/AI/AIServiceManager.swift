@@ -72,6 +72,11 @@ class AIServiceManager {
                 ?? AIBackendType.claudeSubscription.defaultBaseURL
             log.info("[AIService] Using Claude sidecar at \(baseURL)")
             return ClaudeSidecarBackend(baseURL: baseURL, model: selectedModel)
+        case .codexAgent:
+            let baseURL = UserDefaults.standard.string(forKey: AppConstants.codexAgentSidecarURLKey)
+                ?? AIBackendType.codexAgent.defaultBaseURL
+            log.info("[AIService] Using Codex Agent sidecar at \(baseURL)")
+            return CodexAgentBackend(baseURL: baseURL, model: selectedModel)
         }
     }
 
@@ -83,6 +88,7 @@ class AIServiceManager {
         guard let type = selectedEmbeddingBackendType else { return false }
         switch type {
         case .ollama: return true
+        case .codexAgent: return false
         default: return (getAPIKey(for: type) ?? "").isEmpty == false
         }
     }
@@ -109,6 +115,9 @@ class AIServiceManager {
             // the subscription sidecar); ETR must use a different vendor when
             // the chat backend is Claude.
             log.warning("[AIService] Claude has no embedding API — ETR unavailable with this selection")
+            return nil
+        case .codexAgent:
+            log.warning("[AIService] Codex Agent has no embedding API — ETR unavailable with this selection")
             return nil
         case .openai, .ollama:
             // Deferred until ETR proves end-to-end with Gemini (per SCE-style
@@ -278,6 +287,7 @@ class AIServiceManager {
         UserDefaults.standard.set(selectedEmbeddingBackendType?.rawValue ?? "",
                                    forKey: AppConstants.aiEmbeddingBackendTypeKey)
         UserDefaults.standard.set(selectedEmbeddingModel, forKey: AppConstants.aiEmbeddingModelKey)
+        updateConfiguredState()
     }
 
     private func updateConfiguredState() {

@@ -17,6 +17,7 @@ struct AISettingsView: View {
     @State private var showAPIKey: Bool = false
     @State private var ollamaBaseURL: String = "http://localhost:11434"
     @State private var claudeSidecarURL: String = "http://127.0.0.1:8765"
+    @State private var codexAgentSidecarURL: String = "http://127.0.0.1:8775"
     @State private var testStatus: TestStatus = .idle
 
     enum TestStatus: Equatable {
@@ -117,6 +118,20 @@ struct AISettingsView: View {
                 }
             }
 
+            if serviceManager.selectedBackendType == .codexAgent {
+                Section("Codex Agent") {
+                    TextField("Sidecar URL", text: $codexAgentSidecarURL)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            UserDefaults.standard.set(codexAgentSidecarURL, forKey: AppConstants.codexAgentSidecarURLKey)
+                        }
+
+                    Text("Runs Codex through the local Atlas Codex Agent sidecar. Start it first: python3 atlas/codex-agent-sidecar/server.py")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
             // Test Connection
             Section("Test Connection") {
                 HStack {
@@ -179,6 +194,7 @@ struct AISettingsView: View {
             loadAPIKey(for: serviceManager.selectedBackendType)
             ollamaBaseURL = UserDefaults.standard.string(forKey: AppConstants.ollamaBaseURLKey) ?? "http://localhost:11434"
             claudeSidecarURL = UserDefaults.standard.string(forKey: AppConstants.claudeSidecarURLKey) ?? "http://127.0.0.1:8765"
+            codexAgentSidecarURL = UserDefaults.standard.string(forKey: AppConstants.codexAgentSidecarURLKey) ?? "http://127.0.0.1:8775"
         }
     }
 
