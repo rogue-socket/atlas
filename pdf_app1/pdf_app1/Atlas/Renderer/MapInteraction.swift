@@ -150,6 +150,16 @@ class MapInteraction {
 
     // MARK: - Fit to Content
 
+    func focusOnNode(id: UUID, layout: ForceDirectedLayout, canvasSize: CGSize, targetScale: CGFloat = 1.4) {
+        guard let point = layout.point(for: id) else { return }
+        viewScale = targetScale
+        viewOffset = CGPoint(
+            x: canvasSize.width / 2 - point.x * targetScale,
+            y: canvasSize.height / 2 - point.y * targetScale
+        )
+        selectedNodeID = id
+    }
+
     func fitToContent(
         layout: ForceDirectedLayout,
         canvasSize: CGSize,
