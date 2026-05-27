@@ -9,9 +9,31 @@
 import SwiftUI
 import PDFKit
 import AppKit
+import Combine
+
+final class PDFViewReference: ObservableObject {
+    @Published private(set) var revision = 0
+    private weak var storedPDFView: HighlightingPDFView?
+
+    var pdfView: HighlightingPDFView? {
+        storedPDFView
+    }
+
+    func attach(_ pdfView: HighlightingPDFView) {
+        guard storedPDFView !== pdfView else { return }
+        storedPDFView = pdfView
+        revision += 1
+    }
+
+    func detach(_ pdfView: HighlightingPDFView) {
+        guard storedPDFView === pdfView else { return }
+        storedPDFView = nil
+        revision += 1
+    }
+}
 
 struct PDFViewRepresentable: NSViewRepresentable {
-    @Binding var pdfView: HighlightingPDFView
+    @ObservedObject var pdfViewReference: PDFViewReference
     let pdfDocument: PDFDocument
     let annotationMode: AnnotationMode
     let highlightColor: Color
@@ -22,7 +44,7 @@ struct PDFViewRepresentable: NSViewRepresentable {
     let onAnnotationError: ((String) -> Void)?
     
     init(
-        pdfView: Binding<HighlightingPDFView>,
+        pdfViewReference: PDFViewReference,
         pdfDocument: PDFDocument,
         annotationMode: AnnotationMode,
         highlightColor: Color,
@@ -32,7 +54,7 @@ struct PDFViewRepresentable: NSViewRepresentable {
         onPageChanged: @escaping (PDFPage?) -> Void,
         onAnnotationError: ((String) -> Void)? = nil
     ) {
-        self._pdfView = pdfView
+        self.pdfViewReference = pdfViewReference
         self.pdfDocument = pdfDocument
         self.annotationMode = annotationMode
         self.highlightColor = highlightColor
@@ -44,6 +66,10 @@ struct PDFViewRepresentable: NSViewRepresentable {
     }
     
     func makeNSView(context: Context) -> PDFView {
+        let pdfView = context.coordinator.pdfView
+        DispatchQueue.main.async { [pdfViewReference] in
+            pdfViewReference.attach(pdfView)
+        }
         pdfView.document = pdfDocument
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
@@ -70,7 +96,8 @@ struct PDFViewRepresentable: NSViewRepresentable {
         context.coordinator.attemptInitialFit(nil)
 
          pdfView.onMouseUp = { [weak coordinator = context.coordinator] in
-             coordinator?.handleSelectionCompleted()
+             guard let coordinator else { return }
+             coordinator.handleSelectionCompleted()
          }
 
          pdfView.onMouseDown = { [weak coordinator = context.coordinator, weak pdfView] event in
@@ -106,7 +133,7 @@ struct PDFViewRepresentable: NSViewRepresentable {
     
     func updateNSView(_ nsView: PDFView, context: Context) {
         // Update document if changed
-        if nsView.document != pdfDocument {
+        if nsView.document !== pdfDocument {
             nsView.document = pdfDocument
         }
 
@@ -161,7 +188,7 @@ struct PDFViewRepresentable: NSViewRepresentable {
     
     func makeCoordinator() -> Coordinator {
         Coordinator(
-            pdfView: pdfView,
+            pdfViewReference: pdfViewReference,
             annotationMode: annotationMode,
             highlightColor: highlightColor,
             undoRedoManager: undoRedoManager,
@@ -173,7 +200,8 @@ struct PDFViewRepresentable: NSViewRepresentable {
     }
     
     class Coordinator: NSObject, NSGestureRecognizerDelegate {
-        let pdfView: HighlightingPDFView
+        let pdfView = HighlightingPDFView()
+        let pdfViewReference: PDFViewReference
         var annotationMode: AnnotationMode
         var highlightColor: Color
         var undoRedoManager: UndoRedoManager
@@ -186,15 +214,25 @@ struct PDFViewRepresentable: NSViewRepresentable {
         private var hitAnnotation: PDFAnnotation?
         private var hitAnnotationPage: PDFPage?
         
-        let clickGesture: NSClickGestureRecognizer
-        let panGesture: NSPanGestureRecognizer
+        lazy var clickGesture: NSClickGestureRecognizer = {
+            let gesture = NSClickGestureRecognizer(target: self, action: #selector(handleClick(_:)))
+            gesture.numberOfClicksRequired = 1
+            return gesture
+        }()
+
+        lazy var panGesture: NSPanGestureRecognizer = {
+            let gesture = NSPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+            gesture.buttonMask = 0x1
+            return gesture
+        }()
+
         let selectionOverlay = SelectionChromeOverlay()
         private var keyMonitor: Any?
         private var mouseMonitor: Any?
         private var initialFitCompleted = false
         
         init(
-            pdfView: HighlightingPDFView,
+            pdfViewReference: PDFViewReference,
             annotationMode: AnnotationMode,
             highlightColor: Color,
             undoRedoManager: UndoRedoManager,
@@ -203,7 +241,7 @@ struct PDFViewRepresentable: NSViewRepresentable {
             onPageChanged: @escaping (PDFPage?) -> Void,
             onAnnotationError: ((String) -> Void)? = nil
         ) {
-            self.pdfView = pdfView
+            self.pdfViewReference = pdfViewReference
             self.annotationMode = annotationMode
             self.highlightColor = highlightColor
             self.undoRedoManager = undoRedoManager
@@ -211,23 +249,16 @@ struct PDFViewRepresentable: NSViewRepresentable {
             self.onTextAnnotationRequest = onTextAnnotationRequest
             self.onPageChanged = onPageChanged
             self.onAnnotationError = onAnnotationError
-            
-            self.clickGesture = NSClickGestureRecognizer(target: nil, action: nil)
-            self.panGesture = NSPanGestureRecognizer(target: nil, action: nil)
-            
+
             super.init()
-            
-            self.clickGesture.target = self
-            self.clickGesture.action = #selector(handleClick(_:))
-            
-            self.panGesture.target = self
-            self.panGesture.action = #selector(handlePan(_:))
-            self.panGesture.buttonMask = 0x1
         }
         
         deinit {
             NotificationCenter.default.removeObserver(self, name: .PDFViewPageChanged, object: pdfView)
             NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: pdfView)
+            DispatchQueue.main.async { [pdfViewReference, pdfView] in
+                pdfViewReference.detach(pdfView)
+            }
             pdfView.onMouseUp = nil
             pdfView.onMouseDown = nil
             pdfView.menuProvider = nil
