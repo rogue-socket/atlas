@@ -218,6 +218,7 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
     case openai = "OpenAI"
     case gemini = "Gemini"
     case ollama = "Ollama"
+    case codexAgent = "CodexAgent"
 
     var id: String { rawValue }
 
@@ -227,12 +228,13 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
         case .openai: return "OpenAI"
         case .gemini: return "Google Gemini"
         case .ollama: return "Ollama (Local)"
+        case .codexAgent: return "Codex Agent"
         }
     }
 
     var requiresAPIKey: Bool {
         switch self {
-        case .ollama: return false
+        case .ollama, .codexAgent: return false
         default: return true
         }
     }
@@ -243,6 +245,7 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
         case .openai: return "https://api.openai.com"
         case .gemini: return "https://generativelanguage.googleapis.com"
         case .ollama: return "http://localhost:11434"
+        case .codexAgent: return "http://127.0.0.1:8775"
         }
     }
 
@@ -252,6 +255,7 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
         case .openai: return ["gpt-4o", "gpt-4o-mini", "gpt-4.1-mini"]
         case .gemini: return ["gemini-2.5-pro", "gemini-2.5-flash"]
         case .ollama: return ["llama3.1", "mistral", "qwen2.5"]
+        case .codexAgent: return ["gpt-5.3-codex-spark", "gpt-5.5"]
         }
     }
 }

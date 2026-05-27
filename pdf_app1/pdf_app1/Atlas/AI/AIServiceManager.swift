@@ -60,6 +60,15 @@ class AIServiceManager {
             let baseURL = UserDefaults.standard.string(forKey: AppConstants.ollamaBaseURLKey) ?? "http://localhost:11434"
             log.info("[AIService] Using Ollama at \(baseURL)")
             return OpenAIBackend(apiKey: "", model: selectedModel, baseURL: baseURL + "/v1", displayName: "Ollama")
+        case .codexAgent:
+            let baseURL = UserDefaults.standard.string(forKey: AppConstants.codexAgentSidecarURLKey)
+                ?? AIBackendType.codexAgent.defaultBaseURL
+            let envModel = ProcessInfo.processInfo.environment["ATLAS_CODEX_AGENT_MODEL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let envReasoningEffort = ProcessInfo.processInfo.environment["ATLAS_CODEX_AGENT_REASONING_EFFORT"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let model = (envModel?.isEmpty == false) ? envModel! : selectedModel
+            let reasoningEffort = (envReasoningEffort?.isEmpty == false) ? envReasoningEffort : nil
+            log.info("[AIService] Using Codex Agent sidecar at \(baseURL) model=\(model) reasoningEffort=\(reasoningEffort ?? \"<default>\")")
+            return CodexAgentBackend(baseURL: baseURL, model: model, reasoningEffort: reasoningEffort)
         }
     }
 
@@ -101,16 +110,8 @@ class AIServiceManager {
         // and ensures deterministic behavior regardless of dev-file presence).
         if Self.isRunningUnderXCTest { return nil }
 
-        // Dev-mode lookup order (Keychain prompts on every fresh process are
-        // painful for headless / repeated runs). All sources are local-only.
-        //
-        //   1. Process env var (e.g. ATLAS_GEMINI_API_KEY) — per-invocation override
-        //   2. Dev keys file inside the app's sandbox container — opting in here
-        //      is *authoritative*: missing keys for a backend return nil rather
-        //      than falling through to Keychain, so backends you haven't seeded
-        //      in the file never trigger an ACL prompt.
-        //   3. Keychain — production storage (only consulted when the dev file
-        //      doesn't exist at all)
+        // Dev-mode lookup order (Process environment, optional dev keys file, then keychain).
+        // 1. Process env var (e.g. ATLAS_GEMINI_API_KEY)
         if let envKey = ProcessInfo.processInfo.environment[envVarName(for: backend)],
            !envKey.isEmpty {
             return envKey
@@ -163,7 +164,7 @@ class AIServiceManager {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String]
         else { return nil }
         // Case-insensitive key match so the file can use either the enum's
-        // rawValue ("Gemini") or the more natural lowercase form ("gemini").
+        // rawValue ("Gemini") or the lowercase form ("gemini").
         let target = backend.rawValue.lowercased()
         for (k, v) in obj where k.lowercased() == target {
             return v
@@ -214,10 +215,11 @@ class AIServiceManager {
     func savePreferences() {
         UserDefaults.standard.set(selectedBackendType.rawValue, forKey: AppConstants.aiBackendTypeKey)
         UserDefaults.standard.set(selectedModel, forKey: AppConstants.aiModelKey)
+        updateConfiguredState()
     }
 
     private func updateConfiguredState() {
-        if selectedBackendType == .ollama {
+        if selectedBackendType == .ollama || selectedBackendType == .codexAgent {
             isConfigured = true
         } else {
             isConfigured = getAPIKey(for: selectedBackendType) != nil
