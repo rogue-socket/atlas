@@ -12,6 +12,7 @@ The macOS app is built entirely with Apple frameworks. No Electron, no web views
 
 - **PDF Viewer** - Full-featured reader with markup tools (highlight / underline / strikethrough, area highlights, ink, shapes — rectangle / circle / line / arrow, sticky notes, move/resize), search, bookmarks, thumbnails, multi-tab, comparison mode, print, and undo/redo
 - **Knowledge Map** - AI extracts concepts from your PDFs in 5-page batches and renders them as a force-directed graph (Fruchterman-Reingold) with semantic zoom levels: document → chapter → concept → entity
+- **Guided Tours** - Generate a read-only walkthrough through valid knowledge-map topics, with progress controls, jump-to-stop navigation, and automatic map centering on each stop
 - **Bidirectional Sync** - Scroll the PDF and the active concept lights up on the map. Click a map node and the PDF jumps to the source passage with a color-matched pulse highlight
 - **Ask Your Documents** - A chat panel answers questions about the open PDF using your configured AI backend, with citations linked back to the source passages
 - **Cross-Document Correlations** *(in development)* - Projects share one live graph and merge exact repeated labels during extraction. Semantic cross-document resolution exists as headless SCE/ETR/hybrid tooling; the older proposal UI (`GraphMergeEngine` / `MergeProposalView`) is still dormant
@@ -173,6 +174,11 @@ pdf_app1/pdf_app1/
       MapInteraction.swift        Pan, zoom, click, drag, scroll-wheel zoom
       DensityManager.swift        Filters visible nodes to the active semantic zoom level
       ScrollWheelOverlay.swift    AppKit scroll-wheel capture for zoom-toward-cursor
+    Tour/
+      GuidedTour.swift            Tour model: ordered stops tied to graph node IDs
+      TourGenerator.swift         AI-guided stop selection from valid map topics
+      TourPlayer.swift            Playback state and navigation
+      TourPlaybackView.swift      Read-only tour card UI
     Sync/
       BidirectionalSyncManager.swift  PDF ↔ map sync coordination
       ScrollTracker.swift              PDF page change monitoring (debounced)
