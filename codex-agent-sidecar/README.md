@@ -13,7 +13,7 @@ app.
 1. Open Atlas.
 2. Open **Settings** (`Cmd+,`) -> **AI**.
 3. Select **Codex Agent** as the provider.
-4. Atlas automatically starts `codex-agent-sidecar/server.py`.
+4. Atlas automatically starts the bundled `codex-agent-sidecar/server.py`.
 5. Press **Test API Connection** to verify a real Codex request.
 
 Expected result:
@@ -27,40 +27,50 @@ does not require manually starting the sidecar first.
 
 ## Requirements
 
-- Python 3 available as `python3`.
+- Python 3 installed outside Apple's `/usr/bin/python3` developer-tool shim.
+  Atlas looks for:
+  - `$ATLAS_CODEX_AGENT_PYTHON`
+  - `/Library/Frameworks/Python.framework/Versions/Current/bin/python3`
+  - `/opt/homebrew/bin/python3`
+  - `/usr/local/bin/python3`
 - The `codex` CLI installed and logged in for the current macOS user.
-- The sibling `codex-agent` Python package checkout available to the sidecar.
-  The default search paths include:
-  - `$CODEX_AGENT_PATH`
-  - `../codex-agent` from the `pdf_projects` workspace
-  - `codex-agent` beside this repo
 - Atlas must be built with the Codex Agent sandbox exceptions in
   `pdf_app1/pdf_app1/pdf_app1.entitlements`.
 
 The Debug/dev setup currently grants read access to:
 
-- `~/Documents/pdf_projects/atlas/codex-agent-sidecar/`
-- `~/Documents/codex-agent/`
+- `/Library/Frameworks/Python.framework/`
 - `/opt/homebrew/`
 
 and read/write access to:
 
 - `~/.codex/`
 
-Those exceptions are what allow the sandboxed app to spawn Python, import the
-local sidecar code, run the Homebrew Codex CLI, and use the user's Codex auth
-state.
+Those exceptions are what allow the sandboxed app to spawn Python, run the
+Homebrew Codex CLI, and use the user's Codex auth state. The launcher
+intentionally avoids `/usr/bin/python3`: on macOS this can route through
+`xcrun`, which fails inside App Sandbox.
 
 ## Startup behavior
 
 `CodexAgentBackend.preflight()` first calls `/health`.
 
 If health is already OK, Atlas does not start a new process. If health is down,
-Atlas starts:
+Atlas copies the bundled `server.py` resource into the app-container
+Application Support directory, then starts that copy with a resolved Python
+executable. This avoids App Sandbox code-open edge cases for scripts under
+`Documents`.
+
+The launch is equivalent to:
 
 ```sh
-python3 atlas/codex-agent-sidecar/server.py
+/Library/Frameworks/Python.framework/Versions/Current/bin/python3 \
+  ~/Library/Containers/rogues.pdf-app1/Data/Library/Application\ Support/Atlas/codex-agent-sidecar/server.py
 ```
+
+The child process uses the Atlas Application Support directory as its working
+directory. Atlas also sets `HOME` and `CODEX_HOME` to the real user home so the
+Codex CLI sees the same auth/config as a normal terminal session.
 
 The app then polls `/health` until the sidecar is ready or the startup timeout
 expires. This preflight is used by:
@@ -86,7 +96,7 @@ The sidecar log lives in the app container:
     "ok": true,
     "model": "gpt-5.5",
     "codexBin": "/opt/homebrew/bin/codex",
-    "codexAgentPath": "/Users/<user>/Documents/codex-agent"
+    "sidecar": "self-contained"
   }
   ```
 
@@ -117,8 +127,8 @@ The sidecar log lives in the app container:
 | `ATLAS_CODEX_AGENT_MODEL` | `gpt-5.5` | Default model when the request does not provide one. |
 | `ATLAS_CODEX_AGENT_TIMEOUT` | `600` | Per-request Codex timeout in seconds. |
 | `ATLAS_CODEX_AGENT_SANDBOX` | `read-only` | Sandbox passed to `codex exec`. |
+| `ATLAS_CODEX_AGENT_PYTHON` | auto-detected | Override the Python executable used to start the sidecar. Do not point this at `/usr/bin/python3`. |
 | `CODEX_BIN` | `codex` | Codex CLI path. Atlas sets `/opt/homebrew/bin/codex` when present. |
-| `CODEX_AGENT_PATH` | auto-detected | Override path to the sibling `codex-agent` package. |
 
 Atlas also sets `HOME` and `CODEX_HOME` for the sidecar child process so the
 Codex CLI can read the user's real `~/.codex` auth/config instead of the app
@@ -137,9 +147,21 @@ tail -n 80 "$HOME/Library/Containers/rogues.pdf-app1/Data/Library/Application Su
 Common causes:
 
 - the app was not rebuilt after entitlement changes
-- Python cannot read `atlas/codex-agent-sidecar/server.py`
-- `codex-agent` cannot be imported
+- the bundled `server.py` resource is missing from the app
+- Atlas cannot copy `server.py` into the app container
+- Python is not available from one of the sandbox-usable paths
 - port `8775` is already in use
+
+If the log contains:
+
+```text
+xcrun: error: cannot be used within an App Sandbox.
+```
+
+Atlas used Apple's developer-tool Python shim instead of a real Python install.
+Rebuild with the current launcher, or set `ATLAS_CODEX_AGENT_PYTHON` to a real
+Python executable such as
+`/Library/Frameworks/Python.framework/Versions/Current/bin/python3`.
 
 ### Test API Connection returns HTTP 502 with Codex output
 
@@ -151,9 +173,8 @@ The sidecar started, but `codex exec` failed. Common causes:
 
 ### Health works but extraction fails
 
-`/health` only checks that the sidecar can import `codex-agent` and respond over
-HTTP. Press **Test API Connection** to verify the full path through
-`codex exec --json`.
+`/health` only checks that the sidecar process can respond over HTTP. Press
+**Test API Connection** to verify the full path through `codex exec --json`.
 
 ## Manual smoke test
 
@@ -173,9 +194,9 @@ Then use Atlas UI:
 
 The 2026-05-28 smoke from the app UI showed:
 
-- sidecar process appeared 4 seconds after selecting Codex Agent
-- `/health` returned OK after another 6 seconds
-- Test API Connection completed in 4.3 seconds
+- sidecar process appeared after selecting Codex Agent
+- `/health` returned OK with `"sidecar": "self-contained"`
+- Test API Connection completed in 4.5 seconds
 - sidecar logged `POST /extract HTTP/1.1" 200`
 
 ## Embeddings

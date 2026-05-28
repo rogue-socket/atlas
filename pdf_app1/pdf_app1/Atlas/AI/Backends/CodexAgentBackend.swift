@@ -199,22 +199,27 @@ actor CodexAgentSidecarLauncher: CodexAgentSidecarLaunching {
         }
 
         let scriptURL = try resolveScriptURL()
-        let logURL = try applicationSupportURL().appendingPathComponent("codex-agent-sidecar.log")
+        let supportURL = try applicationSupportURL()
+        let logURL = supportURL.appendingPathComponent("codex-agent-sidecar.log")
         try FileManager.default.createDirectory(
-            at: logURL.deletingLastPathComponent(),
+            at: supportURL,
             withIntermediateDirectories: true
         )
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         let handle = try FileHandle(forWritingTo: logURL)
         try handle.seekToEnd()
 
+        let pythonURL = try resolvePythonURL()
+        let launchScriptURL = try materializeLaunchScript(from: scriptURL, supportURL: supportURL)
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["python3", scriptURL.path]
-        process.currentDirectoryURL = scriptURL
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        process.environment = sidecarEnvironment(scriptURL: scriptURL)
+        process.executableURL = pythonURL
+        process.arguments = [launchScriptURL.path]
+        process.currentDirectoryURL = supportURL
+        process.environment = sidecarEnvironment(
+            scriptURL: scriptURL,
+            supportURL: supportURL,
+            pythonURL: pythonURL
+        )
         process.standardOutput = handle
         process.standardError = handle
 
@@ -241,19 +246,41 @@ actor CodexAgentSidecarLauncher: CodexAgentSidecarLaunching {
         }
 
         if let resourceURL = Bundle.main.resourceURL {
+            candidates.append(resourceURL.appendingPathComponent("server.py"))
             candidates.append(resourceURL.appendingPathComponent("codex-agent-sidecar/server.py"))
         }
 
-        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        candidates.append(cwd.appendingPathComponent("atlas/codex-agent-sidecar/server.py"))
-        candidates.append(cwd.appendingPathComponent("codex-agent-sidecar/server.py"))
-        candidates.append(cwd.appendingPathComponent("../codex-agent-sidecar/server.py").standardizedFileURL)
+        return candidates
+    }
 
-        let sourceURL = URL(fileURLWithPath: #filePath)
-        if let atlasRoot = sourceURL.ancestor(levels: 5) {
-            candidates.append(atlasRoot.appendingPathComponent("codex-agent-sidecar/server.py"))
+    private func materializeLaunchScript(from sourceURL: URL, supportURL: URL) throws -> URL {
+        let scriptsURL = supportURL.appendingPathComponent("codex-agent-sidecar", isDirectory: true)
+        try FileManager.default.createDirectory(at: scriptsURL, withIntermediateDirectories: true)
+        let launchURL = scriptsURL.appendingPathComponent("server.py")
+        let source = try Data(contentsOf: sourceURL)
+        try source.write(to: launchURL, options: .atomic)
+        return launchURL
+    }
+
+    private func resolvePythonURL() throws -> URL {
+        let fileManager = FileManager.default
+        let candidates = candidatePythonURLs()
+        if let match = candidates.first(where: { fileManager.isExecutableFile(atPath: $0.path) }) {
+            return match
+        }
+        throw CodexAgentLauncherError.pythonNotFound(candidates.map(\.path))
+    }
+
+    private func candidatePythonURLs() -> [URL] {
+        var candidates: [URL] = []
+        let environment = ProcessInfo.processInfo.environment
+        if let override = environment["ATLAS_CODEX_AGENT_PYTHON"], !override.isEmpty {
+            candidates.append(URL(fileURLWithPath: override).standardizedFileURL)
         }
 
+        candidates.append(URL(fileURLWithPath: "/Library/Frameworks/Python.framework/Versions/Current/bin/python3"))
+        candidates.append(URL(fileURLWithPath: "/opt/homebrew/bin/python3"))
+        candidates.append(URL(fileURLWithPath: "/usr/local/bin/python3").standardizedFileURL)
         return candidates
     }
 
@@ -264,12 +291,14 @@ actor CodexAgentSidecarLauncher: CodexAgentSidecarLaunching {
         return baseURL.appendingPathComponent("Atlas", isDirectory: true)
     }
 
-    private func sidecarEnvironment(scriptURL: URL) -> [String: String] {
+    private func sidecarEnvironment(scriptURL: URL, supportURL: URL, pythonURL: URL) -> [String: String] {
         let current = ProcessInfo.processInfo.environment
         var environment = current
         environment["PYTHONUNBUFFERED"] = "1"
-        environment["PATH"] = current["PATH"] ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        if let homeURL = userHomeURL(from: scriptURL) {
+        let pythonBinDir = pythonURL.deletingLastPathComponent().path
+        let defaultPath = "\(pythonBinDir):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        environment["PATH"] = current["PATH"].map { "\(pythonBinDir):\($0)" } ?? defaultPath
+        if let homeURL = userHomeURL(from: [scriptURL, supportURL]) {
             environment["HOME"] = homeURL.path
             environment["CODEX_HOME"] = homeURL.appendingPathComponent(".codex").path
         }
@@ -281,36 +310,30 @@ actor CodexAgentSidecarLauncher: CodexAgentSidecarLaunching {
         return environment
     }
 
-    private func userHomeURL(from scriptURL: URL) -> URL? {
-        let components = scriptURL.standardizedFileURL.pathComponents
-        guard components.count >= 3, components[0] == "/", components[1] == "Users" else {
-            return nil
+    private func userHomeURL(from urls: [URL]) -> URL? {
+        for url in urls {
+            let components = url.standardizedFileURL.pathComponents
+            if components.count >= 3, components[0] == "/", components[1] == "Users" {
+                return URL(fileURLWithPath: "/Users/\(components[2])", isDirectory: true)
+            }
         }
-        return URL(fileURLWithPath: "/Users/\(components[2])", isDirectory: true)
+        return nil
     }
 }
 
 private enum CodexAgentLauncherError: Error, LocalizedError {
     case scriptNotFound([String])
+    case pythonNotFound([String])
     case applicationSupportUnavailable
 
     var errorDescription: String? {
         switch self {
         case .scriptNotFound(let candidates):
-            return "Could not find atlas/codex-agent-sidecar/server.py. Checked: \(candidates.joined(separator: ", "))"
+            return "Could not find bundled Codex Agent sidecar server.py. Checked: \(candidates.joined(separator: ", "))"
+        case .pythonNotFound(let candidates):
+            return "Could not find a sandbox-usable Python 3 executable. Checked: \(candidates.joined(separator: ", "))"
         case .applicationSupportUnavailable:
             return "Could not resolve Application Support for Codex Agent sidecar startup."
         }
-    }
-}
-
-private extension URL {
-    func ancestor(levels: Int) -> URL? {
-        guard levels >= 0 else { return nil }
-        var url = deletingLastPathComponent()
-        for _ in 0..<levels {
-            url = url.deletingLastPathComponent()
-        }
-        return url
     }
 }

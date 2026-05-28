@@ -123,3 +123,77 @@ Result:
   ```text
   ~/Library/Containers/rogues.pdf-app1/Data/Library/Application Support/Atlas/codex-agent-sidecar.log
   ```
+
+## Follow-Up: Finder/Xcode App Launch Python Path
+
+After the first commit, a real app launch reported repeated `/health`
+connection refusals and ended with:
+
+```text
+Model unavailable: Codex Agent sidecar did not become ready at http://127.0.0.1:8775 after Atlas started it.
+```
+
+The sidecar log contained:
+
+```text
+xcrun: error: cannot be used within an App Sandbox.
+```
+
+Root cause: the launcher used `/usr/bin/env python3`. In the user's app launch
+environment, that resolved to Apple's `/usr/bin/python3` developer-tool shim,
+which invokes `xcrun`; `xcrun` cannot run inside App Sandbox.
+
+Fix: resolve a real Python executable before starting the sidecar and skip the
+`/usr/bin/python3` shim. The preferred candidates are:
+
+- `$ATLAS_CODEX_AGENT_PYTHON`
+- `/Library/Frameworks/Python.framework/Versions/Current/bin/python3`
+- `/opt/homebrew/bin/python3`
+- `/usr/local/bin/python3`
+
+The sandbox entitlements also include read access for
+`/Library/Frameworks/Python.framework/`.
+
+## Follow-Up: Sandbox Hangs Opening Code Under Documents
+
+The Python-path fix exposed two additional sandbox hangs during the same
+Settings -> AI -> Codex Agent flow:
+
+1. Python could start, but hung opening `atlas/codex-agent-sidecar/server.py`
+   directly from the user's `Documents` tree.
+2. Copying the script into the app container helped Python start the copied
+   file, but the sidecar then hung importing the sibling
+   `~/Documents/codex-agent` package.
+
+Final fix:
+
+- Bundle `codex-agent-sidecar/server.py` into `pdf_app1.app/Contents/Resources`.
+- Copy the bundled resource into Atlas Application Support before launch.
+- Make the sidecar self-contained so it no longer imports `codex-agent` from
+  `Documents` at runtime.
+- Use the app-container Application Support directory as the sidecar working
+  directory.
+- Remove the `Documents` read exceptions from the app sandbox entitlements.
+
+Retest from a clean state:
+
+```text
+15:44:30 sidecar=none health=DOWN
+15:44:52 sidecar=86285 health={"ok": true, "model": "gpt-5.5", "codexBin": "/opt/homebrew/bin/codex", "sidecar": "self-contained"}
+15:45:02 sidecar=86285 health={"ok": true, "model": "gpt-5.5", "codexBin": "/opt/homebrew/bin/codex", "sidecar": "self-contained"}
+```
+
+Settings showed:
+
+```text
+OK (4.5s) — Machine learning is a subfield of artificial intelligence fo...
+```
+
+The sidecar log confirmed:
+
+```text
+Atlas Codex Agent sidecar listening on http://127.0.0.1:8775
+  sidecar:     self-contained
+[extract] model=gpt-5.5 in=221ch out=105ch 4467ms
+[http] 127.0.0.1 - "POST /extract HTTP/1.1" 200 -
+```

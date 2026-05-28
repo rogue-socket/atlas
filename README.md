@@ -28,7 +28,7 @@ The macOS app is built entirely with Apple frameworks. No Electron, no web views
 - Xcode 16.0 or later
 - Core app uses only Apple system frameworks (PDFKit, SwiftUI, AppKit, CryptoKit, Security, Vision)
 - Optional Claude Subscription backend requires Node 18+ and the `claude` CLI
-- Optional Codex Agent backend requires Python 3, the `codex` CLI logged in for the current macOS user, and the sibling `codex-agent` Python package checkout used by `codex-agent-sidecar/server.py`
+- Optional Codex Agent backend requires a non-`/usr/bin` Python 3 install and the `codex` CLI logged in for the current macOS user. Atlas bundles its own self-contained `codex-agent-sidecar/server.py`.
 
 ## Getting Started
 
@@ -74,7 +74,7 @@ cd claude-sidecar
 
 For Codex Agent:
 - Select **Codex Agent** in Settings -> AI.
-- Atlas starts `codex-agent-sidecar/server.py` automatically when the provider is selected, when Test API Connection is pressed, and before extraction runs.
+- Atlas starts its bundled `codex-agent-sidecar/server.py` automatically when the provider is selected, when Test API Connection is pressed, and before extraction runs.
 - The sidecar listens on `http://127.0.0.1:8775` by default and wraps `codex exec --json`.
 - Use Test API Connection to verify both sidecar startup and a real Codex request. A successful test shows `OK (...)` in Settings.
 - Logs are written under the app sandbox container: `~/Library/Containers/rogues.pdf-app1/Data/Library/Application Support/Atlas/codex-agent-sidecar.log`.

@@ -16,12 +16,8 @@
 	<true/>
 	<key>com.apple.security.temporary-exception.files.absolute-path.read-only</key>
 	<array>
+		<string>/Library/Frameworks/Python.framework/</string>
 		<string>/opt/homebrew/</string>
-	</array>
-	<key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
-	<array>
-		<string>/Documents/pdf_projects/atlas/codex-agent-sidecar/</string>
-		<string>/Documents/codex-agent/</string>
 	</array>
 	<key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
 	<array>
