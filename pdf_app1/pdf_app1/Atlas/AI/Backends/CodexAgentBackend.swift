@@ -296,8 +296,16 @@ actor CodexAgentSidecarLauncher: CodexAgentSidecarLaunching {
         var environment = current
         environment["PYTHONUNBUFFERED"] = "1"
         let pythonBinDir = pythonURL.deletingLastPathComponent().path
-        let defaultPath = "\(pythonBinDir):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        environment["PATH"] = current["PATH"].map { "\(pythonBinDir):\($0)" } ?? defaultPath
+        let fallbackPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        let inheritedPath = (current["PATH"] ?? fallbackPath)
+            .split(separator: ":")
+            .map(String.init)
+        let pathParts = ([pythonBinDir, "/opt/homebrew/bin", "/usr/local/bin"] + inheritedPath)
+            .reduce(into: [String]()) { result, part in
+                guard !part.isEmpty, !result.contains(part) else { return }
+                result.append(part)
+            }
+        environment["PATH"] = pathParts.joined(separator: ":")
         if let homeURL = userHomeURL(from: [scriptURL, supportURL]) {
             environment["HOME"] = homeURL.path
             environment["CODEX_HOME"] = homeURL.appendingPathComponent(".codex").path

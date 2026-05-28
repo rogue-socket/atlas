@@ -197,3 +197,62 @@ Atlas Codex Agent sidecar listening on http://127.0.0.1:8775
 [extract] model=gpt-5.5 in=221ch out=105ch 4467ms
 [http] 127.0.0.1 - "POST /extract HTTP/1.1" 200 -
 ```
+
+## Follow-Up: Extraction Failed Because Node Was Missing From PATH
+
+A later user run could start the app and select Codex Agent, but document
+analysis reached Step 4 and repeated `/health` checks failed with connection
+errors:
+
+```text
+NSURLErrorDomain Code=-1004 "Could not connect to the server."
+[CodexAgent] Health check failed: Could not connect to the server.
+Model unavailable: Codex Agent sidecar did not become ready at http://127.0.0.1:8775 after Atlas started it.
+```
+
+The sidecar log showed the real extraction failure:
+
+```text
+RuntimeError: codex exited 127: env: node: No such file or directory
+NameError: name 'sys' is not defined
+```
+
+Root cause:
+
+- Atlas set `CODEX_BIN=/opt/homebrew/bin/codex`, but GUI app launches did not
+  provide a shell PATH that included `/opt/homebrew/bin` or `/usr/local/bin`.
+- The Codex CLI is installed as a Node entrypoint, so `#!/usr/bin/env node`
+  failed even though the `codex` path itself was correct.
+- The sidecar's exception logging used `sys.stderr` after `import sys` had been
+  removed, so the handler dropped the HTTP request instead of returning a clean
+  502.
+
+Fix:
+
+- Restore `import sys` in the sidecar.
+- Prepend the Python directory, `/opt/homebrew/bin`, and `/usr/local/bin` to
+  the sidecar child `PATH` while preserving and de-duplicating the inherited
+  app environment.
+
+Retest from the Atlas UI:
+
+```text
+15:55:31 sidecar=90931 health={"ok": true, "model": "gpt-5.5", "codexBin": "/opt/homebrew/bin/codex", "sidecar": "self-contained"}
+Settings Test API Connection: OK (7.5s)
+[extract] model=gpt-5.5 in=221ch out=58ch 7467ms
+[http] 127.0.0.1 - "POST /extract HTTP/1.1" 200 -
+```
+
+A focused document analysis then generated visible Concept nodes and saved a
+graph with semantic-level counts:
+
+```json
+{
+  "nodes": 64,
+  "edges": 87,
+  "levels": [
+    { "level": "concept", "count": 13 },
+    { "level": "entity", "count": 51 }
+  ]
+}
+```

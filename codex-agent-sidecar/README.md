@@ -71,6 +71,10 @@ The launch is equivalent to:
 The child process uses the Atlas Application Support directory as its working
 directory. Atlas also sets `HOME` and `CODEX_HOME` to the real user home so the
 Codex CLI sees the same auth/config as a normal terminal session.
+Atlas prepends the Python directory plus `/opt/homebrew/bin` and
+`/usr/local/bin` to `PATH` before launching the sidecar. This matters for GUI
+launches because the Codex CLI commonly starts through `#!/usr/bin/env node`,
+and Finder/Xcode app launches may not inherit a shell PATH that can find Node.
 
 The app then polls `/health` until the sidecar is ready or the startup timeout
 expires. This preflight is used by:
@@ -169,7 +173,21 @@ The sidecar started, but `codex exec` failed. Common causes:
 
 - the Codex CLI is not logged in
 - `HOME` / `CODEX_HOME` does not point to the real user home
+- `PATH` does not include the directory that contains Node for a
+  `#!/usr/bin/env node` Codex CLI install
 - network/auth failures from the Codex service
+
+If the log contains:
+
+```text
+RuntimeError: codex exited 127: env: node: No such file or directory
+```
+
+the sidecar could run Python and receive HTTP requests, but the Codex CLI could
+not start because Node was not visible in the sidecar environment. Rebuild with
+the current launcher so Atlas prepends `/opt/homebrew/bin` and `/usr/local/bin`
+to `PATH`, or launch with an explicit `CODEX_BIN`/environment that can resolve
+Node.
 
 ### Health works but extraction fails
 
