@@ -16,12 +16,19 @@ final class CodexAgentBackend: LLMBackend, @unchecked Sendable {
     let logTag = "CodexAgent"
     private let baseURL: String
     private let session: URLSession
+    private let sidecarLauncher: any CodexAgentSidecarLaunching
 
     var isAvailable: Bool { true }
 
-    init(baseURL: String = "http://127.0.0.1:8775", model: String = "gpt-5.5", session: URLSession? = nil) {
+    init(
+        baseURL: String = "http://127.0.0.1:8775",
+        model: String = "gpt-5.5",
+        session: URLSession? = nil,
+        sidecarLauncher: any CodexAgentSidecarLaunching = CodexAgentSidecarLauncher.shared
+    ) {
         self.baseURL = baseURL
         self.modelIdentifier = model
+        self.sidecarLauncher = sidecarLauncher
         if let session {
             self.session = session
         } else {
@@ -33,9 +40,31 @@ final class CodexAgentBackend: LLMBackend, @unchecked Sendable {
     }
 
     func preflight() async throws {
+        do {
+            try await checkHealth(timeout: 5)
+            return
+        } catch let error as CodexAgentHealthError {
+            log.info("[CodexAgent] Health check failed; attempting auto-start: \(error.localizedDescription)")
+        } catch {
+            throw error
+        }
+
+        do {
+            try await sidecarLauncher.start()
+            try await waitForHealth()
+        } catch let error as AIError {
+            throw error
+        } catch {
+            log.error("[CodexAgent] Auto-start failed: \(error.localizedDescription)")
+            throw AIError.modelUnavailable(
+                "Codex Agent sidecar is not running at \(baseURL), and Atlas could not start it automatically: \(error.localizedDescription)")
+        }
+    }
+
+    private func checkHealth(timeout: TimeInterval) async throws {
         let url = URL(string: "\(baseURL)/health")!
         var request = URLRequest(url: url)
-        request.timeoutInterval = 5
+        request.timeoutInterval = timeout
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
@@ -50,9 +79,26 @@ final class CodexAgentBackend: LLMBackend, @unchecked Sendable {
             throw error
         } catch {
             log.error("[CodexAgent] Health check failed: \(error.localizedDescription)")
-            throw AIError.modelUnavailable(
-                "Codex Agent sidecar is not running at \(baseURL). Start it with 'python3 atlas/codex-agent-sidecar/server.py' from the pdf_projects workspace.")
+            throw CodexAgentHealthError.unreachable(error)
         }
+    }
+
+    private func waitForHealth() async throws {
+        var lastError: Error?
+        for _ in 0..<60 {
+            do {
+                try await checkHealth(timeout: 2)
+                return
+            } catch {
+                lastError = error
+                try await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+
+        if let error = lastError as? AIError {
+            throw error
+        }
+        throw AIError.modelUnavailable("Codex Agent sidecar did not become ready at \(baseURL) after Atlas started it.")
     }
 
     func transport(prompt: String) async throws -> String {
@@ -124,4 +170,147 @@ private struct CodexAgentResponse: Decodable {
 
 private struct CodexAgentErrorResponse: Decodable {
     let error: String?
+}
+
+protocol CodexAgentSidecarLaunching: Sendable {
+    func start() async throws
+}
+
+private enum CodexAgentHealthError: Error, LocalizedError {
+    case unreachable(Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .unreachable(let error):
+            return error.localizedDescription
+        }
+    }
+}
+
+actor CodexAgentSidecarLauncher: CodexAgentSidecarLaunching {
+    static let shared = CodexAgentSidecarLauncher()
+
+    private var process: Process?
+    private var logHandle: FileHandle?
+
+    func start() async throws {
+        if let process, process.isRunning {
+            return
+        }
+
+        let scriptURL = try resolveScriptURL()
+        let logURL = try applicationSupportURL().appendingPathComponent("codex-agent-sidecar.log")
+        try FileManager.default.createDirectory(
+            at: logURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: logURL)
+        try handle.seekToEnd()
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["python3", scriptURL.path]
+        process.currentDirectoryURL = scriptURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        process.environment = sidecarEnvironment(scriptURL: scriptURL)
+        process.standardOutput = handle
+        process.standardError = handle
+
+        try process.run()
+        self.process = process
+        self.logHandle = handle
+        log.info("[CodexAgent] Started sidecar pid=\(process.processIdentifier) log=\(logURL.path)")
+    }
+
+    private func resolveScriptURL() throws -> URL {
+        let fileManager = FileManager.default
+        let candidates = candidateScriptURLs()
+        if let match = candidates.first(where: { fileManager.fileExists(atPath: $0.path) }) {
+            return match
+        }
+        throw CodexAgentLauncherError.scriptNotFound(candidates.map(\.path))
+    }
+
+    private func candidateScriptURLs() -> [URL] {
+        var candidates: [URL] = []
+        let environment = ProcessInfo.processInfo.environment
+        if let override = environment["ATLAS_CODEX_AGENT_SIDECAR_SCRIPT"], !override.isEmpty {
+            candidates.append(URL(fileURLWithPath: override).standardizedFileURL)
+        }
+
+        if let resourceURL = Bundle.main.resourceURL {
+            candidates.append(resourceURL.appendingPathComponent("codex-agent-sidecar/server.py"))
+        }
+
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        candidates.append(cwd.appendingPathComponent("atlas/codex-agent-sidecar/server.py"))
+        candidates.append(cwd.appendingPathComponent("codex-agent-sidecar/server.py"))
+        candidates.append(cwd.appendingPathComponent("../codex-agent-sidecar/server.py").standardizedFileURL)
+
+        let sourceURL = URL(fileURLWithPath: #filePath)
+        if let atlasRoot = sourceURL.ancestor(levels: 5) {
+            candidates.append(atlasRoot.appendingPathComponent("codex-agent-sidecar/server.py"))
+        }
+
+        return candidates
+    }
+
+    private func applicationSupportURL() throws -> URL {
+        guard let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            throw CodexAgentLauncherError.applicationSupportUnavailable
+        }
+        return baseURL.appendingPathComponent("Atlas", isDirectory: true)
+    }
+
+    private func sidecarEnvironment(scriptURL: URL) -> [String: String] {
+        let current = ProcessInfo.processInfo.environment
+        var environment = current
+        environment["PYTHONUNBUFFERED"] = "1"
+        environment["PATH"] = current["PATH"] ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        if let homeURL = userHomeURL(from: scriptURL) {
+            environment["HOME"] = homeURL.path
+            environment["CODEX_HOME"] = homeURL.appendingPathComponent(".codex").path
+        }
+        if let codexBin = current["CODEX_BIN"], !codexBin.isEmpty {
+            environment["CODEX_BIN"] = codexBin
+        } else if FileManager.default.fileExists(atPath: "/opt/homebrew/bin/codex") {
+            environment["CODEX_BIN"] = "/opt/homebrew/bin/codex"
+        }
+        return environment
+    }
+
+    private func userHomeURL(from scriptURL: URL) -> URL? {
+        let components = scriptURL.standardizedFileURL.pathComponents
+        guard components.count >= 3, components[0] == "/", components[1] == "Users" else {
+            return nil
+        }
+        return URL(fileURLWithPath: "/Users/\(components[2])", isDirectory: true)
+    }
+}
+
+private enum CodexAgentLauncherError: Error, LocalizedError {
+    case scriptNotFound([String])
+    case applicationSupportUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .scriptNotFound(let candidates):
+            return "Could not find atlas/codex-agent-sidecar/server.py. Checked: \(candidates.joined(separator: ", "))"
+        case .applicationSupportUnavailable:
+            return "Could not resolve Application Support for Codex Agent sidecar startup."
+        }
+    }
+}
+
+private extension URL {
+    func ancestor(levels: Int) -> URL? {
+        guard levels >= 0 else { return nil }
+        var url = deletingLastPathComponent()
+        for _ in 0..<levels {
+            url = url.deletingLastPathComponent()
+        }
+        return url
+    }
 }

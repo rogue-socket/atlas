@@ -1,0 +1,184 @@
+# Atlas Codex Agent sidecar
+
+Local HTTP bridge from the sandboxed Atlas macOS app to the user's Codex CLI.
+It lets Atlas use **Codex Agent** as an AI backend without storing an API key in
+Atlas.
+
+The sidecar is intentionally tiny: Atlas talks to `127.0.0.1`, the sidecar
+passes prompts to `codex exec --json`, and the text response is returned to the
+app.
+
+## User flow
+
+1. Open Atlas.
+2. Open **Settings** (`Cmd+,`) -> **AI**.
+3. Select **Codex Agent** as the provider.
+4. Atlas automatically starts `codex-agent-sidecar/server.py`.
+5. Press **Test API Connection** to verify a real Codex request.
+
+Expected result:
+
+- Settings shows provider `Codex Agent`, model `gpt-5.5`.
+- The sidecar becomes healthy at `http://127.0.0.1:8775/health`.
+- Test API Connection shows `OK (...)`.
+
+The same preflight/startup path runs before document analysis, so extraction
+does not require manually starting the sidecar first.
+
+## Requirements
+
+- Python 3 available as `python3`.
+- The `codex` CLI installed and logged in for the current macOS user.
+- The sibling `codex-agent` Python package checkout available to the sidecar.
+  The default search paths include:
+  - `$CODEX_AGENT_PATH`
+  - `../codex-agent` from the `pdf_projects` workspace
+  - `codex-agent` beside this repo
+- Atlas must be built with the Codex Agent sandbox exceptions in
+  `pdf_app1/pdf_app1/pdf_app1.entitlements`.
+
+The Debug/dev setup currently grants read access to:
+
+- `~/Documents/pdf_projects/atlas/codex-agent-sidecar/`
+- `~/Documents/codex-agent/`
+- `/opt/homebrew/`
+
+and read/write access to:
+
+- `~/.codex/`
+
+Those exceptions are what allow the sandboxed app to spawn Python, import the
+local sidecar code, run the Homebrew Codex CLI, and use the user's Codex auth
+state.
+
+## Startup behavior
+
+`CodexAgentBackend.preflight()` first calls `/health`.
+
+If health is already OK, Atlas does not start a new process. If health is down,
+Atlas starts:
+
+```sh
+python3 atlas/codex-agent-sidecar/server.py
+```
+
+The app then polls `/health` until the sidecar is ready or the startup timeout
+expires. This preflight is used by:
+
+- selecting **Codex Agent** in Settings -> AI
+- pressing **Test API Connection**
+- extraction and guided-tour generation paths that create an AI backend
+
+The sidecar log lives in the app container:
+
+```sh
+~/Library/Containers/rogues.pdf-app1/Data/Library/Application Support/Atlas/codex-agent-sidecar.log
+```
+
+## Endpoints
+
+- `GET /health`
+
+  Returns:
+
+  ```json
+  {
+    "ok": true,
+    "model": "gpt-5.5",
+    "codexBin": "/opt/homebrew/bin/codex",
+    "codexAgentPath": "/Users/<user>/Documents/codex-agent"
+  }
+  ```
+
+- `POST /extract`
+
+  Request:
+
+  ```json
+  {
+    "prompt": "...",
+    "model": "gpt-5.5"
+  }
+  ```
+
+  Response:
+
+  ```json
+  {
+    "text": "..."
+  }
+  ```
+
+## Environment knobs
+
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `ATLAS_CODEX_AGENT_PORT` | `8775` | Sidecar listen port. Must match Settings -> AI sidecar URL. |
+| `ATLAS_CODEX_AGENT_MODEL` | `gpt-5.5` | Default model when the request does not provide one. |
+| `ATLAS_CODEX_AGENT_TIMEOUT` | `600` | Per-request Codex timeout in seconds. |
+| `ATLAS_CODEX_AGENT_SANDBOX` | `read-only` | Sandbox passed to `codex exec`. |
+| `CODEX_BIN` | `codex` | Codex CLI path. Atlas sets `/opt/homebrew/bin/codex` when present. |
+| `CODEX_AGENT_PATH` | auto-detected | Override path to the sibling `codex-agent` package. |
+
+Atlas also sets `HOME` and `CODEX_HOME` for the sidecar child process so the
+Codex CLI can read the user's real `~/.codex` auth/config instead of the app
+container home.
+
+## Troubleshooting
+
+### Provider selection shows "sidecar did not become ready"
+
+Check the sidecar log:
+
+```sh
+tail -n 80 "$HOME/Library/Containers/rogues.pdf-app1/Data/Library/Application Support/Atlas/codex-agent-sidecar.log"
+```
+
+Common causes:
+
+- the app was not rebuilt after entitlement changes
+- Python cannot read `atlas/codex-agent-sidecar/server.py`
+- `codex-agent` cannot be imported
+- port `8775` is already in use
+
+### Test API Connection returns HTTP 502 with Codex output
+
+The sidecar started, but `codex exec` failed. Common causes:
+
+- the Codex CLI is not logged in
+- `HOME` / `CODEX_HOME` does not point to the real user home
+- network/auth failures from the Codex service
+
+### Health works but extraction fails
+
+`/health` only checks that the sidecar can import `codex-agent` and respond over
+HTTP. Press **Test API Connection** to verify the full path through
+`codex exec --json`.
+
+## Manual smoke test
+
+From a clean state:
+
+```sh
+pkill -f '[c]odex-agent-sidecar/server.py' || true
+curl --max-time 1 http://127.0.0.1:8775/health
+```
+
+Then use Atlas UI:
+
+1. Settings -> AI.
+2. Select **Codex Agent**.
+3. Confirm `/health` returns OK.
+4. Press **Test API Connection**.
+
+The 2026-05-28 smoke from the app UI showed:
+
+- sidecar process appeared 4 seconds after selecting Codex Agent
+- `/health` returned OK after another 6 seconds
+- Test API Connection completed in 4.3 seconds
+- sidecar logged `POST /extract HTTP/1.1" 200`
+
+## Embeddings
+
+Codex Agent is an LLM backend only. It does not provide embeddings, so ETR
+embedding-backed workflows still require another embedding provider.

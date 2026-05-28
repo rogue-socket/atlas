@@ -2,7 +2,7 @@
 
 A native macOS PDF reader that builds a live, AI-generated knowledge map as you read. Open any PDF and Atlas extracts concepts, definitions, theorems, and relationships - rendering them as an interactive force-directed graph linked back to every source passage. Add multiple PDFs to a project and Atlas builds a shared project graph so repeated concepts connect across documents.
 
-The macOS app is built entirely with Apple frameworks. No Electron, no web views, and no third-party app runtime; the optional Claude subscription backend runs through a local Node sidecar.
+The macOS app is built entirely with Apple frameworks. No Electron, no web views, and no third-party app runtime; optional subscription/CLI backends run through localhost sidecars.
 
 ![Atlas - PDF viewer with live knowledge map](docs/images/atlas-screenshot.png)
 
@@ -17,7 +17,7 @@ The macOS app is built entirely with Apple frameworks. No Electron, no web views
 - **Ask Your Documents** - A chat panel answers questions about the open PDF using your configured AI backend, with citations linked back to the source passages
 - **Cross-Document Correlations** *(in development)* - Projects share one live graph and merge exact repeated labels during extraction. Semantic cross-document resolution exists as headless SCE/ETR/hybrid tooling; the older proposal UI (`GraphMergeEngine` / `MergeProposalView`) is still dormant
 - **OCR Fallback** - Scanned PDFs with no embedded text are automatically detected; Vision OCR extracts text page-by-page so the AI pipeline can still analyze them
-- **Pluggable AI** - Bring your own API key for Claude, OpenAI, Gemini, use a Claude subscription via the local sidecar, or run locally via Ollama. API keys are stored in macOS Keychain
+- **Pluggable AI** - Bring your own API key for Claude, OpenAI, Gemini, use Claude Subscription or Codex Agent via localhost sidecars, or run locally via Ollama. API keys are stored in macOS Keychain
 - **Projects** - Organize PDFs into projects with per-document and batch extraction, and a project-level sidebar showing processing state
 - **Export** - Export your knowledge graph to Obsidian (wikilinks), Markdown, or JSON
 - **Session Restore** - Persisted graphs load automatically when you reopen a document. Window state and split-pane layout are restored across launches
@@ -27,7 +27,8 @@ The macOS app is built entirely with Apple frameworks. No Electron, no web views
 - macOS 13.0 (Ventura) or later
 - Xcode 16.0 or later
 - Core app uses only Apple system frameworks (PDFKit, SwiftUI, AppKit, CryptoKit, Security, Vision)
-- Optional Claude subscription backend requires Node 18+ and the `claude` CLI
+- Optional Claude Subscription backend requires Node 18+ and the `claude` CLI
+- Optional Codex Agent backend requires Python 3, the `codex` CLI logged in for the current macOS user, and the sibling `codex-agent` Python package checkout used by `codex-agent-sidecar/server.py`
 
 ## Getting Started
 
@@ -53,7 +54,7 @@ xcodebuild -project pdf_app1.xcodeproj -scheme pdf_app1 -configuration Debug bui
 ### 3. Configure AI (optional but recommended)
 
 1. Open **Settings** (Cmd+,) → **AI** tab
-2. Select a provider: Anthropic Claude, OpenAI, Google Gemini, Claude (Subscription), or Ollama (local)
+2. Select a provider: Anthropic Claude, OpenAI, Google Gemini, Claude (Subscription), Codex Agent, or Ollama (local)
 3. Enter your API key when the provider needs one (stored in macOS Keychain)
 4. Choose a model (e.g., `claude-sonnet-4-5-20250514`, `gpt-4o`, `gemini-2.5-flash`)
 
@@ -70,6 +71,14 @@ cd claude-sidecar
 ./install-launchagent.sh
 # Atlas connects to http://127.0.0.1:8765 by default
 ```
+
+For Codex Agent:
+- Select **Codex Agent** in Settings -> AI.
+- Atlas starts `codex-agent-sidecar/server.py` automatically when the provider is selected, when Test API Connection is pressed, and before extraction runs.
+- The sidecar listens on `http://127.0.0.1:8775` by default and wraps `codex exec --json`.
+- Use Test API Connection to verify both sidecar startup and a real Codex request. A successful test shows `OK (...)` in Settings.
+- Logs are written under the app sandbox container: `~/Library/Containers/rogues.pdf-app1/Data/Library/Application Support/Atlas/codex-agent-sidecar.log`.
+- See [`codex-agent-sidecar/README.md`](codex-agent-sidecar/README.md) for prerequisites, sandbox notes, environment knobs, and troubleshooting.
 
 ### 4. Open a PDF and analyze
 
@@ -160,6 +169,7 @@ pdf_app1/pdf_app1/
         OpenAIBackend.swift       OpenAI-compatible (also Ollama, LM Studio)
         GeminiBackend.swift       Google Gemini API
         ClaudeSidecarBackend.swift  Local Claude subscription sidecar client
+        CodexAgentBackend.swift   Auto-started local Codex Agent sidecar client
       Embeddings/
         EmbeddingResolver.swift   ETR/hybrid candidate generation and adjudication
         GeminiEmbeddingBackend.swift  Gemini embedding API client
@@ -212,7 +222,7 @@ pdf_app1/pdf_app1/
 - **Local-first** - All graphs, annotations, and settings are stored on your Mac
 - **API keys in Keychain** - Never stored in plain text or UserDefaults
 - **Minimal data sent** - Only the text of pages being analyzed is sent to the AI provider (5-page batches)
-- **No Atlas cloud** - There is no Atlas-hosted service. The Claude subscription option uses an optional localhost sidecar; your documents stay on your machine except for text sent to the AI provider you choose
+- **No Atlas cloud** - There is no Atlas-hosted service. Claude Subscription and Codex Agent use localhost sidecars; your documents stay on your machine except for text sent to the AI provider or CLI backend you choose
 
 ## License
 

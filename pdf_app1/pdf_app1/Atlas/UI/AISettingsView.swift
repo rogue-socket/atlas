@@ -41,6 +41,9 @@ struct AISettingsView: View {
                     loadAPIKey(for: newValue)
                     serviceManager.savePreferences()
                     testStatus = .idle
+                    if newValue == .codexAgent {
+                        startCodexSidecar()
+                    }
                 }
 
                 Picker("Model", selection: $serviceManager.selectedModel) {
@@ -126,7 +129,7 @@ struct AISettingsView: View {
                             UserDefaults.standard.set(codexAgentSidecarURL, forKey: AppConstants.codexAgentSidecarURLKey)
                         }
 
-                    Text("Runs Codex through the local Atlas Codex Agent sidecar. Start it first: python3 atlas/codex-agent-sidecar/server.py")
+                    Text("Runs Codex through the local Atlas Codex Agent sidecar. Atlas starts it automatically when selected, tested, or analyzing.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -202,6 +205,24 @@ struct AISettingsView: View {
         apiKeyInput = serviceManager.getAPIKey(for: backend) ?? ""
     }
 
+    private func startCodexSidecar() {
+        guard let backend = serviceManager.createBackend() else {
+            return
+        }
+
+        testStatus = .testing
+        Task {
+            do {
+                try await backend.preflight()
+                testStatus = .success("Sidecar ready")
+            } catch let error as AIError {
+                testStatus = .failure(error.errorDescription ?? error.localizedDescription)
+            } catch {
+                testStatus = .failure(error.localizedDescription)
+            }
+        }
+    }
+
     private func runTest() {
         guard let backend = serviceManager.createBackend() else {
             testStatus = .failure("Could not create backend — check API key")
@@ -214,6 +235,7 @@ struct AISettingsView: View {
         Task {
             do {
                 let startTime = Date()
+                try await backend.preflight()
                 let response = try await backend.summarizeConcept(
                     "machine learning",
                     sourceText: "Machine learning is a subfield of artificial intelligence."
@@ -224,8 +246,9 @@ struct AISettingsView: View {
                 log.info("[Test] SUCCESS in \(elapsedStr): \(response.prefix(100))")
                 testStatus = .success("OK (\(elapsedStr)) — \(response.prefix(60))...")
             } catch let error as AIError {
-                log.error("[Test] FAILED: \(error.localizedDescription ?? "unknown")")
-                testStatus = .failure(error.localizedDescription ?? "Unknown AI error")
+                let message = error.errorDescription ?? error.localizedDescription
+                log.error("[Test] FAILED: \(message)")
+                testStatus = .failure(message)
             } catch {
                 log.error("[Test] FAILED: \(error.localizedDescription)")
                 testStatus = .failure(error.localizedDescription)

@@ -47,6 +47,65 @@ final class CodexAgentBackendTests: XCTestCase {
         XCTAssertNil(service.createEmbeddingBackend())
     }
 
+    func test_preflightDoesNotStartSidecarWhenHealthIsOK() async throws {
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/health")
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!,
+                Data(#"{"ok":true}"#.utf8)
+            )
+        }
+        let launcher = MockSidecarLauncher()
+        let backend = CodexAgentBackend(
+            baseURL: "http://codex-agent.test",
+            model: "gpt-5.5",
+            session: Self.mockSession(),
+            sidecarLauncher: launcher
+        )
+
+        try await backend.preflight()
+
+        let startCount = await launcher.startCount()
+        XCTAssertEqual(startCount, 0)
+    }
+
+    func test_preflightStartsSidecarWhenHealthIsUnreachable() async throws {
+        let healthCalls = LockedCounter()
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/health")
+            if healthCalls.increment() == 1 {
+                throw URLError(.cannotConnectToHost)
+            }
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!,
+                Data(#"{"ok":true}"#.utf8)
+            )
+        }
+        let launcher = MockSidecarLauncher()
+        let backend = CodexAgentBackend(
+            baseURL: "http://codex-agent.test",
+            model: "gpt-5.5",
+            session: Self.mockSession(),
+            sidecarLauncher: launcher
+        )
+
+        try await backend.preflight()
+
+        let startCount = await launcher.startCount()
+        XCTAssertEqual(startCount, 1)
+        XCTAssertEqual(healthCalls.value(), 2)
+    }
+
     func test_transportParsesTextResponse() async throws {
         MockURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/extract")
@@ -107,6 +166,36 @@ final class CodexAgentBackendTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         return URLSession(configuration: config)
+    }
+}
+
+private actor MockSidecarLauncher: CodexAgentSidecarLaunching {
+    private var starts = 0
+
+    func start() async throws {
+        starts += 1
+    }
+
+    func startCount() -> Int {
+        starts
+    }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func increment() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        count += 1
+        return count
+    }
+
+    func value() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
     }
 }
 
