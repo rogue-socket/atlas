@@ -67,7 +67,7 @@ class AIServiceManager {
             let envReasoningEffort = ProcessInfo.processInfo.environment["ATLAS_CODEX_AGENT_REASONING_EFFORT"]?.trimmingCharacters(in: .whitespacesAndNewlines)
             let model = (envModel?.isEmpty == false) ? envModel! : selectedModel
             let reasoningEffort = (envReasoningEffort?.isEmpty == false) ? envReasoningEffort : nil
-            log.info("[AIService] Using Codex Agent sidecar at \(baseURL) model=\(model) reasoningEffort=\(reasoningEffort ?? \"<default>\")")
+            log.info("[AIService] Using Codex Agent sidecar at \(baseURL) model=\(model) reasoningEffort=\(reasoningEffort ?? "<default>")")
             return CodexAgentBackend(baseURL: baseURL, model: model, reasoningEffort: reasoningEffort)
         }
     }

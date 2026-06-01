@@ -20,7 +20,7 @@ final class CodexAgentBackend: LLMBackend, @unchecked Sendable {
 
     var isAvailable: Bool { true }
 
-    init(baseURL: String = "http://127.0.0.1:8775", model: String = "gpt-5.5", reasoningEffort: String? = nil, session: URLSession? = nil) {
+    init(baseURL: String = "http://127.0.0.1:8775", model: String = "gpt-5.3-codex-spark", reasoningEffort: String? = nil, session: URLSession? = nil) {
         self.baseURL = baseURL
         self.modelIdentifier = model
         self.reasoningEffort = reasoningEffort
@@ -58,7 +58,7 @@ final class CodexAgentBackend: LLMBackend, @unchecked Sendable {
     }
 
     func transport(prompt: String) async throws -> String {
-        log.info("[CodexAgent] POST \(self.baseURL)/extract (prompt: \(prompt.count) chars, model: \(self.modelIdentifier), reasoningEffort: \(self.reasoningEffort ?? \"<default>\"))")
+        log.info("[CodexAgent] POST \(self.baseURL)/extract (prompt: \(prompt.count) chars, model: \(self.modelIdentifier), reasoningEffort: \(self.reasoningEffort ?? "<default>"))")
 
         let url = URL(string: "\(baseURL)/extract")!
         var request = URLRequest(url: url)

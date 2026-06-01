@@ -68,19 +68,9 @@ struct PDFViewerApp: App {
                 .environment(aiServiceManager)
                 .frame(minWidth: AppConstants.minWindowWidth, minHeight: AppConstants.minWindowHeight)
                 .onAppear {
-                    // Headless mode: bypass session restore + orphan sweep so the
-                    // runner has a clean lifecycle, then drive extraction + exit.
-                    if let config = headlessConfig {
-                        Task { @MainActor in
-                            await HeadlessRunner().run(
-                                config: config,
-                                projectsManager: projectsManager,
-                                aiService: aiServiceManager,
-                                graph: knowledgeGraph
-                            )
-                        }
-                        return
-                    }
+                    // Headless mode is launched exclusively from the AppDelegate
+                    // hook above so the runner cannot start twice.
+                    if headlessConfig != nil { return }
 
                     documentManager.restoreOpenSession()
                     configureWindow()
@@ -198,4 +188,3 @@ struct PDFViewerApp: App {
         }
     }
 }
-

@@ -14,25 +14,31 @@ final class CodexAgentBackendTests: XCTestCase {
         XCTAssertEqual(AIBackendType.codexAgent.displayName, "Codex Agent")
         XCTAssertFalse(AIBackendType.codexAgent.requiresAPIKey)
         XCTAssertEqual(AIBackendType.codexAgent.defaultBaseURL, "http://127.0.0.1:8775")
-        XCTAssertEqual(AIBackendType.codexAgent.availableModels.first, "gpt-5.5")
+        XCTAssertEqual(AIBackendType.codexAgent.availableModels.first, "gpt-5.3-codex-spark")
+    }
+
+    func test_backendDefaultModel_usesSpark() {
+        let backend = CodexAgentBackend()
+
+        XCTAssertEqual(backend.modelIdentifier, "gpt-5.3-codex-spark")
     }
 
     func test_createBackend_returnsCodexAgentWithoutAPIKey() {
         let service = AIServiceManager()
         service.selectedBackendType = .codexAgent
-        service.selectedModel = "gpt-5.5"
+        service.selectedModel = "gpt-5.3-codex-spark"
 
         let backend = service.createBackend()
 
         XCTAssertTrue(backend is CodexAgentBackend)
         XCTAssertEqual(backend?.displayName, "Codex Agent")
-        XCTAssertEqual(backend?.modelIdentifier, "gpt-5.5")
+        XCTAssertEqual(backend?.modelIdentifier, "gpt-5.3-codex-spark")
     }
 
     func test_savePreferencesMarksCodexAgentConfiguredWithoutAPIKey() {
         let service = AIServiceManager()
         service.selectedBackendType = .codexAgent
-        service.selectedModel = "gpt-5.5"
+        service.selectedModel = "gpt-5.3-codex-spark"
 
         service.savePreferences()
 
@@ -43,9 +49,9 @@ final class CodexAgentBackendTests: XCTestCase {
         MockURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/extract")
             XCTAssertEqual(request.httpMethod, "POST")
-            if let body = request.httpBody,
-               let payload = try? JSONSerialization.jsonObject(with: body, options: []) as? [String: Any] {
-                XCTAssertEqual(payload["model"] as? String, "gpt-5.5")
+            if let bodyData = request.httpBody ?? request.httpBodyDataFromStream,
+               let payload = try? JSONSerialization.jsonObject(with: bodyData, options: []) as? [String: Any] {
+                XCTAssertEqual(payload["model"] as? String, "gpt-5.3-codex-spark")
                 XCTAssertNil(payload["reasoning_effort"])
             } else {
                 XCTFail("Expected JSON payload")
@@ -63,7 +69,7 @@ final class CodexAgentBackendTests: XCTestCase {
 
         let backend = CodexAgentBackend(
             baseURL: "http://codex-agent.test",
-            model: "gpt-5.5",
+            model: "gpt-5.3-codex-spark",
             session: Self.mockSession()
         )
 
@@ -74,8 +80,8 @@ final class CodexAgentBackendTests: XCTestCase {
 
     func test_transportIncludesReasoningEffortWhenConfigured() async throws {
         MockURLProtocol.handler = { request in
-            if let body = request.httpBody,
-               let payload = try? JSONSerialization.jsonObject(with: body, options: []) as? [String: Any] {
+            if let bodyData = request.httpBody ?? request.httpBodyDataFromStream,
+               let payload = try? JSONSerialization.jsonObject(with: bodyData, options: []) as? [String: Any] {
                 XCTAssertEqual(payload["reasoning_effort"] as? String, "high")
             } else {
                 XCTFail("Expected JSON payload")
@@ -94,7 +100,7 @@ final class CodexAgentBackendTests: XCTestCase {
 
         let backend = CodexAgentBackend(
             baseURL: "http://codex-agent.test",
-            model: "gpt-5.5",
+            model: "gpt-5.3-codex-spark",
             reasoningEffort: "high",
             session: Self.mockSession()
         )
@@ -117,7 +123,7 @@ final class CodexAgentBackendTests: XCTestCase {
 
         let backend = CodexAgentBackend(
             baseURL: "http://codex-agent.test",
-            model: "gpt-5.5",
+            model: "gpt-5.3-codex-spark",
             session: Self.mockSession()
         )
 
@@ -136,6 +142,31 @@ final class CodexAgentBackendTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         return URLSession(configuration: config)
+    }
+}
+
+private extension URLRequest {
+    var httpBodyDataFromStream: Data? {
+        guard let stream = httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+
+        let bufferSize = 1024
+        var data = Data()
+
+        while stream.hasBytesAvailable {
+            var buffer = [UInt8](repeating: 0, count: bufferSize)
+            let read = stream.read(&buffer, maxLength: bufferSize)
+            if read < 0 {
+                return nil
+            }
+            if read == 0 {
+                break
+            }
+            data.append(buffer, count: read)
+        }
+
+        return data
     }
 }
 
