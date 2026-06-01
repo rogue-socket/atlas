@@ -111,6 +111,34 @@ final class KnowledgeGraphTests: XCTestCase {
         XCTAssertEqual(Set(g.neighbors(of: b.id).map(\.id)), Set([a.id]))
     }
 
+    func test_graphEdgeDisplayText_usesTrimmedLabelWhenPresent() {
+        let edge = GraphEdge(
+            sourceNodeID: UUID(),
+            targetNodeID: UUID(),
+            type: .uses,
+            label: "  trains model with  "
+        )
+
+        XCTAssertEqual(edge.displayText(), "trains model with")
+    }
+
+    func test_graphEdgeDisplayText_fallsBackToTypeDisplayName() {
+        let edge = GraphEdge(sourceNodeID: UUID(), targetNodeID: UUID(), type: .dependsOn, label: "  ")
+
+        XCTAssertEqual(edge.displayText(), "Depends On")
+    }
+
+    func test_graphEdgeDisplayText_truncatesWhenRequested() {
+        let edge = GraphEdge(
+            sourceNodeID: UUID(),
+            targetNodeID: UUID(),
+            type: .uses,
+            label: "connects a very long extracted relationship"
+        )
+
+        XCTAssertEqual(edge.displayText(maxLength: 28), "connects a very long extr...")
+    }
+
     // MARK: - Document/page queries
 
     func test_nodesForDocument_andForPage_filterByAnchor() {

@@ -21,6 +21,28 @@ class DensityManager {
         return graph.allNodes.filter { $0.level == target }
     }
 
+    /// The tab itself stays strict, but the canvas needs one-hop endpoints for
+    /// semantic edges; otherwise concept/entity relationships are filtered out
+    /// before `MapCanvasRenderer` can draw them.
+    func visibleNodesIncludingRelationshipContext(
+        from graph: KnowledgeGraph,
+        zoomLevel: SemanticZoomLevel
+    ) -> [ConceptNode] {
+        let primaryNodes = visibleNodes(from: graph, zoomLevel: zoomLevel)
+        var visibleIDs = Set(primaryNodes.map(\.id))
+
+        for edge in graph.allEdges where !edge.type.isContainment {
+            let sourceVisible = visibleIDs.contains(edge.sourceNodeID)
+            let targetVisible = visibleIDs.contains(edge.targetNodeID)
+            if sourceVisible || targetVisible {
+                visibleIDs.insert(edge.sourceNodeID)
+                visibleIDs.insert(edge.targetNodeID)
+            }
+        }
+
+        return graph.allNodes.filter { visibleIDs.contains($0.id) }
+    }
+
     private func nodeLevel(for zoomLevel: SemanticZoomLevel) -> NodeLevel {
         switch zoomLevel {
         case .document: return .document
