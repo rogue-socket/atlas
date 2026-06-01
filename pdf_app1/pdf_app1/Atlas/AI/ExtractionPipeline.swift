@@ -12,6 +12,16 @@ import Observation
 import os.log
 
 private let log = AtlasLogger.pipeline
+private let defaultSCEPriorDocsHeaderMaxLines = 120
+private let edgeProposalCandidateLimit = 120
+
+struct RelationshipEdgeInsertionResult: Equatable {
+    var added = 0
+    var missingEndpoint = 0
+    var containment = 0
+    var duplicate = 0
+    var selfLoop = 0
+}
 
 @Observable
 class ExtractionPipeline {
@@ -31,6 +41,31 @@ class ExtractionPipeline {
     private let textExtractor = TextExtractor()
     private let layoutAnalyzer = LayoutAnalyzer()
     private let deepPipeline = DeepExtractionPipeline()
+
+    static var scePriorDocsHeaderMaxLines: Int {
+        scePriorDocsHeaderMaxLines(
+            environment: ProcessInfo.processInfo.environment,
+            defaults: .standard
+        )
+    }
+
+    static func scePriorDocsHeaderMaxLines(
+        environment: [String: String],
+        defaults: UserDefaults
+    ) -> Int {
+        if let envValue = environment["ATLAS_SCE_PRIOR_HEADER_MAX_LINES"],
+           let parsed = parseSCEPriorDocsHeaderMaxLines(envValue) {
+            return parsed
+        }
+        let stored = defaults.integer(forKey: AppConstants.scePriorHeaderMaxLinesKey)
+        return stored > 0 ? stored : defaultSCEPriorDocsHeaderMaxLines
+    }
+
+    private static func parseSCEPriorDocsHeaderMaxLines(_ raw: String) -> Int? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Int(trimmed), value > 0 else { return nil }
+        return value
+    }
     private let batchSize = 5
 
     func cancel() {
@@ -110,14 +145,16 @@ class ExtractionPipeline {
         let hasPriorDocNodes = graph.allNodes.contains { node in
             node.sourceAnchors.contains { $0.documentURL != documentURL }
         }
-        let priorDocsHeader: String? = hasPriorDocNodes
+        let priorDocsHeaderLineCount: Int? = hasPriorDocNodes
             ? PromptTemplates.cumulativeStateHeader(priorDocsGraph: graph, currentDocURL: documentURL)
+                .split(separator: "\n")
+                .count
             : nil
         let priorDocsLabelMap: [String: String] = hasPriorDocNodes
             ? PromptTemplates.priorDocsLabelMap(graph: graph, currentDocURL: documentURL)
             : [:]
-        if let h = priorDocsHeader {
-            log.info("[SCE] doc=\(documentURL.lastPathComponent, privacy: .public) prior-docs-header: \(h.split(separator: "\n").count) line(s), label-map: \(priorDocsLabelMap.count) entries")
+        if let lineCount = priorDocsHeaderLineCount {
+            log.info("[SCE] doc=\(documentURL.lastPathComponent, privacy: .public) prior-docs-header: \(lineCount) line(s), cap=\(Self.scePriorDocsHeaderMaxLines), label-map: \(priorDocsLabelMap.count) entries")
         }
 
         // Cross-doc reuse via `graph.node(matching:)` (exact-lowercase label
@@ -159,7 +196,7 @@ class ExtractionPipeline {
                     backend: backend,
                     existingLabels: existingLabels,
                     outlineHints: outlineHints,
-                    priorDocsHeader: priorDocsHeader,
+                    priorDocsHeaderLineCount: priorDocsHeaderLineCount,
                     priorDocsLabelMap: priorDocsLabelMap
                 )
                 let promptTokens = backend.lastResponsePromptTokens.map(String.init) ?? "?"
@@ -287,7 +324,7 @@ class ExtractionPipeline {
         backend: any AtlasModel,
         existingLabels: [String],
         outlineHints: [String],
-        priorDocsHeader: String? = nil,
+        priorDocsHeaderLineCount: Int? = nil,
         priorDocsLabelMap: [String: String] = [:]
     ) async throws {
         // Step 1: Extract text
@@ -351,15 +388,27 @@ class ExtractionPipeline {
             pageRange: pageRange,
             existingConcepts: existingLabels,
             outlineHints: outlineHints,
-            priorDocsContext: priorDocsHeader,
+            priorDocsContext: priorDocsHeaderLineCount == nil ? nil : PromptTemplates.cumulativeStateHeader(
+                priorDocsGraph: graph,
+                currentDocURL: documentURL,
+                relevanceText: contextText,
+                maxLines: Self.scePriorDocsHeaderMaxLines
+            ),
             priorDocsLabelMap: priorDocsLabelMap
         )
+        if let priorDocsHeaderLineCount {
+            let effectiveLineCount = context.priorDocsContext?.split(separator: "\n").count ?? 0
+            if effectiveLineCount < priorDocsHeaderLineCount {
+                log.info("[SCE] doc=\(documentURL.lastPathComponent, privacy: .public) pages=\(pageRange.lowerBound + 1)-\(pageRange.upperBound) prior-docs-header-filtered: \(effectiveLineCount)/\(priorDocsHeaderLineCount) line(s)")
+            }
+        }
 
         // Step 4: AI concept extraction (hierarchical)
         log.info("[Step 4] Sending to AI for hierarchical concept extraction...")
-        let rawConcepts: [RawConcept]
+        let extraction: ExtractionResponse
         do {
-            rawConcepts = try await backend.extractConcepts(from: contextText, context: context)
+            extraction = try await backend.extractConceptGraph(from: contextText, context: context)
+            let rawConcepts = extraction.concepts
             log.info("[Step 4] AI returned \(rawConcepts.count) raw concepts")
             for (i, c) in rawConcepts.enumerated() {
                 let entityCount = c.entities?.count ?? 0
@@ -369,6 +418,7 @@ class ExtractionPipeline {
             log.error("[Step 4] AI extraction failed: \(error)")
             throw error
         }
+        let rawConcepts = extraction.concepts
 
         if rawConcepts.isEmpty {
             log.warning("[Step 4] AI returned 0 concepts — check prompt or model output")
@@ -381,7 +431,7 @@ class ExtractionPipeline {
         // SCE Option D/E telemetry — tracked at batch level
         var scePriorMatchClaims = 0       // LLM populated prior_label_match
         var scePriorMatchRenames = 0      // valid claim with same_entity → rename
-        var scePriorMatchMerges = 0       // rename actually landed on an existing node
+        var scePriorMatchMerges = 0       // same_entity claim landed on an existing node
         var scePriorMatchTypedEdges = 0   // valid claim with instance_of/attribute_of/process_for → typed edge
 
         for rawConcept in rawConcepts {
@@ -432,8 +482,7 @@ class ExtractionPipeline {
             let conceptNodeID: UUID
 
             if var existing = existingNode {
-                if case .mergeByRename = conceptAction,
-                   existing.label.lowercased() != rawConcept.label.lowercased() {
+                if case .mergeByRename = conceptAction {
                     scePriorMatchMerges += 1
                 }
                 existing.sourceAnchors.append(conceptAnchor)
@@ -527,8 +576,7 @@ class ExtractionPipeline {
 
                 let entityNodeID: UUID
                 if var existing = existingEntity {
-                    if case .mergeByRename = entityAction,
-                       existing.label.lowercased() != rawEntity.label.lowercased() {
+                    if case .mergeByRename = entityAction {
                         scePriorMatchMerges += 1
                     }
                     existing.sourceAnchors.append(entityAnchor)
@@ -592,53 +640,34 @@ class ExtractionPipeline {
             log.info("[SCE] doc=\(documentURL.lastPathComponent, privacy: .public) pages=\(pageRange.lowerBound + 1)-\(pageRange.upperBound) match_summary: claims=\(scePriorMatchClaims) renames=\(scePriorMatchRenames) merges=\(scePriorMatchMerges) typed_edges=\(scePriorMatchTypedEdges)")
         }
 
-        // Step 6: Edge proposal. Restrict to concept-level nodes — the prompt
-        // explicitly asks for cross-topic relationships between concepts; tossing
-        // entities + chapters + documents into the list bloats the response and
-        // induced JSON-truncation failures on Pro at >200-node graphs.
-        let conceptLabels = graph.allNodes
-            .filter { $0.level == .concept }
-            .map { $0.label }
-        if conceptLabels.count >= 2 {
-            log.info("[Step 6] Requesting edge proposals for \(conceptLabels.count) concepts...")
+        if !extraction.edges.isEmpty {
+            let result = Self.addRelationshipEdges(extraction.edges, to: graph)
+            log.info("[Step 5.5] extraction-response edges: added=\(result.added) missing_endpoint=\(result.missingEndpoint) containment=\(result.containment) duplicate=\(result.duplicate) self_loop=\(result.selfLoop) raw=\(extraction.edges.count)")
+        }
+
+        // Step 6: Relationship proposal over current-batch concept/entity
+        // candidates. Endpoints are constrained to exact labels so entity
+        // relationships can survive parser lookup without bloating the prompt
+        // with the full project graph.
+        let edgeCandidates = Self.edgeProposalCandidates(
+            graph: graph,
+            documentURL: documentURL,
+            pageRange: pageRange,
+            maxCount: edgeProposalCandidateLimit
+        )
+        if edgeCandidates.count >= 2 {
+            log.info("[Step 6] Requesting edge proposals for \(edgeCandidates.count) concept/entity candidates...")
             do {
-                let rawEdges = try await backend.proposeEdges(between: conceptLabels, context: contextText)
+                let rawEdges = try await backend.proposeEdges(between: edgeCandidates, context: contextText)
                 log.info("[Step 6] AI returned \(rawEdges.count) raw edges")
 
-                var added = 0
-                for rawEdge in rawEdges {
-                    guard let sourceNode = graph.node(matching: rawEdge.sourceLabel),
-                          let targetNode = graph.node(matching: rawEdge.targetLabel) else {
-                        log.debug("[Step 6] Edge skipped (node not found): \"\(rawEdge.sourceLabel)\" -> \"\(rawEdge.targetLabel)\"")
-                        continue
-                    }
-
-                    // Skip if edge already exists or if it's a containsEntity edge (those are implicit)
-                    let exists = graph.allEdges.contains {
-                        ($0.sourceNodeID == sourceNode.id && $0.targetNodeID == targetNode.id) ||
-                        ($0.sourceNodeID == targetNode.id && $0.targetNodeID == sourceNode.id && $0.type == .containsEntity)
-                    }
-                    guard !exists else { continue }
-
-                    let edgeType = rawEdge.type.asEdgeType()
-                    // Don't create duplicate containsEntity edges from LLM suggestions
-                    guard edgeType != .containsEntity else { continue }
-                    let edge = GraphEdge(
-                        sourceNodeID: sourceNode.id,
-                        targetNodeID: targetNode.id,
-                        type: edgeType,
-                        confidence: rawEdge.confidence ?? 0.7,
-                        label: rawEdge.linkingPhrase
-                    )
-                    graph.addEdge(edge)
-                    added += 1
-                }
-                log.info("[Step 6] Added \(added) edges to graph")
+                let result = Self.addRelationshipEdges(rawEdges, to: graph)
+                log.info("[Step 6] proposal edges: added=\(result.added) missing_endpoint=\(result.missingEndpoint) containment=\(result.containment) duplicate=\(result.duplicate) self_loop=\(result.selfLoop) raw=\(rawEdges.count)")
             } catch {
                 log.error("[Step 6] Edge proposal failed: \(error) — continuing without edges")
             }
         } else {
-            log.info("[Step 6] Skipped edge proposal (only \(conceptLabels.count) concepts)")
+            log.info("[Step 6] Skipped edge proposal (only \(edgeCandidates.count) candidates)")
         }
 
         // Step 7: Auto-save. `scheduleSave` scopes via `encodeSubgraph(for:)`
@@ -646,6 +675,87 @@ class ExtractionPipeline {
         // regardless of how big the in-memory project graph is.
         GraphStore.shared.scheduleSave(graph, for: documentURL)
         log.info("[Step 7] Scheduled per-document auto-save")
+    }
+
+    @discardableResult
+    static func addRelationshipEdges(_ rawEdges: [RawEdge], to graph: KnowledgeGraph) -> RelationshipEdgeInsertionResult {
+        var result = RelationshipEdgeInsertionResult()
+        for rawEdge in rawEdges {
+            let edgeType = rawEdge.type.asEdgeType()
+            guard !edgeType.isContainment else {
+                result.containment += 1
+                continue
+            }
+            guard let sourceNode = graph.node(matching: rawEdge.sourceLabel),
+                  let targetNode = graph.node(matching: rawEdge.targetLabel) else {
+                result.missingEndpoint += 1
+                continue
+            }
+            guard sourceNode.id != targetNode.id else {
+                result.selfLoop += 1
+                continue
+            }
+
+            let linkingPhrase = rawEdge.linkingPhrase?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalizedLabel = linkingPhrase?.isEmpty == false ? linkingPhrase : nil
+            let exists = graph.allEdges.contains { existing in
+                existing.sourceNodeID == sourceNode.id &&
+                    existing.targetNodeID == targetNode.id &&
+                    existing.type == edgeType &&
+                    (existing.label ?? "") == (normalizedLabel ?? "")
+            }
+            guard !exists else {
+                result.duplicate += 1
+                continue
+            }
+
+            let edge = GraphEdge(
+                sourceNodeID: sourceNode.id,
+                targetNodeID: targetNode.id,
+                type: edgeType,
+                confidence: rawEdge.confidence ?? 0.7,
+                label: normalizedLabel
+            )
+            graph.addEdge(edge)
+            result.added += 1
+        }
+        return result
+    }
+
+    static func edgeProposalCandidates(
+        graph: KnowledgeGraph,
+        documentURL: URL,
+        pageRange: Range<Int>,
+        maxCount: Int
+    ) -> [EdgeProposalCandidate] {
+        let nodes = graph.allNodes.filter { node in
+            (node.level == .concept || node.level == .entity) &&
+                node.sourceAnchors.contains { anchor in
+                    anchor.documentURL == documentURL && pageRange.contains(anchor.pageIndex)
+                }
+        }
+
+        let sorted = nodes.sorted {
+            if $0.level != $1.level { return $0.level == .concept }
+            return $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
+        }
+
+        return sorted.prefix(maxCount).map { node in
+            let parentLabel: String?
+            if node.level == .entity,
+               let parent = graph.parentConcept(of: node.id) {
+                parentLabel = parent.label
+            } else {
+                parentLabel = nil
+            }
+            return EdgeProposalCandidate(
+                label: node.label,
+                level: node.level,
+                type: node.type,
+                parentLabel: parentLabel,
+                summary: node.summary
+            )
+        }
     }
 
     // MARK: - Deep Mode Text Chunking

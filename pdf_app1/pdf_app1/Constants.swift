@@ -114,6 +114,8 @@ struct AppConstants {
     static let ollamaBaseURLKey = "atlas.ollama.baseURL"
     /// UserDefaults key for the Codex Agent sidecar base URL override
     static let codexAgentSidecarURLKey = "atlas.codexAgentSidecar.baseURL"
+    /// UserDefaults key for max prior-doc lines included in SCE extraction prompts
+    static let scePriorHeaderMaxLinesKey = "atlas.sce.priorHeaderMaxLines"
 }
 
 // MARK: - Notification Names
@@ -123,5 +125,6 @@ extension Notification.Name {
     static let openDocumentInNewWindow = Notification.Name("OpenDocumentInNewWindow")
     static let navigateToPage = Notification.Name("NavigateToPage")
     static let closeCurrentTab = Notification.Name("CloseCurrentTab")
+    static let closeOtherTabs = Notification.Name("CloseOtherTabs")
     static let setPaneMode = Notification.Name("SetPaneMode")
 }

@@ -118,7 +118,7 @@ final class GeminiBackend: LLMBackend, @unchecked Sendable {
     /// (Gemini enforces enum at decode-time → 0% hallucinations) and
     /// constrains `match_kind` to the four valid taxonomic values.
     /// Falls back to schema-less transport when no priors exist (doc 1).
-    func extractConcepts(from text: String, context: ExtractionContext) async throws -> [RawConcept] {
+    func extractConceptGraph(from text: String, context: ExtractionContext) async throws -> ExtractionResponse {
         log.info("[\(self.logTag)] extractConcepts: prompt \(text.count) chars, prior-labels=\(context.priorDocsLabelMap.count)")
         let prompt = PromptTemplates.conceptExtraction(text: text, context: context)
         // SCE v4 (gemini-3.1-pro-preview): schema disabled. Earlier runs on
@@ -130,12 +130,16 @@ final class GeminiBackend: LLMBackend, @unchecked Sendable {
         do {
             let parsed = try LLMResponseParser.parseExtractionResponse(response)
             log.info("[\(self.logTag)] Parsed \(parsed.concepts.count) concepts, \(parsed.edges.count) edges from response")
-            return parsed.concepts
+            return parsed
         } catch {
             log.error("[\(self.logTag)] Failed to parse extraction response: \(error)")
             log.error("[\(self.logTag)] Raw response (first 500 chars): \(String(response.prefix(500)))")
             throw error
         }
+    }
+
+    func extractConcepts(from text: String, context: ExtractionContext) async throws -> [RawConcept] {
+        try await extractConceptGraph(from: text, context: context).concepts
     }
 
     /// Build the OpenAPI-3 subset Gemini accepts. Gemini's structured-output

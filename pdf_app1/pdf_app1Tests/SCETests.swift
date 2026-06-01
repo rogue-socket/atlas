@@ -108,6 +108,85 @@ final class SCETests: XCTestCase {
         XCTAssertTrue(header.contains("(no summary)"))
     }
 
+    func test_cumulativeStateHeader_flattensSummaryNewlines() {
+        let g = KnowledgeGraph()
+        g.addNode(ConceptNode(
+            label: "Repair Program",
+            type: .method,
+            summary: "First line.\nSecond\tline.",
+            sourceAnchors: [anchor(in: docA)],
+            level: .concept
+        ))
+
+        let header = PromptTemplates.cumulativeStateHeader(
+            priorDocsGraph: g,
+            currentDocURL: docB,
+            maxLines: 1
+        )
+
+        XCTAssertEqual(header.split(separator: "\n").count, 1)
+        XCTAssertTrue(header.contains("First line. Second line."))
+    }
+
+    func test_cumulativeStateHeader_capsByRelevanceWhenRequested() {
+        let g = KnowledgeGraph()
+        g.addNode(ConceptNode(
+            label: "Repair Workshop",
+            type: .method,
+            summary: "In-store repair and restoration support.",
+            sourceAnchors: [anchor(in: docA)],
+            level: .concept
+        ))
+        g.addNode(ConceptNode(
+            label: "Supplier Code",
+            type: .claim,
+            summary: "Ethical sourcing commitments.",
+            sourceAnchors: [anchor(in: docA)],
+            level: .concept
+        ))
+        g.addNode(ConceptNode(
+            label: "Wedding Registry",
+            type: .concept,
+            summary: "Gift registry program.",
+            sourceAnchors: [anchor(in: docA)],
+            level: .concept
+        ))
+
+        let header = PromptTemplates.cumulativeStateHeader(
+            priorDocsGraph: g,
+            currentDocURL: docB,
+            relevanceText: "Customers can book repairs through the workshop and restoration desk.",
+            maxLines: 1
+        )
+
+        XCTAssertTrue(header.contains("Repair Workshop"))
+        XCTAssertFalse(header.contains("Supplier Code"))
+        XCTAssertFalse(header.contains("Wedding Registry"))
+    }
+
+    func test_cumulativeStateHeader_doesNotCapWhenUnderLimit() {
+        let g = KnowledgeGraph()
+        g.addNode(ConceptNode(
+            label: "A",
+            sourceAnchors: [anchor(in: docA)],
+            level: .concept
+        ))
+        g.addNode(ConceptNode(
+            label: "B",
+            sourceAnchors: [anchor(in: docA)],
+            level: .concept
+        ))
+
+        let header = PromptTemplates.cumulativeStateHeader(
+            priorDocsGraph: g,
+            currentDocURL: docB,
+            relevanceText: "unrelated",
+            maxLines: 5
+        )
+
+        XCTAssertEqual(header.split(separator: "\n").count, 2)
+    }
+
     // MARK: - ExtractionContext.priorDocsContext threading
 
     func test_conceptExtractionPrompt_omitsPriorDocsBlockWhenContextIsNil() {
@@ -380,6 +459,16 @@ final class SCETests: XCTestCase {
             priorDocsLabelMap: map
         )
         XCTAssertEqual(action, .noMatch)
+    }
+
+    func test_resolveMatchAction_acceptsDeterministicPunctuationAlias() {
+        let map = ["living-wage supplier expectation": "Living-wage supplier expectation"]
+        let action = PromptTemplates.resolveMatchAction(
+            priorLabelMatch: "Living wage supplier expectation",
+            matchKind: "same_entity",
+            priorDocsLabelMap: map
+        )
+        XCTAssertEqual(action, .mergeByRename(canonical: "Living-wage supplier expectation"))
     }
 
     func test_resolveMatchAction_unknownMatchKind_yieldsNoMatch() {

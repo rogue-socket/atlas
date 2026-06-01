@@ -58,6 +58,8 @@ final class AppConstantsTests: XCTestCase {
         XCTAssertEqual(AppConstants.aiBackendTypeKey, "atlas.ai.backendType")
         XCTAssertEqual(AppConstants.aiModelKey, "atlas.ai.model")
         XCTAssertEqual(AppConstants.ollamaBaseURLKey, "atlas.ollama.baseURL")
+        XCTAssertEqual(AppConstants.codexAgentSidecarURLKey, "atlas.codexAgentSidecar.baseURL")
+        XCTAssertEqual(AppConstants.scePriorHeaderMaxLinesKey, "atlas.sce.priorHeaderMaxLines")
     }
 
     // MARK: - Notification.Name

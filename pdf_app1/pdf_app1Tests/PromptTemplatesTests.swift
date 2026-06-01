@@ -81,7 +81,9 @@ final class PromptTemplatesTests: XCTestCase {
 
     func test_edgeProposal_listsConceptsAndKnownEdgeTypes() {
         let p = PromptTemplates.edgeProposal(concepts: ["A", "B", "C"], context: "context body")
-        XCTAssertTrue(p.contains("A, B, C"))
+        XCTAssertTrue(p.contains("\"A\""))
+        XCTAssertTrue(p.contains("\"B\""))
+        XCTAssertTrue(p.contains("\"C\""))
         XCTAssertTrue(p.contains("context body"))
         // Should enumerate the canonical edge-type vocabulary.
         for required in ["dependsOn", "contradicts", "exampleOf", "defines",
@@ -90,6 +92,33 @@ final class PromptTemplatesTests: XCTestCase {
         }
         // Should ask for JSON only.
         XCTAssertTrue(p.contains("Return valid JSON only."))
+    }
+
+    func test_edgeProposal_listsEntityCandidatesWithParentAndSummary() {
+        let p = PromptTemplates.edgeProposal(
+            candidates: [
+                EdgeProposalCandidate(
+                    label: "Customer Operations",
+                    level: .concept,
+                    type: .concept,
+                    parentLabel: nil,
+                    summary: "Support model."
+                ),
+                EdgeProposalCandidate(
+                    label: "Service SLA",
+                    level: .entity,
+                    type: .definition,
+                    parentLabel: "Customer Operations",
+                    summary: "Response target.\nSecond line."
+                )
+            ],
+            context: "context body"
+        )
+
+        XCTAssertTrue(p.contains("\"Service SLA\" [entity·definition parent=\"Customer Operations\"]"))
+        XCTAssertTrue(p.contains("Response target. Second line."))
+        XCTAssertTrue(p.contains("endpoints MUST be copied exactly"))
+        XCTAssertTrue(p.contains("linkingPhrase"))
     }
 
     // MARK: - semanticMergeProposal

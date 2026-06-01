@@ -151,6 +151,13 @@ enum EdgeType: String, Codable, CaseIterable, Hashable {
         default: return false
         }
     }
+
+    var isSCECrossDocumentReference: Bool {
+        switch self {
+        case .instanceOf, .attributeOf, .processFor: return true
+        default: return false
+        }
+    }
 }
 
 // MARK: - Reading State

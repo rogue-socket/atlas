@@ -74,6 +74,10 @@ final class ConceptTypesTests: XCTestCase {
         // they're cross-document relationship edges, not fold edges.
         for e: EdgeType in [.instanceOf, .attributeOf, .processFor] {
             XCTAssertFalse(e.isContainment)
+            XCTAssertTrue(e.isSCECrossDocumentReference)
+        }
+        for e in EdgeType.allCases where ![.instanceOf, .attributeOf, .processFor].contains(e) {
+            XCTAssertFalse(e.isSCECrossDocumentReference)
         }
     }
 

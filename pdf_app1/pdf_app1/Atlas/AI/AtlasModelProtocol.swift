@@ -49,6 +49,14 @@ struct RawEdge: Codable {
     let linkingPhrase: String? // natural-language verb phrase for Novak-style edges
 }
 
+struct EdgeProposalCandidate: Hashable {
+    let label: String
+    let level: NodeLevel
+    let type: ConceptType
+    let parentLabel: String?
+    let summary: String?
+}
+
 // MARK: - Extraction Context
 
 struct ExtractionContext {
@@ -142,7 +150,9 @@ protocol AtlasModel: Sendable {
     /// the concept-extraction prompt's size; subsequent calls overwrite it.
     var lastResponsePromptTokens: Int? { get }
 
+    func extractConceptGraph(from text: String, context: ExtractionContext) async throws -> ExtractionResponse
     func extractConcepts(from text: String, context: ExtractionContext) async throws -> [RawConcept]
+    func proposeEdges(between candidates: [EdgeProposalCandidate], context: String) async throws -> [RawEdge]
     func proposeEdges(between concepts: [String], context: String) async throws -> [RawEdge]
     func summarizeConcept(_ label: String, sourceText: String) async throws -> String
     func answerQuestion(_ question: String, context: String) async throws -> AnswerWithCitations
@@ -156,6 +166,15 @@ protocol AtlasModel: Sendable {
 
 extension AtlasModel {
     var lastResponsePromptTokens: Int? { nil }
+
+    func extractConceptGraph(from text: String, context: ExtractionContext) async throws -> ExtractionResponse {
+        let concepts = try await extractConcepts(from: text, context: context)
+        return ExtractionResponse(concepts: concepts, edges: [])
+    }
+
+    func proposeEdges(between candidates: [EdgeProposalCandidate], context: String) async throws -> [RawEdge] {
+        try await proposeEdges(between: candidates.map(\.label), context: context)
+    }
 
     func proposeMerges(
         documentAConcepts: [(label: String, summary: String?)],

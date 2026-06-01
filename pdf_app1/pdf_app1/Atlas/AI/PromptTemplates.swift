@@ -164,7 +164,7 @@ enum PromptTemplates {
     ) -> (effectiveLabel: String, renamed: Bool) {
         guard let claimed = priorLabelMatch?.trimmingCharacters(in: .whitespacesAndNewlines),
               !claimed.isEmpty,
-              let canonical = priorDocsLabelMap[claimed.lowercased()] else {
+              let canonical = canonicalPriorLabel(for: claimed, in: priorDocsLabelMap) else {
             return (rawLabel, false)
         }
         return (canonical, canonical.lowercased() != rawLabel.lowercased())
@@ -186,7 +186,7 @@ enum PromptTemplates {
     ) -> SCEMatchAction {
         guard let claimed = priorLabelMatch?.trimmingCharacters(in: .whitespacesAndNewlines),
               !claimed.isEmpty,
-              let canonical = priorDocsLabelMap[claimed.lowercased()] else {
+              let canonical = canonicalPriorLabel(for: claimed, in: priorDocsLabelMap) else {
             return .noMatch
         }
         let kind = matchKind?
@@ -206,6 +206,40 @@ enum PromptTemplates {
         }
     }
 
+    private static func canonicalPriorLabel(for claimed: String, in priorDocsLabelMap: [String: String]) -> String? {
+        if let exact = priorDocsLabelMap[claimed.lowercased()] {
+            return exact
+        }
+
+        let normalizedClaim = normalizedPriorLabelKey(claimed)
+        guard !normalizedClaim.isEmpty else { return nil }
+
+        for canonical in priorDocsLabelMap.values {
+            if normalizedPriorLabelKey(canonical) == normalizedClaim {
+                return canonical
+            }
+        }
+        return nil
+    }
+
+    private static func normalizedPriorLabelKey(_ label: String) -> String {
+        let lowered = label.lowercased()
+        var scalars: [UnicodeScalar] = []
+        var lastWasSpace = true
+
+        for scalar in lowered.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                scalars.append(scalar)
+                lastWasSpace = false
+            } else if !lastWasSpace {
+                scalars.append(" ")
+                lastWasSpace = true
+            }
+        }
+
+        return String(String.UnicodeScalarView(scalars)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: - SCE Cumulative-State Header
 
     /// Build the cross-document reuse header for SCE doc N (N>1).
@@ -216,32 +250,87 @@ enum PromptTemplates {
     ///
     /// Natural-language, terse — chosen over JSON to minimize prompt tokens.
     /// Returns "" when there are no prior-doc nodes (caller treats empty as no-op).
-    static func cumulativeStateHeader(priorDocsGraph: KnowledgeGraph, currentDocURL: URL) -> String {
-        let lines: [String] = priorDocsGraph.allNodes.compactMap { node in
+    static func cumulativeStateHeader(
+        priorDocsGraph: KnowledgeGraph,
+        currentDocURL: URL,
+        relevanceText: String? = nil,
+        maxLines: Int? = nil
+    ) -> String {
+        struct PriorLine {
+            let label: String
+            let text: String
+            let score: Int
+        }
+
+        let relevanceTokens = Set((relevanceText ?? "").sceHeaderTokens)
+        let lines: [PriorLine] = priorDocsGraph.allNodes.compactMap { node in
             let anchors = node.sourceAnchors
             guard !anchors.isEmpty else { return nil }
             // Skip nodes anchored in the current doc — caller handles intra-doc dedup via existingConcepts.
             if anchors.contains(where: { $0.documentURL == currentDocURL }) { return nil }
             let levelTag = node.level.rawValue
             let typeTag = node.type.rawValue
-            let summary = (node.summary?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
+            let displayLabel = node.label.sceHeaderLineText
+            let summary = (node.summary?.sceHeaderLineText).flatMap {
                 $0.isEmpty ? nil : $0
             } ?? "(no summary)"
-            return "- \(node.label) (\(levelTag)·\(typeTag)): \(summary)"
+            let labelTokens = Set(node.label.sceHeaderTokens)
+            let summaryTokens = Set(summary.sceHeaderTokens)
+            let overlapScore = labelTokens.intersection(relevanceTokens).count * 4 +
+                summaryTokens.intersection(relevanceTokens).count
+            let salienceScore: Int
+            switch node.level {
+            case .document: salienceScore = 6
+            case .chapter: salienceScore = 4
+            case .concept: salienceScore = 2
+            case .entity: salienceScore = node.type == .person ? 3 : 1
+            }
+            return PriorLine(
+                label: displayLabel,
+                text: "- \(displayLabel) (\(levelTag)·\(typeTag)): \(summary)",
+                score: relevanceTokens.isEmpty ? 0 : overlapScore + salienceScore
+            )
         }
-        return lines.sorted().joined(separator: "\n")
+
+        guard let maxLines, maxLines > 0, lines.count > maxLines else {
+            return lines.map(\.text).sorted().joined(separator: "\n")
+        }
+
+        return lines
+            .sorted {
+                if $0.score != $1.score { return $0.score > $1.score }
+                return $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
+            }
+            .prefix(maxLines)
+            .map(\.text)
+            .sorted()
+            .joined(separator: "\n")
     }
 
     // MARK: - Edge Proposal
 
     static func edgeProposal(concepts: [String], context: String) -> String {
+        let candidates = concepts.map {
+            EdgeProposalCandidate(label: $0, level: .concept, type: .concept, parentLabel: nil, summary: nil)
+        }
+        return edgeProposal(candidates: candidates, context: context)
+    }
+
+    static func edgeProposal(candidates: [EdgeProposalCandidate], context: String) -> String {
+        let candidateList = candidates.map { candidate in
+            let parent = candidate.parentLabel.map { " parent=\"\($0)\"" } ?? ""
+            let summary = candidate.summary.map { " — \($0.sceHeaderLineText)" } ?? ""
+            return "- \"\(candidate.label)\" [\(candidate.level.rawValue)·\(candidate.type.rawValue)\(parent)]\(summary)"
+        }.joined(separator: "\n")
+
         return """
-        Given these concepts: \(concepts.joined(separator: ", "))
+        Given these candidate graph nodes. Edge endpoints MUST be copied exactly from one of these quoted labels:
+        \(candidateList)
 
         And this context text:
         \(context)
 
-        Propose relationships (edges) between the concepts. Do NOT propose edges between a concept and its own child entities — those containment relationships are already captured.
+        Propose semantic relationships (edges) between the candidate nodes. Do NOT propose edges between a concept and its own child entities — those containment relationships are already captured.
 
         Only propose edges between:
         - Two concepts (cross-topic relationships)
@@ -254,11 +343,13 @@ enum PromptTemplates {
             "sourceLabel": "...",
             "targetLabel": "...",
             "type": "...",
-            "confidence": 0.9
+            "confidence": 0.9,
+            "linkingPhrase": "short verb phrase"
           }
         ]
 
         Edge types: dependsOn, contradicts, exampleOf, defines, extends, cites, sameTopic, partOf, uses
+        linkingPhrase: 1-4 word verb phrase making "sourceLabel [phrase] targetLabel" readable
 
         Only propose edges you are confident about. Return valid JSON only.
         """
@@ -517,5 +608,32 @@ enum PromptTemplates {
 
         Return valid JSON only.
         """
+    }
+}
+
+private extension String {
+    var sceHeaderLineText: String {
+        components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    var sceHeaderTokens: [String] {
+        let lowered = lowercased()
+        var current = ""
+        var tokens: [String] = []
+
+        for scalar in lowered.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                current.unicodeScalars.append(scalar)
+            } else if !current.isEmpty {
+                if current.count > 2 { tokens.append(current) }
+                current.removeAll(keepingCapacity: true)
+            }
+        }
+        if current.count > 2 {
+            tokens.append(current)
+        }
+        return tokens
     }
 }
