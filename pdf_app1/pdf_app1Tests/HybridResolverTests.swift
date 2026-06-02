@@ -48,6 +48,11 @@ final class HybridResolverTests: XCTestCase {
                      pageIndex: 0, boundingBox: .zero, textSnippet: "")
     }
 
+    private func anchor(_ path: String, page: Int, snippet: String) -> SourceAnchor {
+        SourceAnchor(documentURL: URL(fileURLWithPath: path),
+                     pageIndex: page, boundingBox: .zero, textSnippet: snippet)
+    }
+
     private func node(_ label: String, level: NodeLevel = .concept,
                       doc: String, modified: Date = Date()) -> ConceptNode {
         ConceptNode(label: label, type: .concept, summary: nil,
@@ -59,6 +64,43 @@ final class HybridResolverTests: XCTestCase {
     }
 
     // MARK: - parseHybridAdjudicationResponse
+
+    func test_hybridPrompt_includesMetadataAndSourceEvidence() {
+        let a = ConceptNode(
+            label: "Revenue share",
+            type: .result,
+            summary: "Percentage of company revenue from a channel.",
+            sourceAnchors: [anchor("/docs/pricing.pdf", page: 2, snippet: "E-commerce accounts for 18% of fiscal 2025 revenue.")],
+            level: .entity
+        )
+        let b = ConceptNode(
+            label: "E-commerce revenue share",
+            type: .result,
+            summary: "Share of revenue produced by e-commerce.",
+            sourceAnchors: [anchor("/docs/operations.pdf", page: 4, snippet: "Online orders are tracked as the e-commerce revenue share.")],
+            level: .entity
+        )
+
+        let prompt = PromptTemplates.mergeAdjudicationHybrid(
+            candidates: [(a: a, b: b, similarity: 0.88493377, pairKind: .entityEntity)]
+        )
+
+        XCTAssertTrue(prompt.contains("pairKind=entityEntity, similarity=0.8849"))
+        XCTAssertTrue(prompt.contains("pricing.pdf p.3"))
+        XCTAssertTrue(prompt.contains("operations.pdf p.5"))
+        XCTAssertTrue(prompt.contains("E-commerce accounts for 18% of fiscal 2025 revenue."))
+        XCTAssertTrue(prompt.contains("Use evidence and summaries over label similarity alone."))
+        XCTAssertTrue(prompt.contains("Business adjacency is not enough."))
+    }
+
+    func test_hybridPrompt_legacyPairsUsePairKindWithNoSimilarity() {
+        let a = node("Catalog", doc: "/a.pdf")
+        let b = node("Offering", doc: "/b.pdf")
+
+        let prompt = PromptTemplates.mergeAdjudicationHybrid(pairs: [(a: a, b: b)])
+
+        XCTAssertTrue(prompt.contains("pairKind=conceptConcept, similarity=n/a"))
+    }
 
     func test_parse_happyPath_objectArray() throws {
         let raw = #"[{"pair": 1, "verdict": "merge", "direction": "ab"}, {"pair": 2, "verdict": "instance_of", "direction": "ba"}]"#

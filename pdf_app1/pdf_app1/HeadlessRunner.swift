@@ -37,10 +37,16 @@ struct HeadlessRunnerConfig {
     /// (shared label tokens) instead of by embedding cosine — runs the hybrid
     /// entirely on the Claude backend with no embedding provider.
     let hybridLexical: Bool
+    /// Standalone scoring mode: compare a resolver audit JSON against a
+    /// task-specific adjudication label set.
+    let hybridAdjudicationAuditPath: String?
+    let hybridAdjudicationEvalPath: String?
 
     init(projectName: String, mode: ExtractionMode, runETR: Bool, etrOnly: Bool,
          etrThresholds: ResolverThresholds?, scoreRubricPath: String?,
-         hybridResolveDir: String? = nil, hybridLexical: Bool = false) {
+         hybridResolveDir: String? = nil, hybridLexical: Bool = false,
+         hybridAdjudicationAuditPath: String? = nil,
+         hybridAdjudicationEvalPath: String? = nil) {
         self.projectName = projectName
         self.mode = mode
         self.runETR = runETR
@@ -49,6 +55,8 @@ struct HeadlessRunnerConfig {
         self.scoreRubricPath = scoreRubricPath
         self.hybridResolveDir = hybridResolveDir
         self.hybridLexical = hybridLexical
+        self.hybridAdjudicationAuditPath = hybridAdjudicationAuditPath
+        self.hybridAdjudicationEvalPath = hybridAdjudicationEvalPath
     }
 
     /// Parse `--headless-extract --project <name> [--mode fast|deep] [--etr]
@@ -73,6 +81,8 @@ struct HeadlessRunnerConfig {
         var scoreRubricPath: String?
         var hybridResolveDir: String?
         var hybridLexical = false
+        var hybridAdjudicationAuditPath: String?
+        var hybridAdjudicationEvalPath: String?
         var autoMerge: Float?
         var adjFloor: Float?
         var adjBatch: Int?
@@ -96,6 +106,12 @@ struct HeadlessRunnerConfig {
             }
             if a == "--score-rubric", i + 1 < args.count {
                 scoreRubricPath = args[i + 1]; i += 2; continue
+            }
+            if a == "--score-hybrid-adjudication", i + 1 < args.count {
+                hybridAdjudicationAuditPath = args[i + 1]; i += 2; continue
+            }
+            if a == "--eval", i + 1 < args.count {
+                hybridAdjudicationEvalPath = args[i + 1]; i += 2; continue
             }
             if a == "--hybrid-resolve", i + 1 < args.count {
                 hybridResolveDir = args[i + 1]; i += 2; continue
@@ -127,7 +143,7 @@ struct HeadlessRunnerConfig {
         let resolvedName: String?
         if let projectName {
             resolvedName = projectName
-        } else if scoreRubricPath != nil || hybridResolveDir != nil {
+        } else if scoreRubricPath != nil || hybridResolveDir != nil || hybridAdjudicationAuditPath != nil {
             resolvedName = ""
         } else {
             resolvedName = nil
@@ -152,7 +168,9 @@ struct HeadlessRunnerConfig {
                                     etrThresholds: thresholds,
                                     scoreRubricPath: scoreRubricPath,
                                     hybridResolveDir: hybridResolveDir,
-                                    hybridLexical: hybridLexical)
+                                    hybridLexical: hybridLexical,
+                                    hybridAdjudicationAuditPath: hybridAdjudicationAuditPath,
+                                    hybridAdjudicationEvalPath: hybridAdjudicationEvalPath)
     }
 
     /// Map a `--<prefix>-{cc|ee|cl}` suffix to its `PairKind`. Returns nil
@@ -186,8 +204,17 @@ final class HeadlessRunner {
             return
         }
 
+        if let auditPath = config.hybridAdjudicationAuditPath {
+            HybridAdjudicationEvalScorer.run(
+                auditPath: auditPath,
+                evalPath: config.hybridAdjudicationEvalPath
+            )
+            return
+        }
+
         if let hybridDir = config.hybridResolveDir {
             await runHybridResolve(dir: hybridDir, lexical: config.hybridLexical,
+                                   thresholds: config.etrThresholds,
                                    aiService: aiService, graph: graph)
             return
         }
@@ -373,6 +400,7 @@ final class HeadlessRunner {
     /// runs anywhere the graph files and the configured backends are present.
     private func runHybridResolve(dir: String,
                                   lexical: Bool,
+                                  thresholds: ResolverThresholds?,
                                   aiService: AIServiceManager,
                                   graph: KnowledgeGraph) async {
         let dirURL = URL(fileURLWithPath: dir, isDirectory: true)
@@ -436,7 +464,11 @@ final class HeadlessRunner {
             }
             log.info("[Hybrid] lexical mode — embedding-free candidate generation, Claude-only")
             do {
-                let plan = try await EmbeddingResolver.resolveLexical(graph: graph, llmBackend: llm)
+                let plan = try await EmbeddingResolver.resolveLexical(
+                    graph: graph,
+                    llmBackend: llm,
+                    thresholds: thresholds ?? aiService.selectedResolverPreset.thresholds
+                )
                 let result = EmbeddingMergeApplier.apply(plan, to: graph)
                 log.info("[Hybrid] lexical resolve: plan=\(plan.decisions.count) merges + \(plan.relations.count) relations; applied=\(result.groupsApplied) groups, removed=\(result.nodesRemoved) nodes, deduped=\(result.edgesDeduplicated), relations=\(result.relationsAdded)")
             } catch {
@@ -445,7 +477,8 @@ final class HeadlessRunner {
         } else {
             let cfg = HeadlessRunnerConfig(projectName: "", mode: .fast,
                                            runETR: true, etrOnly: true,
-                                           etrThresholds: nil, scoreRubricPath: nil)
+                                           etrThresholds: thresholds ?? aiService.selectedResolverPreset.thresholds,
+                                           scoreRubricPath: nil)
             await runETR(config: cfg, aiService: aiService, graph: graph, projectID: projectID)
         }
 

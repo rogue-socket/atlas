@@ -423,6 +423,46 @@ enum PromptTemplates {
         return pairs.enumerated().map { formatPair($0.offset, $0.element.a, $0.element.b) }.joined(separator: "\n\n")
     }
 
+    private static func formatHybridAdjudicationBody(
+        _ candidates: [(a: ConceptNode, b: ConceptNode, similarity: Float, pairKind: EmbeddingResolver.PairKind)]
+    ) -> String {
+        candidates.enumerated().map { i, candidate in
+            let similarity = candidate.similarity.isFinite
+                ? String(format: "%.4f", Double(candidate.similarity))
+                : "n/a"
+            return """
+            \(i + 1). pairKind=\(candidate.pairKind.rawValue), similarity=\(similarity)
+               A: \(formatHybridNode(candidate.a))
+               B: \(formatHybridNode(candidate.b))
+            """
+        }.joined(separator: "\n\n")
+    }
+
+    private static func formatHybridNode(_ node: ConceptNode) -> String {
+        let summary = node.summary?.isEmpty == false ? node.summary! : "(no summary)"
+        let evidence = node.sourceAnchors.prefix(2).map { anchor -> String in
+            let doc = anchor.documentURL.lastPathComponent
+            let page = anchor.pageIndex + 1
+            let snippet = compactSnippet(anchor.textSnippet)
+            if snippet.isEmpty {
+                return "\(doc) p.\(page)"
+            }
+            return "\(doc) p.\(page): \"\(snippet)\""
+        }.joined(separator: "; ")
+        let evidenceText = evidence.isEmpty ? "no source anchor" : evidence
+        return "\"\(node.label)\" (type=\(node.type.rawValue), level=\(node.level.rawValue)) — \(summary) | evidence: \(evidenceText)"
+    }
+
+    private static func compactSnippet(_ snippet: String) -> String {
+        let compact = snippet
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+            .split(separator: " ")
+            .joined(separator: " ")
+        guard compact.count > 180 else { return compact }
+        return String(compact.prefix(177)) + "..."
+    }
+
     /// **v2 — published prompt (2026-05-17).** Vitacare-specific MERGE and
     /// KEEP-SEPARATE exemplars inline. 7/7 in-band rubric recall claim was
     /// later corrected to 6/7 (`audits/2026-05-17_etr-prompt-tune.md` §A).
@@ -668,9 +708,19 @@ enum PromptTemplates {
     /// patterns that name a real structural relationship (leaf↔catalog,
     /// object↔property, service↔managing-function) become typed verdicts.
     static func mergeAdjudicationHybrid(pairs: [(a: ConceptNode, b: ConceptNode)]) -> String {
-        let body = formatAdjudicationBody(pairs)
+        let candidates = pairs.map { pair in
+            (a: pair.a, b: pair.b, similarity: Float.nan, pairKind: EmbeddingResolver.pairKind(pair.a, pair.b))
+        }
+        return mergeAdjudicationHybrid(candidates: candidates)
+    }
+
+    static func mergeAdjudicationHybrid(
+        candidates: [(a: ConceptNode, b: ConceptNode, similarity: Float, pairKind: EmbeddingResolver.PairKind)]
+    ) -> String {
+        let body = formatHybridAdjudicationBody(candidates)
         return """
         You are classifying candidate pairs of knowledge-graph nodes. Each pair has a node A and a node B.
+        Each pair includes pairKind, similarity, node labels, node summaries, and source evidence. Use evidence and summaries over label similarity alone.
 
         For each numbered pair, choose exactly one verdict:
         - "merge" — A and B are the SAME real-world thing, written differently.
@@ -693,6 +743,8 @@ enum PromptTemplates {
 
         Otherwise choose "keep" — they only share a noun:
         - Shared noun but different fact; different metrics; internal-vs-external audience mismatch; same job-title noun but different people; adjacent-but-distinct programs (different modality/population/vendor); parallel regimes that share a word where neither contains the other.
+        - Business adjacency is not enough. If one node influences, supports, funds, sells, ships, or co-occurs with the other but is not a category, attribute, or process of it, choose "keep".
+        - If source evidence points to different objects or different documents use the same broad business term differently, choose "keep".
 
         When uncertain between "merge" and a typed relation, prefer the typed relation. When uncertain between a typed relation and "keep", prefer "keep".
 
@@ -705,7 +757,7 @@ enum PromptTemplates {
         Pairs:
         \(body)
 
-        Return ONLY a JSON array of \(pairs.count) objects, one per pair, in order. Each object: {"pair": <1-based number>, "verdict": "merge|instance_of|attribute_of|process_for|keep", "direction": "ab|ba"}. No prose, no code fences. Example: [{"pair": 1, "verdict": "merge", "direction": "ab"}, {"pair": 2, "verdict": "instance_of", "direction": "ba"}]
+        Return ONLY a JSON array of \(candidates.count) objects, one per pair, in order. Each object: {"pair": <1-based number>, "verdict": "merge|instance_of|attribute_of|process_for|keep", "direction": "ab|ba"}. No prose, no code fences. Example: [{"pair": 1, "verdict": "merge", "direction": "ab"}, {"pair": 2, "verdict": "instance_of", "direction": "ba"}]
         """
     }
 

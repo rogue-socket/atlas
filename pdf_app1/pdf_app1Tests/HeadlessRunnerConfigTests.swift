@@ -164,4 +164,18 @@ final class HeadlessRunnerConfigTests: XCTestCase {
         XCTAssertEqual(t?.adjudicationFloorPerKind[.conceptConcept], 0.90,
                        "per-kind override is layered on top")
     }
+
+    // MARK: - Hybrid adjudication eval
+
+    func test_parse_hybridAdjudicationEvalStandalone_returnsConfigWithoutProject() {
+        let c = HeadlessRunnerConfig.parse(from: [
+            "--headless-extract",
+            "--score-hybrid-adjudication", "/tmp/audit.json",
+            "--eval", "/tmp/labels.json"
+        ])
+
+        XCTAssertEqual(c?.projectName, "")
+        XCTAssertEqual(c?.hybridAdjudicationAuditPath, "/tmp/audit.json")
+        XCTAssertEqual(c?.hybridAdjudicationEvalPath, "/tmp/labels.json")
+    }
 }

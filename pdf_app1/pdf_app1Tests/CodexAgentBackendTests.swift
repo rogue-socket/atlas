@@ -14,25 +14,25 @@ final class CodexAgentBackendTests: XCTestCase {
         XCTAssertEqual(AIBackendType.codexAgent.displayName, "Codex Agent")
         XCTAssertFalse(AIBackendType.codexAgent.requiresAPIKey)
         XCTAssertEqual(AIBackendType.codexAgent.defaultBaseURL, "http://127.0.0.1:8775")
-        XCTAssertEqual(AIBackendType.codexAgent.availableModels.first, "gpt-5.5")
+        XCTAssertEqual(AIBackendType.codexAgent.availableModels.first, "gpt-5.3-codex-spark")
     }
 
     func test_createBackend_returnsCodexAgentWithoutAPIKey() {
         let service = AIServiceManager()
         service.selectedBackendType = .codexAgent
-        service.selectedModel = "gpt-5.5"
+        service.selectedModel = "gpt-5.3-codex-spark"
 
         let backend = service.createBackend()
 
         XCTAssertTrue(backend is CodexAgentBackend)
         XCTAssertEqual(backend?.displayName, "Codex Agent")
-        XCTAssertEqual(backend?.modelIdentifier, "gpt-5.5")
+        XCTAssertEqual(backend?.modelIdentifier, "gpt-5.3-codex-spark")
     }
 
     func test_savePreferencesMarksCodexAgentConfiguredWithoutAPIKey() {
         let service = AIServiceManager()
         service.selectedBackendType = .codexAgent
-        service.selectedModel = "gpt-5.5"
+        service.selectedModel = "gpt-5.3-codex-spark"
 
         service.savePreferences()
 
@@ -63,7 +63,7 @@ final class CodexAgentBackendTests: XCTestCase {
         let launcher = MockSidecarLauncher()
         let backend = CodexAgentBackend(
             baseURL: "http://codex-agent.test",
-            model: "gpt-5.5",
+            model: "gpt-5.3-codex-spark",
             session: Self.mockSession(),
             sidecarLauncher: launcher
         )
@@ -94,7 +94,7 @@ final class CodexAgentBackendTests: XCTestCase {
         let launcher = MockSidecarLauncher()
         let backend = CodexAgentBackend(
             baseURL: "http://codex-agent.test",
-            model: "gpt-5.5",
+            model: "gpt-5.3-codex-spark",
             session: Self.mockSession(),
             sidecarLauncher: launcher
         )
@@ -123,7 +123,7 @@ final class CodexAgentBackendTests: XCTestCase {
 
         let backend = CodexAgentBackend(
             baseURL: "http://codex-agent.test",
-            model: "gpt-5.5",
+            model: "gpt-5.3-codex-spark",
             session: Self.mockSession()
         )
 
@@ -147,7 +147,7 @@ final class CodexAgentBackendTests: XCTestCase {
 
         let backend = CodexAgentBackend(
             baseURL: "http://codex-agent.test",
-            model: "gpt-5.5",
+            model: "gpt-5.3-codex-spark",
             session: Self.mockSession()
         )
 

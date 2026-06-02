@@ -23,10 +23,11 @@ class AIServiceManager {
 
     // ETR: embedding backend selected independently from the chat backend.
     // nil = no embedding configured → ETR features disabled in UI.
-    // Defaults from PRD §"Locked-in prep items — 2026-05-16":
-    //   Gemini → "gemini-embedding-2-preview" (3072-dim, live-tested 2026-05-16)
+    // Defaults preserve existing behavior; the LAN gateway is selectable as
+    // an embedding-only alternative when Gemini quota/key use is undesirable.
     var selectedEmbeddingBackendType: AIBackendType? = .gemini
     var selectedEmbeddingModel: String = "gemini-embedding-2-preview"
+    var selectedResolverPreset: ResolverThresholdPreset = .conservative
 
     private var responseCache: [String: String] = [:]
     private let cacheDirectory: URL
@@ -77,6 +78,9 @@ class AIServiceManager {
                 ?? AIBackendType.codexAgent.defaultBaseURL
             log.info("[AIService] Using Codex Agent sidecar at \(baseURL)")
             return CodexAgentBackend(baseURL: baseURL, model: selectedModel)
+        case .embeddingGateway:
+            log.warning("[AIService] LAN Embedding Gateway is embedding-only")
+            return nil
         }
     }
 
@@ -88,6 +92,7 @@ class AIServiceManager {
         guard let type = selectedEmbeddingBackendType else { return false }
         switch type {
         case .ollama: return true
+        case .embeddingGateway: return OpenAIEmbeddingModelCatalog.isValidBaseURL(embeddingGatewayBaseURL)
         case .codexAgent: return false
         default: return (getAPIKey(for: type) ?? "").isEmpty == false
         }
@@ -110,6 +115,14 @@ class AIServiceManager {
                 return nil
             }
             return GeminiEmbeddingBackend(apiKey: apiKey, model: selectedEmbeddingModel)
+        case .embeddingGateway:
+            let model = selectedEmbeddingModel.isEmpty ? type.defaultEmbeddingModel : selectedEmbeddingModel
+            return OpenAICompatibleEmbeddingBackend(
+                apiKey: embeddingGatewayAPIKey,
+                model: model,
+                vectorDimension: OpenAIEmbeddingModelCatalog.vectorDimension(for: model),
+                baseURL: embeddingGatewayBaseURL
+            )
         case .claude, .claudeSubscription:
             // Claude has no embedding API as of 2026-05 (neither the API nor
             // the subscription sidecar); ETR must use a different vendor when
@@ -125,6 +138,16 @@ class AIServiceManager {
             log.warning("[AIService] Embedding backend for \(type.rawValue) not yet implemented in v1")
             return nil
         }
+    }
+
+    var embeddingGatewayBaseURL: String {
+        UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingGatewayBaseURLKey)
+            ?? OpenAIEmbeddingModelCatalog.defaultBaseURL
+    }
+
+    var embeddingGatewayAPIKey: String {
+        UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingGatewayAPIKeyKey)
+            ?? OpenAIEmbeddingModelCatalog.defaultAPIKey
     }
 
     // MARK: - API Key Management (Keychain)
@@ -264,7 +287,8 @@ class AIServiceManager {
 
     private func loadPreferences() {
         if let type = UserDefaults.standard.string(forKey: AppConstants.aiBackendTypeKey),
-           let backendType = AIBackendType(rawValue: type) {
+           let backendType = AIBackendType(rawValue: type),
+           backendType != .embeddingGateway {
             selectedBackendType = backendType
         }
         if let model = UserDefaults.standard.string(forKey: AppConstants.aiModelKey) {
@@ -278,6 +302,10 @@ class AIServiceManager {
         if let m = UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingModelKey) {
             selectedEmbeddingModel = m
         }
+        if let raw = UserDefaults.standard.string(forKey: AppConstants.aiResolverPresetKey),
+           let preset = ResolverThresholdPreset(rawValue: raw) {
+            selectedResolverPreset = preset
+        }
         updateConfiguredState()
     }
 
@@ -287,6 +315,7 @@ class AIServiceManager {
         UserDefaults.standard.set(selectedEmbeddingBackendType?.rawValue ?? "",
                                    forKey: AppConstants.aiEmbeddingBackendTypeKey)
         UserDefaults.standard.set(selectedEmbeddingModel, forKey: AppConstants.aiEmbeddingModelKey)
+        UserDefaults.standard.set(selectedResolverPreset.rawValue, forKey: AppConstants.aiResolverPresetKey)
         updateConfiguredState()
     }
 

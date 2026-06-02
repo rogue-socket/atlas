@@ -120,6 +120,12 @@ struct AppConstants {
     static let aiEmbeddingBackendTypeKey = "atlas.ai.embedding.backendType"
     /// UserDefaults key for the ETR embedding model identifier
     static let aiEmbeddingModelKey = "atlas.ai.embedding.model"
+    /// UserDefaults key for the LAN OpenAI-compatible embedding gateway URL
+    static let aiEmbeddingGatewayBaseURLKey = "atlas.ai.embedding.gateway.baseURL"
+    /// UserDefaults key for the LAN OpenAI-compatible embedding gateway API key placeholder
+    static let aiEmbeddingGatewayAPIKeyKey = "atlas.ai.embedding.gateway.apiKey"
+    /// UserDefaults key for the Hybrid resolver threshold preset
+    static let aiResolverPresetKey = "atlas.ai.resolver.preset"
 }
 
 // MARK: - Notification Names

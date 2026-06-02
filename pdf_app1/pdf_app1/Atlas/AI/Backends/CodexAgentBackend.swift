@@ -22,7 +22,7 @@ final class CodexAgentBackend: LLMBackend, @unchecked Sendable {
 
     init(
         baseURL: String = "http://127.0.0.1:8775",
-        model: String = "gpt-5.5",
+        model: String = "gpt-5.3-codex-spark",
         session: URLSession? = nil,
         sidecarLauncher: any CodexAgentSidecarLaunching = CodexAgentSidecarLauncher.shared
     ) {

@@ -21,7 +21,7 @@ from typing import Any
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("ATLAS_CODEX_AGENT_PORT", "8775"))
-DEFAULT_MODEL = os.environ.get("ATLAS_CODEX_AGENT_MODEL", "gpt-5.5")
+DEFAULT_MODEL = os.environ.get("ATLAS_CODEX_AGENT_MODEL", "gpt-5.3-codex-spark")
 TIMEOUT_SECONDS = float(os.environ.get("ATLAS_CODEX_AGENT_TIMEOUT", "600"))
 CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
 SANDBOX = os.environ.get("ATLAS_CODEX_AGENT_SANDBOX", "read-only")

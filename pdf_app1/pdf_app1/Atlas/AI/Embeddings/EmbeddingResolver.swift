@@ -55,6 +55,35 @@ struct ResolverThresholds: Sendable, Equatable {
     }
 }
 
+enum ResolverThresholdPreset: String, Sendable, CaseIterable, Identifiable {
+    case conservative
+    case relationshipDiscovery
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .conservative: return "Conservative"
+        case .relationshipDiscovery: return "Relationship Discovery"
+        }
+    }
+
+    var thresholds: ResolverThresholds {
+        switch self {
+        case .conservative:
+            return .default
+        case .relationshipDiscovery:
+            var thresholds = ResolverThresholds.default
+            thresholds.adjudicationFloorPerKind = [
+                .conceptConcept: 0.72,
+                .entityEntity: 0.72,
+                .crossLevel: 0.65
+            ]
+            return thresholds
+        }
+    }
+}
+
 // MARK: - Result types
 
 enum ClassificationBand: Sendable, Equatable {
@@ -353,16 +382,15 @@ extension EmbeddingResolver {
             return MergePlan(decisions: [], thresholds: thresholds)
         }
 
-        // 1. Load (or initialize) cache; whole-file invalidate on model/dim drift.
-        var cache = EmbeddingCacheStore.load(for: projectID)
+        // 1. Load (or initialize) the model/dimension namespace. Each embedding
+        // model gets a separate file so 384-d and 768-d vectors never mix.
+        var cache = EmbeddingCacheStore.load(
+            for: projectID,
+            modelIdentifier: embeddingBackend.modelIdentifier,
+            vectorDimension: embeddingBackend.vectorDimension
+        )
             ?? EmbeddingCache.empty(modelIdentifier: embeddingBackend.modelIdentifier,
                                     vectorDimension: embeddingBackend.vectorDimension)
-        if cache.modelIdentifier != embeddingBackend.modelIdentifier
-            || cache.vectorDimension != embeddingBackend.vectorDimension {
-            log.info("[ETR] cache model/dim mismatch — discarding (was \(cache.modelIdentifier) dim=\(cache.vectorDimension); now \(embeddingBackend.modelIdentifier) dim=\(embeddingBackend.vectorDimension))")
-            cache = EmbeddingCache.empty(modelIdentifier: embeddingBackend.modelIdentifier,
-                                         vectorDimension: embeddingBackend.vectorDimension)
-        }
 
         // 2. Per-node resolve: cache hit (by contentHash) or queue for fresh embed.
         struct Pending { let node: ConceptNode; let hash: String }
@@ -387,7 +415,14 @@ extension EmbeddingResolver {
             }
             for (p, v) in zip(pending, vectors) {
                 resolved[p.node.id] = v
-                cache.put(contentHash: p.hash, vector: v)
+                cache.put(
+                    contentHash: p.hash,
+                    vector: v,
+                    sourceID: p.node.id.uuidString,
+                    sourcePath: p.node.sourceAnchors.first?.documentURL.path,
+                    chunkID: p.hash,
+                    chunkText: embeddingText(for: p.node)
+                )
             }
         }
 
@@ -479,15 +514,15 @@ extension EmbeddingResolver {
             let batchSize = max(1, thresholds.adjudicationBatchSize)
             for batchStart in stride(from: 0, to: adjudicationCandidates.count, by: batchSize) {
                 let batch = Array(adjudicationCandidates[batchStart..<min(batchStart + batchSize, adjudicationCandidates.count)])
-                let pairsForPrompt = batch.compactMap { cand -> (a: ConceptNode, b: ConceptNode)? in
+                let pairsForPrompt = batch.compactMap { cand -> (a: ConceptNode, b: ConceptNode, similarity: Float, pairKind: PairKind)? in
                     guard let a = nodesByID[cand.aID], let b = nodesByID[cand.bID] else { return nil }
-                    return (a, b)
+                    return (a, b, cand.similarity, pairKind(a, b))
                 }
                 guard pairsForPrompt.count == batch.count else {
                     log.error("[ETR] batch shrink — node lookup failure (\(pairsForPrompt.count)/\(batch.count)); skipping batch")
                     continue
                 }
-                let prompt = PromptTemplates.mergeAdjudicationHybrid(pairs: pairsForPrompt)
+                let prompt = PromptTemplates.mergeAdjudicationHybrid(candidates: pairsForPrompt)
                 let raw = try await generateWithRetry(llm: llm, prompt: prompt)
                 let results = try PromptTemplates.parseHybridAdjudicationResponse(raw, expectedCount: pairsForPrompt.count)
                 var mergeCount = 0, relationCount = 0
@@ -734,15 +769,15 @@ extension EmbeddingResolver {
         let batchSize = max(1, thresholds.adjudicationBatchSize)
         for batchStart in stride(from: 0, to: candidates.count, by: batchSize) {
             let batch = Array(candidates[batchStart..<min(batchStart + batchSize, candidates.count)])
-            let pairsForPrompt = batch.compactMap { c -> (a: ConceptNode, b: ConceptNode)? in
+            let pairsForPrompt = batch.compactMap { c -> (a: ConceptNode, b: ConceptNode, similarity: Float, pairKind: PairKind)? in
                 guard let a = nodesByID[c.aID], let b = nodesByID[c.bID] else { return nil }
-                return (a, b)
+                return (a, b, c.similarity, pairKind(a, b))
             }
             guard pairsForPrompt.count == batch.count else {
                 log.error("[Lexical] batch shrink — node lookup failure; skipping batch")
                 continue
             }
-            let prompt = PromptTemplates.mergeAdjudicationHybrid(pairs: pairsForPrompt)
+            let prompt = PromptTemplates.mergeAdjudicationHybrid(candidates: pairsForPrompt)
             let raw = try await generateWithRetry(llm: llmBackend, prompt: prompt)
             let results = try PromptTemplates.parseHybridAdjudicationResponse(raw, expectedCount: pairsForPrompt.count)
             var mergeCount = 0, relationCount = 0

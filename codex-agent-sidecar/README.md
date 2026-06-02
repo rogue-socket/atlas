@@ -18,7 +18,7 @@ app.
 
 Expected result:
 
-- Settings shows provider `Codex Agent`, model `gpt-5.5`.
+- Settings shows provider `Codex Agent`, model `gpt-5.3-codex-spark`.
 - The sidecar becomes healthy at `http://127.0.0.1:8775/health`.
 - Test API Connection shows `OK (...)`.
 
@@ -98,7 +98,7 @@ The sidecar log lives in the app container:
   ```json
   {
     "ok": true,
-    "model": "gpt-5.5",
+    "model": "gpt-5.3-codex-spark",
     "codexBin": "/opt/homebrew/bin/codex",
     "sidecar": "self-contained"
   }
@@ -111,7 +111,7 @@ The sidecar log lives in the app container:
   ```json
   {
     "prompt": "...",
-    "model": "gpt-5.5"
+    "model": "gpt-5.3-codex-spark"
   }
   ```
 
@@ -128,7 +128,7 @@ The sidecar log lives in the app container:
 | Var | Default | Purpose |
 |-----|---------|---------|
 | `ATLAS_CODEX_AGENT_PORT` | `8775` | Sidecar listen port. Must match Settings -> AI sidecar URL. |
-| `ATLAS_CODEX_AGENT_MODEL` | `gpt-5.5` | Default model when the request does not provide one. |
+| `ATLAS_CODEX_AGENT_MODEL` | `gpt-5.3-codex-spark` | Default model when the request does not provide one. |
 | `ATLAS_CODEX_AGENT_TIMEOUT` | `600` | Per-request Codex timeout in seconds. |
 | `ATLAS_CODEX_AGENT_SANDBOX` | `read-only` | Sandbox passed to `codex exec`. |
 | `ATLAS_CODEX_AGENT_PYTHON` | auto-detected | Override the Python executable used to start the sidecar. Do not point this at `/usr/bin/python3`. |
