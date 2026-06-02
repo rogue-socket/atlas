@@ -27,9 +27,6 @@ struct KnowledgeMapView: View {
     @State private var hasComputedLayout = false
     @Environment(AIServiceManager.self) private var aiService
     @State private var pipeline = ExtractionPipeline()
-    @State private var tourPlayer = TourPlayer()
-    @State private var isGeneratingTour = false
-    @State private var tourError: String?
 
     // Extraction mode
     @AppStorage("atlas.extraction.mode") private var selectedModeRaw: String = ExtractionMode.fast.rawValue
@@ -76,7 +73,7 @@ struct KnowledgeMapView: View {
     }
 
     private var visibleNodes: [ConceptNode] {
-        densityManager.visibleNodes(from: graph, zoomLevel: zoomLevel)
+        densityManager.visibleNodesIncludingRelationshipContext(from: graph, zoomLevel: zoomLevel)
     }
 
     var body: some View {
@@ -161,24 +158,6 @@ struct KnowledgeMapView: View {
                         .padding(8)
                 }
             }
-            // Bottom-right: guided tour playback
-            .overlay(alignment: .bottomTrailing) {
-                if tourPlayer.isPlaying {
-                    TourPlaybackView(
-                        player: tourPlayer,
-                        onDismiss: { tourPlayer.dismiss() },
-                        nodeLabel: { graph.node(for: $0)?.label ?? "Selected topic" }
-                    )
-                        .padding(12)
-                }
-            }
-            .overlay(alignment: .top) {
-                if let tourError {
-                    tourErrorBanner(tourError)
-                        .padding(.top, 48)
-                        .padding(.horizontal, 8)
-                }
-            }
             // Single onChange keyed on (nodeCount, zoomLevel) so a simultaneous
             // change of both — e.g. user taps zoom while extraction adds
             // nodes — triggers one layout recompute, not two back-to-back.
@@ -215,18 +194,6 @@ struct KnowledgeMapView: View {
             .onChange(of: graph.expansionGeneration) { _, _ in
                 withAnimation(.easeInOut(duration: 0.3)) {
                     recomputeLayout(canvasSize: geometry.size)
-                }
-            }
-            .onChange(of: tourPlayer.currentStop?.id) { _, _ in
-                guard let stop = tourPlayer.currentStop,
-                      let node = graph.node(for: stop.nodeID) else { return }
-                if graph.hasChildren(node.id), node.expansionState != .expanded {
-                    graph.toggleExpansion(node.id)
-                }
-                zoomLevel = semanticZoomLevel(for: node.level)
-                recomputeLayout(canvasSize: geometry.size)
-                withAnimation(.easeInOut(duration: 0.5)) {
-                    interaction.focusOnNode(id: stop.nodeID, layout: layout, canvasSize: geometry.size)
                 }
             }
             .onAppear {
@@ -365,22 +332,6 @@ struct KnowledgeMapView: View {
                         modePickerPopover
                     }
             }
-
-            if aiService.isConfigured && TourGenerator.hasTourCandidates(in: graph) {
-                Divider().frame(width: 16)
-                Button(action: { startTour() }) {
-                    if isGeneratingTour {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: "graduationcap")
-                    }
-                }
-                .help("Create a read-only guided tour")
-                .accessibilityLabel("Guided Tour")
-                .accessibilityHint("Creates a read-only tour through valid map topics")
-                .disabled(isGeneratingTour || pipeline.isProcessing)
-            }
         }
         .buttonStyle(.borderless)
         .padding(4)
@@ -463,9 +414,10 @@ struct KnowledgeMapView: View {
                     if let other = graph.node(for: otherID) {
                         HStack(spacing: 4) {
                             Circle().fill(edge.type.color).frame(width: 5, height: 5)
-                            Text(edge.type.displayName)
+                            Text(edgeDisplayText(edge))
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
+                                .lineLimit(1)
                             Text(other.label)
                                 .font(.caption2)
                                 .lineLimit(1)
@@ -505,6 +457,10 @@ struct KnowledgeMapView: View {
         .frame(maxWidth: 300)
         .background(RoundedRectangle(cornerRadius: 8).fill(.ultraThickMaterial))
         .shadow(color: .black.opacity(0.1), radius: 8, y: 4)
+    }
+
+    private func edgeDisplayText(_ edge: GraphEdge) -> String {
+        edge.displayText()
     }
 
     // MARK: - Empty State
@@ -612,24 +568,6 @@ struct KnowledgeMapView: View {
         .background(RoundedRectangle(cornerRadius: 10).fill(.ultraThinMaterial))
     }
 
-    private func tourErrorBanner(_ message: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(.orange)
-            Text(message)
-                .font(.caption)
-            Spacer()
-            Button(action: { tourError = nil }) {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(8)
-        .frame(maxWidth: 420)
-        .background(RoundedRectangle(cornerRadius: 8).fill(.regularMaterial))
-    }
-
     // MARK: - Mode Picker
 
     private var modePickerPopover: some View {
@@ -692,39 +630,5 @@ struct KnowledgeMapView: View {
         guard let document = PDFDocument(url: url) else { return }
         log.info("[MapView] startExtraction: \(url.lastPathComponent), \(document.pageCount) pages, mode=\(selectedMode.rawValue)")
         pipeline.processFullDocument(document: document, documentURL: url, graph: graph, aiService: aiService, mode: selectedMode)
-    }
-
-    private func startTour() {
-        guard let backend = aiService.createBackend() else {
-            tourError = "Configure an AI backend first."
-            return
-        }
-
-        isGeneratingTour = true
-        tourError = nil
-        let generator = TourGenerator(model: backend)
-        let snapshot = graph
-
-        Task { @MainActor in
-            defer { isGeneratingTour = false }
-            do {
-                try await backend.preflight()
-                let tour = try await generator.generate(from: snapshot)
-                tourPlayer.load(tour)
-                tourPlayer.start()
-            } catch {
-                tourError = error.localizedDescription
-                log.error("[Tour] generation failed: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    private func semanticZoomLevel(for level: NodeLevel) -> SemanticZoomLevel {
-        switch level {
-        case .document: return .document
-        case .chapter: return .chapter
-        case .concept: return .concept
-        case .entity: return .entity
-        }
     }
 }

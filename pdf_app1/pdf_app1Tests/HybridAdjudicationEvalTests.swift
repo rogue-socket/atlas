@@ -22,6 +22,20 @@ final class HybridAdjudicationEvalTests: XCTestCase {
         })
     }
 
+    func test_evalSet_decodesVitacareHoldoutFixture() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("docs/evals/vitacare-hybrid-adjudication-labels.json")
+        let data = try Data(contentsOf: url)
+
+        let evalSet = try JSONDecoder().decode(HybridAdjudicationEvalSet.self, from: data)
+
+        XCTAssertEqual(evalSet.id, "vitacare-hybrid-adjudication-v1")
+        XCTAssertGreaterThanOrEqual(evalSet.labels.count, 10)
+    }
+
     func test_score_matchesPairsByUnorderedLabels() {
         let evalSet = HybridAdjudicationEvalSet(
             id: "test",

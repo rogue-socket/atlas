@@ -1,0 +1,68 @@
+{
+  "id": "vitacare-hybrid-adjudication-v1",
+  "corpus": "vitacare 4-PDF",
+  "created": "2026-06-02",
+  "notes": "Holdout-oriented labels from PRD v2 rubric rows and known trap pairs. Tune on pp1; score on this set.",
+  "labels": [
+    {
+      "aLabel": "VitaCare Health Network",
+      "bLabel": "VitaCare Services",
+      "expectedVerdict": "keep",
+      "rationale": "Company identity vs service catalog — same word VitaCare, different entities."
+    },
+    {
+      "aLabel": "Helena Vargas",
+      "bLabel": "Chief Clinical Quality Officer",
+      "expectedVerdict": "keep",
+      "rationale": "Named executive vs role-only reference — must not merge."
+    },
+    {
+      "aLabel": "Lab Result Communication",
+      "bLabel": "Lab result release",
+      "expectedVerdict": "merge",
+      "rationale": "Cross-level same workflow (PRD v2 row 3)."
+    },
+    {
+      "aLabel": "On-site laboratory",
+      "bLabel": "External reference laboratory",
+      "expectedVerdict": "keep",
+      "rationale": "On-site vs external lab trap pair."
+    },
+    {
+      "aLabel": "Internal quality audit",
+      "bLabel": "External accreditation audit",
+      "expectedVerdict": "keep",
+      "rationale": "Internal vs external audit trap."
+    },
+    {
+      "aLabel": "42 CFR Part 2",
+      "bLabel": "SUD privacy regime",
+      "expectedVerdict": "merge",
+      "rationale": "Same regulatory regime referenced across CLI/CMP docs."
+    },
+    {
+      "aLabel": "Labcorp",
+      "bLabel": "Quest Diagnostics",
+      "expectedVerdict": "keep",
+      "rationale": "Shared vendor category but distinct companies."
+    },
+    {
+      "aLabel": "Patient portal messaging",
+      "bLabel": "Secure patient messaging",
+      "expectedVerdict": "merge",
+      "rationale": "Same capability named differently across documents."
+    },
+    {
+      "aLabel": "Medication management program",
+      "bLabel": "Medication adherence coaching",
+      "expectedVerdict": "instance_of",
+      "rationale": "Coaching is a specific offering under the broader program."
+    },
+    {
+      "aLabel": "Telehealth visit",
+      "bLabel": "Virtual care platform",
+      "expectedVerdict": "process_for",
+      "rationale": "Telehealth visits are delivered via the virtual care platform."
+    }
+  ]
+}
