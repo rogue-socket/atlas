@@ -562,4 +562,45 @@ final class SCETests: XCTestCase {
         XCTAssertNil(live.node(matching: "Partial Doc B Concept"))
         XCTAssertNotNil(live.node(matching: "Doc A Concept"))
     }
+
+    // MARK: - typed-edge direction verifier
+
+    func test_isValidSCETypedEdgeDirection_acceptsNarrowerCurrentLabel() {
+        XCTAssertTrue(PromptTemplates.isValidSCETypedEdgeDirection(
+            currentLabel: "Kitchen revenue share",
+            currentLevel: .entity,
+            currentSummary: nil,
+            priorLabel: "Revenue share",
+            priorLevel: .concept,
+            priorSummary: "Overall revenue split across channels."
+        ))
+    }
+
+    func test_isValidSCETypedEdgeDirection_rejectsBroaderCurrentLabel() {
+        XCTAssertFalse(PromptTemplates.isValidSCETypedEdgeDirection(
+            currentLabel: "Workshop programming",
+            currentLevel: .chapter,
+            currentSummary: "Repair and event programming across stores.",
+            priorLabel: "Repair workshops",
+            priorLevel: .entity,
+            priorSummary: "Hands-on repair sessions."
+        ))
+    }
+
+    func test_isValidSCETypedEdgeDirection_rejectsEqualSpecificityWithoutSubstring() {
+        XCTAssertFalse(PromptTemplates.isValidSCETypedEdgeDirection(
+            currentLabel: "Portland headquarters",
+            currentLevel: .entity,
+            currentSummary: nil,
+            priorLabel: "Portland distribution center",
+            priorLevel: .entity,
+            priorSummary: nil
+        ))
+    }
+
+    func test_sceSpecificityScore_entityOutranksConcept() {
+        let entity = PromptTemplates.sceSpecificityScore(label: "Revenue share", level: .entity, summary: nil)
+        let concept = PromptTemplates.sceSpecificityScore(label: "Revenue share", level: .concept, summary: nil)
+        XCTAssertGreaterThan(entity, concept)
+    }
 }

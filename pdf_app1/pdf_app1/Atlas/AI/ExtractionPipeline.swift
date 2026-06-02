@@ -316,6 +316,41 @@ class ExtractionPipeline {
         log.info("[SCE] \(kind, privacy: .public) resolveMatchAction: label=\"\(label, privacy: .public)\" prior_label_match=\"\(priorLabelMatch ?? "nil", privacy: .public)\" match_kind=\"\(matchKind ?? "nil", privacy: .public)\" → \(resolved, privacy: .public)")
     }
 
+    @discardableResult
+    private func applySCETypedEdge(
+        graph: KnowledgeGraph,
+        sourceNodeID: UUID,
+        priorNode: ConceptNode,
+        currentLabel: String,
+        currentLevel: NodeLevel,
+        currentSummary: String?,
+        edgeType: EdgeType,
+        confidence: Double,
+        kind: String
+    ) -> Bool {
+        guard PromptTemplates.isValidSCETypedEdgeDirection(
+            currentLabel: currentLabel,
+            currentLevel: currentLevel,
+            currentSummary: currentSummary,
+            priorLabel: priorNode.label,
+            priorLevel: priorNode.level,
+            priorSummary: priorNode.summary
+        ) else {
+            log.info("[SCE] \(kind, privacy: .public) typed-edge rejected (direction): \"\(currentLabel, privacy: .public)\" -[\(edgeType.rawValue, privacy: .public)]→ \"\(priorNode.label, privacy: .public)\"")
+            return false
+        }
+
+        let edge = GraphEdge(
+            sourceNodeID: sourceNodeID,
+            targetNodeID: priorNode.id,
+            type: edgeType,
+            confidence: confidence
+        )
+        graph.addEdge(edge)
+        log.info("[SCE] \(kind, privacy: .public) typed-edge: \"\(currentLabel, privacy: .public)\" -[\(edgeType.rawValue, privacy: .public)]→ \"\(priorNode.label, privacy: .public)\"")
+        return true
+    }
+
     private func processBatch(
         document: PDFDocument,
         documentURL: URL,
@@ -433,6 +468,7 @@ class ExtractionPipeline {
         var scePriorMatchRenames = 0      // valid claim with same_entity → rename
         var scePriorMatchMerges = 0       // same_entity claim landed on an existing node
         var scePriorMatchTypedEdges = 0   // valid claim with instance_of/attribute_of/process_for → typed edge
+        var scePriorMatchTypedEdgesRejectedDirection = 0
 
         for rawConcept in rawConcepts {
             // Resolve concept-level node
@@ -514,15 +550,21 @@ class ExtractionPipeline {
             // it as a typed cross-doc edge instead of merging.
             if case .typedEdge(let canonical, let edgeType) = conceptAction,
                let priorNode = graph.node(matching: canonical) {
-                let edge = GraphEdge(
-                    sourceNodeID: conceptNodeID,
-                    targetNodeID: priorNode.id,
-                    type: edgeType,
-                    confidence: rawConcept.confidence ?? 0.7
-                )
-                graph.addEdge(edge)
-                scePriorMatchTypedEdges += 1
-                log.info("[SCE] concept typed-edge: \"\(rawConcept.label, privacy: .public)\" -[\(edgeType.rawValue, privacy: .public)]→ \"\(canonical, privacy: .public)\"")
+                if applySCETypedEdge(
+                   graph: graph,
+                   sourceNodeID: conceptNodeID,
+                   priorNode: priorNode,
+                   currentLabel: rawConcept.label,
+                   currentLevel: effectiveLevel,
+                   currentSummary: rawConcept.summary,
+                   edgeType: edgeType,
+                   confidence: rawConcept.confidence ?? 0.7,
+                   kind: "concept"
+               ) {
+                    scePriorMatchTypedEdges += 1
+                } else {
+                    scePriorMatchTypedEdgesRejectedDirection += 1
+                }
             }
 
             // Note: `rawConcept.subtopicOf` is ignored under the 4-level model.
@@ -607,15 +649,21 @@ class ExtractionPipeline {
                 // SCE Option E typed-edge for entities.
                 if case .typedEdge(let canonical, let edgeType) = entityAction,
                    let priorNode = graph.node(matching: canonical) {
-                    let edge = GraphEdge(
-                        sourceNodeID: entityNodeID,
-                        targetNodeID: priorNode.id,
-                        type: edgeType,
-                        confidence: rawEntity.confidence ?? 0.7
-                    )
-                    graph.addEdge(edge)
-                    scePriorMatchTypedEdges += 1
-                    log.info("[SCE] entity typed-edge: \"\(rawEntity.label, privacy: .public)\" -[\(edgeType.rawValue, privacy: .public)]→ \"\(canonical, privacy: .public)\"")
+                    if applySCETypedEdge(
+                       graph: graph,
+                       sourceNodeID: entityNodeID,
+                       priorNode: priorNode,
+                       currentLabel: rawEntity.label,
+                       currentLevel: .entity,
+                       currentSummary: rawEntity.summary,
+                       edgeType: edgeType,
+                       confidence: rawEntity.confidence ?? 0.7,
+                       kind: "entity"
+                   ) {
+                        scePriorMatchTypedEdges += 1
+                    } else {
+                        scePriorMatchTypedEdgesRejectedDirection += 1
+                    }
                 }
 
                 // Ensure containsEntity edge exists (concept → entity).
@@ -637,7 +685,7 @@ class ExtractionPipeline {
         }
         log.info("[Step 5] Anchor resolution: \(anchored) anchored, \(rejected) rejected")
         if !priorDocsLabelMap.isEmpty {
-            log.info("[SCE] doc=\(documentURL.lastPathComponent, privacy: .public) pages=\(pageRange.lowerBound + 1)-\(pageRange.upperBound) match_summary: claims=\(scePriorMatchClaims) renames=\(scePriorMatchRenames) merges=\(scePriorMatchMerges) typed_edges=\(scePriorMatchTypedEdges)")
+            log.info("[SCE] doc=\(documentURL.lastPathComponent, privacy: .public) pages=\(pageRange.lowerBound + 1)-\(pageRange.upperBound) match_summary: claims=\(scePriorMatchClaims) renames=\(scePriorMatchRenames) merges=\(scePriorMatchMerges) typed_edges=\(scePriorMatchTypedEdges) typed_rejected_direction=\(scePriorMatchTypedEdgesRejectedDirection)")
         }
 
         if !extraction.edges.isEmpty {

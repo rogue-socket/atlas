@@ -179,6 +179,44 @@ enum PromptTemplates {
         case typedEdge(canonical: String, edgeType: EdgeType)
     }
 
+    /// Higher score means the node is more specific/narrow. Typed SCE edges require
+    /// the current item to be strictly more specific than the prior canonical target.
+    static func sceSpecificityScore(label: String, level: NodeLevel, summary: String?) -> Int {
+        var score: Int
+        switch level {
+        case .entity: score = 40
+        case .concept: score = 30
+        case .chapter: score = 20
+        case .document: score = 10
+        }
+        score += label.split(whereSeparator: { $0.isWhitespace }).count * 3
+        if let summary, !summary.isEmpty {
+            score += min(6, summary.split(whereSeparator: { $0.isWhitespace }).count)
+        }
+        return score
+    }
+
+    static func isValidSCETypedEdgeDirection(
+        currentLabel: String,
+        currentLevel: NodeLevel,
+        currentSummary: String?,
+        priorLabel: String,
+        priorLevel: NodeLevel,
+        priorSummary: String?
+    ) -> Bool {
+        let currentScore = sceSpecificityScore(label: currentLabel, level: currentLevel, summary: currentSummary)
+        let priorScore = sceSpecificityScore(label: priorLabel, level: priorLevel, summary: priorSummary)
+        if currentScore == priorScore {
+            let currentWords = currentLabel.lowercased()
+            let priorWords = priorLabel.lowercased()
+            if currentWords.contains(priorWords) || priorWords.contains(currentWords) {
+                return currentWords.count > priorWords.count
+            }
+            return false
+        }
+        return currentScore > priorScore
+    }
+
     static func resolveMatchAction(
         priorLabelMatch: String?,
         matchKind: String?,
