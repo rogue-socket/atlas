@@ -23,8 +23,8 @@ class AIServiceManager {
 
     // ETR: embedding backend selected independently from the chat backend.
     // nil = no embedding configured → ETR features disabled in UI.
-    // Defaults from PRD §"Locked-in prep items — 2026-05-16":
-    //   Gemini → "gemini-embedding-2-preview" (3072-dim, live-tested 2026-05-16)
+    // Defaults preserve existing behavior; the LAN gateway is selectable as
+    // an embedding-only alternative when Gemini quota/key use is undesirable.
     var selectedEmbeddingBackendType: AIBackendType? = .gemini
     var selectedEmbeddingModel: String = "gemini-embedding-2-preview"
 
@@ -67,6 +67,9 @@ class AIServiceManager {
             let baseURL = UserDefaults.standard.string(forKey: AppConstants.ollamaBaseURLKey) ?? "http://localhost:11434"
             log.info("[AIService] Using Ollama at \(baseURL)")
             return OpenAIBackend(apiKey: "", model: selectedModel, baseURL: baseURL + "/v1", displayName: "Ollama")
+        case .embeddingGateway:
+            log.warning("[AIService] LAN Embedding Gateway is embedding-only")
+            return nil
         }
     }
 
@@ -78,6 +81,7 @@ class AIServiceManager {
         guard let type = selectedEmbeddingBackendType else { return false }
         switch type {
         case .ollama: return true
+        case .embeddingGateway: return OpenAIEmbeddingModelCatalog.isValidBaseURL(embeddingGatewayBaseURL)
         default: return (getAPIKey(for: type) ?? "").isEmpty == false
         }
     }
@@ -99,6 +103,14 @@ class AIServiceManager {
                 return nil
             }
             return GeminiEmbeddingBackend(apiKey: apiKey, model: selectedEmbeddingModel)
+        case .embeddingGateway:
+            let model = selectedEmbeddingModel.isEmpty ? type.defaultEmbeddingModel : selectedEmbeddingModel
+            return OpenAICompatibleEmbeddingBackend(
+                apiKey: embeddingGatewayAPIKey,
+                model: model,
+                vectorDimension: OpenAIEmbeddingModelCatalog.vectorDimension(for: model),
+                baseURL: embeddingGatewayBaseURL
+            )
         case .claude:
             // Claude has no embedding API as of 2026-05; ETR must use a
             // different vendor when the chat backend is Claude.
@@ -110,6 +122,16 @@ class AIServiceManager {
             log.warning("[AIService] Embedding backend for \(type.rawValue) not yet implemented in v1")
             return nil
         }
+    }
+
+    var embeddingGatewayBaseURL: String {
+        UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingGatewayBaseURLKey)
+            ?? OpenAIEmbeddingModelCatalog.defaultBaseURL
+    }
+
+    var embeddingGatewayAPIKey: String {
+        UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingGatewayAPIKeyKey)
+            ?? OpenAIEmbeddingModelCatalog.defaultAPIKey
     }
 
     // MARK: - API Key Management (Keychain)
@@ -249,7 +271,8 @@ class AIServiceManager {
 
     private func loadPreferences() {
         if let type = UserDefaults.standard.string(forKey: AppConstants.aiBackendTypeKey),
-           let backendType = AIBackendType(rawValue: type) {
+           let backendType = AIBackendType(rawValue: type),
+           backendType != .embeddingGateway {
             selectedBackendType = backendType
         }
         if let model = UserDefaults.standard.string(forKey: AppConstants.aiModelKey) {

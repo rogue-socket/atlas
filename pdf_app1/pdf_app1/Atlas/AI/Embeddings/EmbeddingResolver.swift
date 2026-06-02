@@ -296,16 +296,15 @@ extension EmbeddingResolver {
             return MergePlan(decisions: [], thresholds: thresholds)
         }
 
-        // 1. Load (or initialize) cache; whole-file invalidate on model/dim drift.
-        var cache = EmbeddingCacheStore.load(for: projectID)
+        // 1. Load (or initialize) the model/dimension namespace. Each embedding
+        // model gets a separate file so 384-d and 768-d vectors never mix.
+        var cache = EmbeddingCacheStore.load(
+            for: projectID,
+            modelIdentifier: embeddingBackend.modelIdentifier,
+            vectorDimension: embeddingBackend.vectorDimension
+        )
             ?? EmbeddingCache.empty(modelIdentifier: embeddingBackend.modelIdentifier,
                                     vectorDimension: embeddingBackend.vectorDimension)
-        if cache.modelIdentifier != embeddingBackend.modelIdentifier
-            || cache.vectorDimension != embeddingBackend.vectorDimension {
-            log.info("[ETR] cache model/dim mismatch — discarding (was \(cache.modelIdentifier) dim=\(cache.vectorDimension); now \(embeddingBackend.modelIdentifier) dim=\(embeddingBackend.vectorDimension))")
-            cache = EmbeddingCache.empty(modelIdentifier: embeddingBackend.modelIdentifier,
-                                         vectorDimension: embeddingBackend.vectorDimension)
-        }
 
         // 2. Per-node resolve: cache hit (by contentHash) or queue for fresh embed.
         struct Pending { let node: ConceptNode; let hash: String }
@@ -330,7 +329,14 @@ extension EmbeddingResolver {
             }
             for (p, v) in zip(pending, vectors) {
                 resolved[p.node.id] = v
-                cache.put(contentHash: p.hash, vector: v)
+                cache.put(
+                    contentHash: p.hash,
+                    vector: v,
+                    sourceID: p.node.id.uuidString,
+                    sourcePath: p.node.sourceAnchors.first?.documentURL.path,
+                    chunkID: p.hash,
+                    chunkText: embeddingText(for: p.node)
+                )
             }
         }
 

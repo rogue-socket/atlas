@@ -16,6 +16,8 @@ struct AISettingsView: View {
     @State private var apiKeyInput: String = ""
     @State private var showAPIKey: Bool = false
     @State private var ollamaBaseURL: String = "http://localhost:11434"
+    @State private var embeddingGatewayURL: String = OpenAIEmbeddingModelCatalog.defaultBaseURL
+    @State private var embeddingGatewayAPIKey: String = OpenAIEmbeddingModelCatalog.defaultAPIKey
     @State private var testStatus: TestStatus = .idle
 
     enum TestStatus: Equatable {
@@ -30,7 +32,7 @@ struct AISettingsView: View {
             // Backend Selection
             Section("AI Backend") {
                 Picker("Provider", selection: $serviceManager.selectedBackendType) {
-                    ForEach(AIBackendType.allCases) { backend in
+                    ForEach(AIBackendType.chatBackends) { backend in
                         Text(backend.displayName).tag(backend)
                     }
                 }
@@ -49,6 +51,44 @@ struct AISettingsView: View {
                 .onChange(of: serviceManager.selectedModel) { _, _ in
                     serviceManager.savePreferences()
                     testStatus = .idle
+                }
+            }
+
+            Section("Embedding Backend") {
+                Picker("Provider", selection: $serviceManager.selectedEmbeddingBackendType) {
+                    Text("Disabled").tag(nil as AIBackendType?)
+                    ForEach(AIBackendType.embeddingBackends) { backend in
+                        Text(backend.displayName).tag(Optional(backend))
+                    }
+                }
+                .onChange(of: serviceManager.selectedEmbeddingBackendType) { _, newValue in
+                    serviceManager.selectedEmbeddingModel = newValue?.defaultEmbeddingModel ?? ""
+                    serviceManager.savePreferences()
+                }
+
+                if let embeddingBackend = serviceManager.selectedEmbeddingBackendType {
+                    Picker("Model", selection: $serviceManager.selectedEmbeddingModel) {
+                        ForEach(embeddingBackend.availableEmbeddingModels, id: \.self) { model in
+                            Text(model).tag(model)
+                        }
+                    }
+                    .onChange(of: serviceManager.selectedEmbeddingModel) { _, _ in
+                        serviceManager.savePreferences()
+                    }
+                }
+
+                if serviceManager.selectedEmbeddingBackendType == .embeddingGateway {
+                    TextField("Base URL", text: $embeddingGatewayURL)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            UserDefaults.standard.set(embeddingGatewayURL, forKey: AppConstants.aiEmbeddingGatewayBaseURLKey)
+                        }
+
+                    TextField("API Key", text: $embeddingGatewayAPIKey)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            UserDefaults.standard.set(embeddingGatewayAPIKey, forKey: AppConstants.aiEmbeddingGatewayAPIKeyKey)
+                        }
                 }
             }
 
@@ -162,6 +202,8 @@ struct AISettingsView: View {
         .onAppear {
             loadAPIKey(for: serviceManager.selectedBackendType)
             ollamaBaseURL = UserDefaults.standard.string(forKey: AppConstants.ollamaBaseURLKey) ?? "http://localhost:11434"
+            embeddingGatewayURL = UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingGatewayBaseURLKey) ?? OpenAIEmbeddingModelCatalog.defaultBaseURL
+            embeddingGatewayAPIKey = UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingGatewayAPIKeyKey) ?? OpenAIEmbeddingModelCatalog.defaultAPIKey
         }
     }
 

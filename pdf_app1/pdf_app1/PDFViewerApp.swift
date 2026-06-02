@@ -14,6 +14,16 @@ import os.log
 // the app is launched in the background (`open -g`).
 final class HeadlessAppDelegate: NSObject, NSApplicationDelegate {
     static var inject: ((NSApplication) -> Void)?
+    private static var didStartHeadless = false
+
+    @MainActor
+    static func startHeadless(_ run: @escaping @MainActor () async -> Void) {
+        guard !didStartHeadless else { return }
+        didStartHeadless = true
+        Task { @MainActor in
+            await run()
+        }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.inject?(NSApplication.shared)
@@ -46,7 +56,7 @@ struct PDFViewerApp: App {
             let ai = aiServiceManager
             let graph = knowledgeGraph
             HeadlessAppDelegate.inject = { _ in
-                Task { @MainActor in
+                HeadlessAppDelegate.startHeadless {
                     await HeadlessRunner().run(
                         config: config,
                         projectsManager: projects,
@@ -71,7 +81,7 @@ struct PDFViewerApp: App {
                     // Headless mode: bypass session restore + orphan sweep so the
                     // runner has a clean lifecycle, then drive extraction + exit.
                     if let config = headlessConfig {
-                        Task { @MainActor in
+                        HeadlessAppDelegate.startHeadless {
                             await HeadlessRunner().run(
                                 config: config,
                                 projectsManager: projectsManager,
@@ -198,4 +208,3 @@ struct PDFViewerApp: App {
         }
     }
 }
-
