@@ -136,6 +136,16 @@ struct GraphEdge: Identifiable, Codable, Hashable {
     }
 }
 
+extension GraphEdge {
+    func displayText(maxLength: Int? = nil) -> String {
+        let trimmed = label?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = trimmed?.isEmpty == false ? trimmed! : type.displayName
+
+        guard let maxLength, text.count > maxLength, maxLength > 3 else { return text }
+        return String(text.prefix(maxLength - 3)) + "..."
+    }
+}
+
 // MARK: - Knowledge Graph
 // `nonisolated` to opt out of the project-wide MainActor default
 // (SWIFT_DEFAULT_ACTOR_ISOLATION). KnowledgeGraph is a pure data
@@ -475,17 +485,27 @@ extension KnowledgeGraph {
         return try encoder.encode(rep)
     }
 
-    /// Encode a per-document subgraph: only nodes anchored in `documentURL`
-    /// plus edges whose endpoints both survive that filter. Used by
+    /// Encode a per-document subgraph: nodes anchored in `documentURL`, plus
+    /// one-hop prior nodes needed by SCE typed cross-document edges. Used by
     /// `GraphStore.scheduleSave` so per-doc files don't denormalize every
-    /// other doc's nodes under multi-doc memory (4-level model).
+    /// other doc's graph under multi-doc memory (4-level model).
     func encodeSubgraph(for documentURL: URL) throws -> (data: Data, nodeCount: Int, edgeCount: Int) {
-        let scopedNodes = allNodes.filter { node in
+        let primaryNodes = allNodes.filter { node in
             node.sourceAnchors.contains { $0.documentURL == documentURL }
         }
-        let scopedIDs = Set(scopedNodes.map(\.id))
+        let primaryIDs = Set(primaryNodes.map(\.id))
         let scopedEdges = allEdges.filter { edge in
-            scopedIDs.contains(edge.sourceNodeID) && scopedIDs.contains(edge.targetNodeID)
+            let sourceInScope = primaryIDs.contains(edge.sourceNodeID)
+            let targetInScope = primaryIDs.contains(edge.targetNodeID)
+            return (sourceInScope && targetInScope) ||
+                (edge.type.isSCECrossDocumentReference && (sourceInScope || targetInScope))
+        }
+        let scopedIDs = scopedEdges.reduce(into: primaryIDs) { result, edge in
+            result.insert(edge.sourceNodeID)
+            result.insert(edge.targetNodeID)
+        }
+        let scopedNodes = allNodes.filter { node in
+            scopedIDs.contains(node.id)
         }
         var scopedState: [String: ProcessingState] = [:]
         if let state = documentProcessingState[documentURL] {
@@ -502,21 +522,36 @@ extension KnowledgeGraph {
         return (data, scopedNodes.count, scopedEdges.count)
     }
 
-    /// Decode `data` and merge only the nodes anchored in `documentURL`
-    /// (plus their edges) into the receiver. Defensive against legacy
-    /// per-doc files written before B4 that contain other docs' nodes too.
+    /// Decode `data` and merge only the nodes anchored in `documentURL`, plus
+    /// one-hop prior nodes needed by SCE typed cross-document edges, into the
+    /// receiver. Defensive against legacy per-doc files written before B4 that
+    /// contain other docs' nodes too.
     /// Unlike `decode(from:)`, this does NOT clear the receiver — existing
     /// nodes from other documents survive (necessary for the project-wide
     /// in-memory graph).
     @discardableResult
     func mergeSubgraph(from data: Data, scopedTo documentURL: URL) throws -> (nodeCount: Int, edgeCount: Int) {
         let rep = try JSONDecoder().decode(CodableRepresentation.self, from: data)
-        let scopedNodes = rep.nodes.filter { node in
+        let primaryNodes = rep.nodes.filter { node in
             node.sourceAnchors.contains { $0.documentURL == documentURL }
         }
-        let scopedIDs = Set(scopedNodes.map(\.id))
+        let primaryIDs = Set(primaryNodes.map(\.id))
+        let availableIDs = Set(rep.nodes.map(\.id))
         let scopedEdges = rep.edges.filter { edge in
-            scopedIDs.contains(edge.sourceNodeID) && scopedIDs.contains(edge.targetNodeID)
+            let sourceInScope = primaryIDs.contains(edge.sourceNodeID)
+            let targetInScope = primaryIDs.contains(edge.targetNodeID)
+            let bothAvailable = availableIDs.contains(edge.sourceNodeID) && availableIDs.contains(edge.targetNodeID)
+            return bothAvailable && (
+                (sourceInScope && targetInScope) ||
+                (edge.type.isSCECrossDocumentReference && (sourceInScope || targetInScope))
+            )
+        }
+        let scopedIDs = scopedEdges.reduce(into: primaryIDs) { result, edge in
+            result.insert(edge.sourceNodeID)
+            result.insert(edge.targetNodeID)
+        }
+        let scopedNodes = rep.nodes.filter { node in
+            scopedIDs.contains(node.id)
         }
         let scratch = KnowledgeGraph()
         for node in scopedNodes { scratch.addNode(node) }

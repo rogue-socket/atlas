@@ -104,7 +104,40 @@ struct MapCanvasRenderer: View {
             arrow.addLine(to: CGPoint(x: tgt.x - arrowLen * cos(angle + .pi/6), y: tgt.y - arrowLen * sin(angle + .pi/6)))
             arrow.closeSubpath()
             context.fill(arrow, with: .color(edge.type.color.opacity(alpha)))
+
+            let shouldDrawLabel = viewScale >= 0.85 || edge.sourceNodeID == selectedNodeID || edge.targetNodeID == selectedNodeID
+            if shouldDrawLabel {
+                drawEdgeLabel(edge, at: ctrl, context: context, viewScale: viewScale)
+            }
         }
+    }
+
+    private func drawEdgeLabel(
+        _ edge: GraphEdge,
+        at point: CGPoint,
+        context: GraphicsContext,
+        viewScale: CGFloat
+    ) {
+        let text = edgeDisplayText(edge)
+        let fontSize = max(8, min(11, 10 * viewScale))
+        let horizontalPadding = 6 * viewScale
+        let verticalPadding = 3 * viewScale
+        let width = min(150 * viewScale, max(44 * viewScale, CGFloat(text.count) * fontSize * 0.52 + horizontalPadding * 2))
+        let height = fontSize + verticalPadding * 2
+        let rect = CGRect(x: point.x - width / 2, y: point.y - height / 2, width: width, height: height)
+
+        let path = Path(roundedRect: rect, cornerRadius: 5 * viewScale)
+        context.fill(path, with: .color(Color(nsColor: .controlBackgroundColor).opacity(0.86)))
+        context.stroke(path, with: .color(edge.type.color.opacity(0.45)), lineWidth: 0.8)
+
+        let label = Text(text)
+            .font(.system(size: fontSize, weight: .medium))
+            .foregroundColor(edge.type.color)
+        context.draw(context.resolve(label), at: CGPoint(x: rect.midX, y: rect.midY), anchor: .center)
+    }
+
+    private func edgeDisplayText(_ edge: GraphEdge) -> String {
+        edge.displayText(maxLength: 28)
     }
 
     // MARK: - Nodes
