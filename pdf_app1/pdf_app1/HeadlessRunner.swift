@@ -14,13 +14,17 @@ import os.log
 struct HeadlessRunnerConfig {
     let projectName: String
     let mode: ExtractionMode
+    /// `nil` = alphabetical by displayName. `"reverse"` flips that order.
+    /// Any other value is a comma-separated list of displayName values.
+    let docOrder: String?
 
-    /// Parse `--headless-extract --project <name> [--mode fast|deep]` from CommandLine args.
+    /// Parse `--headless-extract --project <name> [--mode fast|deep] [--doc-order alpha|reverse|name1,name2,...]`.
     /// Returns nil when the headless flag is absent or project name is missing.
     static func parse(from args: [String]) -> HeadlessRunnerConfig? {
         guard args.contains("--headless-extract") else { return nil }
         var projectName: String?
         var mode: ExtractionMode = .fast
+        var docOrder: String?
         var i = 0
         while i < args.count {
             let a = args[i]
@@ -34,13 +38,38 @@ struct HeadlessRunnerConfig {
                 i += 2
                 continue
             }
+            if a == "--doc-order", i + 1 < args.count {
+                docOrder = args[i + 1]
+                i += 2
+                continue
+            }
             i += 1
         }
         guard let name = projectName else {
             AtlasLogger.headless.error("[Headless] --headless-extract requires --project <name>")
             return nil
         }
-        return HeadlessRunnerConfig(projectName: name, mode: mode)
+        return HeadlessRunnerConfig(projectName: name, mode: mode, docOrder: docOrder)
+    }
+
+    func orderedFiles(from project: Project) -> [ProjectFile] {
+        let alpha = project.files.sorted {
+            $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+        }
+        guard let docOrder, docOrder != "alpha" else { return alpha }
+        if docOrder == "reverse" { return alpha.reversed() }
+        let names = docOrder.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
+        let byName = Dictionary(uniqueKeysWithValues: alpha.map { ($0.displayName, $0) })
+        var ordered: [ProjectFile] = []
+        for name in names {
+            guard let file = byName[name] else { continue }
+            ordered.append(file)
+        }
+        let picked = Set(ordered.map(\.id))
+        for file in alpha where !picked.contains(file.id) {
+            ordered.append(file)
+        }
+        return ordered
     }
 }
 
@@ -74,8 +103,9 @@ final class HeadlessRunner {
             exit(2)
         }
 
-        let files = project.files.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
-        log.info("[Headless] project=\(project.name, privacy: .public) files=\(files.count):")
+        let files = config.orderedFiles(from: project)
+        let orderLabel = config.docOrder ?? "alpha"
+        log.info("[Headless] project=\(project.name, privacy: .public) doc_order=\(orderLabel, privacy: .public) files=\(files.count):")
         for (i, f) in files.enumerated() {
             log.info("[Headless]   [\(i + 1)] \(f.displayName)")
         }
@@ -92,7 +122,13 @@ final class HeadlessRunner {
             let tag = "[\(idx + 1)/\(files.count)]"
             log.info("[Headless] \(tag) resolving bookmark: \(file.displayName, privacy: .public)")
 
-            guard let url = projectsManager.resolveURL(for: project.id, fileID: file.id) else {
+            let url: URL
+            if let resolved = projectsManager.resolveURL(for: project.id, fileID: file.id) {
+                url = resolved
+            } else if FileManager.default.fileExists(atPath: file.lastKnownPath) {
+                url = URL(fileURLWithPath: file.lastKnownPath)
+                log.warning("[Headless] \(tag) bookmark resolve failed; using lastKnownPath for \(file.displayName, privacy: .public)")
+            } else {
                 log.error("[Headless] \(tag) bookmark resolve failed: \(file.displayName, privacy: .public) — skipping")
                 continue
             }

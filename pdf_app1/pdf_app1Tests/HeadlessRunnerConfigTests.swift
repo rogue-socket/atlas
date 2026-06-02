@@ -47,4 +47,33 @@ final class HeadlessRunnerConfigTests: XCTestCase {
         let cfg = HeadlessRunnerConfig.parse(from: ["--headless-extract", "--project"])
         XCTAssertNil(cfg)
     }
+
+    func test_parse_acceptsDocOrderReverse() {
+        let cfg = HeadlessRunnerConfig.parse(from: [
+            "--headless-extract", "--project", "P", "--doc-order", "reverse"
+        ])
+        XCTAssertEqual(cfg?.docOrder, "reverse")
+    }
+
+    func test_orderedFiles_reverseFlipsAlphaOrder() {
+        let files = [
+            ProjectFile(displayName: "b.pdf", bookmarkData: Data(), lastKnownPath: "/b.pdf"),
+            ProjectFile(displayName: "a.pdf", bookmarkData: Data(), lastKnownPath: "/a.pdf"),
+            ProjectFile(displayName: "c.pdf", bookmarkData: Data(), lastKnownPath: "/c.pdf"),
+        ]
+        let project = Project(name: "P", files: files)
+        let cfg = HeadlessRunnerConfig(projectName: "P", mode: .fast, docOrder: "reverse")
+        XCTAssertEqual(cfg.orderedFiles(from: project).map(\.displayName), ["c.pdf", "b.pdf", "a.pdf"])
+    }
+
+    func test_orderedFiles_customListPreserved() {
+        let files = [
+            ProjectFile(displayName: "a.pdf", bookmarkData: Data(), lastKnownPath: "/a.pdf"),
+            ProjectFile(displayName: "b.pdf", bookmarkData: Data(), lastKnownPath: "/b.pdf"),
+            ProjectFile(displayName: "c.pdf", bookmarkData: Data(), lastKnownPath: "/c.pdf"),
+        ]
+        let project = Project(name: "P", files: files)
+        let cfg = HeadlessRunnerConfig(projectName: "P", mode: .fast, docOrder: "c.pdf,a.pdf")
+        XCTAssertEqual(cfg.orderedFiles(from: project).map(\.displayName), ["c.pdf", "a.pdf", "b.pdf"])
+    }
 }
