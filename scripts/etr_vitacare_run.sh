@@ -10,6 +10,8 @@ PDF_APP1="$ROOT/pdf_app1"
 DERIVED_DATA="${ETR_DERIVED_DATA:-$PDF_APP1/build}"
 APP_BUNDLE="${ETR_APP_BUNDLE:-$DERIVED_DATA/Build/Products/Debug/pdf_app1.app}"
 SOURCE_PDFS="${ETR_SAMPLE_PDF_DIR:-$ROOT/../sample_pdfs/files}"
+CHAT_BACKEND="${ETR_CHAT_BACKEND:-ClaudeSubscription}"
+CHAT_MODEL="${ETR_CHAT_MODEL:-sonnet}"
 CONTAINER_DATA="$HOME/Library/Containers/rogues.pdf-app1/Data"
 STAGED_PDFS="$CONTAINER_DATA/vitacare-fixtures"
 RUNS="$ROOT/runs/vitacare-etr-$(date +%Y%m%d-%H%M%S)"
@@ -28,9 +30,9 @@ defaults write rogues.pdf-app1 atlas.ai.embedding.backendType EmbeddingGateway
 defaults write rogues.pdf-app1 atlas.ai.embedding.model bge-base-en-v1.5
 defaults write rogues.pdf-app1 atlas.ai.embedding.gateway.baseURL "$ATLAS_EMBEDDING_GATEWAY_BASE_URL"
 defaults write rogues.pdf-app1 atlas.ai.embedding.gateway.apiKey none
-# Chat backend for extract + ETR adjudication (dev key file: container Data/atlas-dev-keys.json).
-defaults write rogues.pdf-app1 atlas.ai.backendType Gemini
-defaults write rogues.pdf-app1 atlas.ai.model gemini-2.5-flash
+# Chat backend for extract + ETR adjudication.
+defaults write rogues.pdf-app1 atlas.ai.backendType "$CHAT_BACKEND"
+defaults write rogues.pdf-app1 atlas.ai.model "$CHAT_MODEL"
 
 if [[ ! -d "$APP_BUNDLE" ]]; then
   echo "Building pdf_app1…" >&2
@@ -64,6 +66,7 @@ fi
 
 echo "Log: $LOG" >&2
 echo "Gateway: $ATLAS_EMBEDDING_GATEWAY_BASE_URL" >&2
+echo "Chat backend: $CHAT_BACKEND / $CHAT_MODEL" >&2
 
 # Single instance via LaunchServices; -g avoids stealing focus.
 open -W -g "$APP_BUNDLE" --args "${ETR_MODE[@]}" >"$LOG" 2>&1
