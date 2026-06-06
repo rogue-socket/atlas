@@ -114,6 +114,8 @@ struct AppConstants {
     static let ollamaBaseURLKey = "atlas.ollama.baseURL"
     /// UserDefaults key for the Codex Agent sidecar base URL override
     static let codexAgentSidecarURLKey = "atlas.codexAgentSidecar.baseURL"
+    /// UserDefaults key for the Claude sidecar base URL override
+    static let claudeSidecarURLKey = "atlas.claudeSidecar.baseURL"
     /// UserDefaults key for max prior-doc lines included in SCE extraction prompts
     static let scePriorHeaderMaxLinesKey = "atlas.sce.priorHeaderMaxLines"
 }

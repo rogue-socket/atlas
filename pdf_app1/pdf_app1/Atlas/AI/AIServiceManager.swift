@@ -69,6 +69,11 @@ class AIServiceManager {
             let reasoningEffort = (envReasoningEffort?.isEmpty == false) ? envReasoningEffort : nil
             log.info("[AIService] Using Codex Agent sidecar at \(baseURL) model=\(model) reasoningEffort=\(reasoningEffort ?? "<default>")")
             return CodexAgentBackend(baseURL: baseURL, model: model, reasoningEffort: reasoningEffort)
+        case .claudeSubscription:
+            let baseURL = UserDefaults.standard.string(forKey: AppConstants.claudeSidecarURLKey)
+                ?? AIBackendType.claudeSubscription.defaultBaseURL
+            log.info("[AIService] Using Claude sidecar at \(baseURL)")
+            return ClaudeSidecarBackend(baseURL: baseURL, model: selectedModel)
         }
     }
 
@@ -219,7 +224,7 @@ class AIServiceManager {
     }
 
     private func updateConfiguredState() {
-        if selectedBackendType == .ollama || selectedBackendType == .codexAgent {
+        if !selectedBackendType.requiresAPIKey {
             isConfigured = true
         } else {
             isConfigured = getAPIKey(for: selectedBackendType) != nil

@@ -73,12 +73,16 @@ final class BookmarkManager: ObservableObject {
 
  final class HighlightingPDFView: PDFView {
      var onMouseUp: (() -> Void)?
+     var onMouseDown: ((NSEvent) -> Void)?
      var menuProvider: ((NSEvent) -> NSMenu?)?
 
      override func viewDidMoveToWindow() {
          super.viewDidMoveToWindow()
          if window != nil {
              setupPerformanceOptimizations()
+             // Ensure .mouseMoved events flow so the select-mode hover-cursor
+             // monitor fires; PDFKit does not reliably enable this itself.
+             window?.acceptsMouseMovedEvents = true
          }
      }
 
@@ -98,6 +102,14 @@ final class BookmarkManager: ObservableObject {
          default:
              super.keyDown(with: event)
          }
+     }
+
+     override func mouseDown(with event: NSEvent) {
+         // Capture the press point before the pan recognizer's threshold
+         // consumes the first few points of movement — the select-mode
+         // handle hit-test needs the true mouse-down location.
+         onMouseDown?(event)
+         super.mouseDown(with: event)
      }
 
      override func mouseUp(with event: NSEvent) {
@@ -409,10 +421,13 @@ struct PDFViewerView: View {
         pdfView.document = pdfDocument
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
-        // Defer scaling to allow layout to settle, then fit entire page
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            self.fitEntirePage()
-        }
+        // Initial fit is owned by PDFViewRepresentable's frame-change observer,
+        // which fires deterministically when AppKit lays out the view. Calling
+        // here directly handles the re-appear path (tab switch back) where
+        // bounds are already valid; if bounds aren't valid yet, fitEntirePage
+        // falls back to autoScales and the representable's observer lands the
+        // real fit shortly after.
+        fitEntirePage()
     }
 
     private func fitEntirePage() {

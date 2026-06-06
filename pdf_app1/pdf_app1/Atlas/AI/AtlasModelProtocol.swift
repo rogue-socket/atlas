@@ -151,6 +151,12 @@ protocol AtlasModel: Sendable {
     var lastResponsePromptTokens: Int? { get }
 
     func extractConceptGraph(from text: String, context: ExtractionContext) async throws -> ExtractionResponse
+
+    /// Verify the backend is reachable before a run starts. Default: no-op.
+    /// Backends with an out-of-process dependency (e.g. a local sidecar)
+    /// override this to fail fast with an actionable error.
+    func preflight() async throws
+
     func extractConcepts(from text: String, context: ExtractionContext) async throws -> [RawConcept]
     func proposeEdges(between candidates: [EdgeProposalCandidate], context: String) async throws -> [RawEdge]
     func proposeEdges(between concepts: [String], context: String) async throws -> [RawEdge]
@@ -175,6 +181,8 @@ extension AtlasModel {
     func proposeEdges(between candidates: [EdgeProposalCandidate], context: String) async throws -> [RawEdge] {
         try await proposeEdges(between: candidates.map(\.label), context: context)
     }
+
+    func preflight() async throws { }
 
     func proposeMerges(
         documentAConcepts: [(label: String, summary: String?)],
@@ -238,6 +246,7 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
     case gemini = "Gemini"
     case ollama = "Ollama"
     case codexAgent = "CodexAgent"
+    case claudeSubscription = "ClaudeSubscription"
 
     var id: String { rawValue }
 
@@ -248,12 +257,13 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
         case .gemini: return "Google Gemini"
         case .ollama: return "Ollama (Local)"
         case .codexAgent: return "Codex Agent"
+        case .claudeSubscription: return "Claude (Subscription)"
         }
     }
 
     var requiresAPIKey: Bool {
         switch self {
-        case .ollama, .codexAgent: return false
+        case .ollama, .codexAgent, .claudeSubscription: return false
         default: return true
         }
     }
@@ -265,6 +275,7 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
         case .gemini: return "https://generativelanguage.googleapis.com"
         case .ollama: return "http://localhost:11434"
         case .codexAgent: return "http://127.0.0.1:8775"
+        case .claudeSubscription: return "http://127.0.0.1:8765"
         }
     }
 
@@ -275,6 +286,7 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
         case .gemini: return ["gemini-2.5-pro", "gemini-2.5-flash"]
         case .ollama: return ["llama3.1", "mistral", "qwen2.5"]
         case .codexAgent: return ["gpt-5.3-codex-spark", "gpt-5.5"]
+        case .claudeSubscription: return ["opus", "sonnet", "haiku"]
         }
     }
 }
