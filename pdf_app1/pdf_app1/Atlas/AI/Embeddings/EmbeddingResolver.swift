@@ -805,6 +805,13 @@ extension EmbeddingResolver {
             return String(token.dropLast(3)) + "y"
         }
         if token.count > 4,
+           token.hasSuffix("sses")
+            || token.hasSuffix("ches")
+            || token.hasSuffix("shes")
+            || token.hasSuffix("xes") {
+            return String(token.dropLast(2))
+        }
+        if token.count > 4,
            token.hasSuffix("s"),
            !token.hasSuffix("ss"),
            !token.hasSuffix("us"),

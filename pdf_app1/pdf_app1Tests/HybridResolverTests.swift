@@ -304,8 +304,8 @@ final class HybridResolverTests: XCTestCase {
     }
 
     func test_lexicalTokens_foldsSimplePluralsWithoutDamagingStableEndings() {
-        let toks = EmbeddingResolver.lexicalTokens("Policies Services Status Business Analysis")
-        XCTAssertEqual(toks, ["policy", "service", "status", "business", "analysis"])
+        let toks = EmbeddingResolver.lexicalTokens("Policies Services Processes Classes Boxes Status Business Analysis")
+        XCTAssertEqual(toks, ["policy", "service", "process", "class", "box", "status", "business", "analysis"])
     }
 
     func test_lexicalTokens_keepsExplicitUppercaseAcronymsOnly() {
