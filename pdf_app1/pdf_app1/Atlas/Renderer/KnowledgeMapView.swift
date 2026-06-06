@@ -73,7 +73,7 @@ struct KnowledgeMapView: View {
     }
 
     private var visibleNodes: [ConceptNode] {
-        densityManager.visibleNodes(from: graph, zoomLevel: zoomLevel)
+        densityManager.visibleNodesIncludingRelationshipContext(from: graph, zoomLevel: zoomLevel)
     }
 
     var body: some View {
@@ -414,9 +414,10 @@ struct KnowledgeMapView: View {
                     if let other = graph.node(for: otherID) {
                         HStack(spacing: 4) {
                             Circle().fill(edge.type.color).frame(width: 5, height: 5)
-                            Text(edge.type.displayName)
+                            Text(edgeDisplayText(edge))
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
+                                .lineLimit(1)
                             Text(other.label)
                                 .font(.caption2)
                                 .lineLimit(1)
@@ -456,6 +457,10 @@ struct KnowledgeMapView: View {
         .frame(maxWidth: 300)
         .background(RoundedRectangle(cornerRadius: 8).fill(.ultraThickMaterial))
         .shadow(color: .black.opacity(0.1), radius: 8, y: 4)
+    }
+
+    private func edgeDisplayText(_ edge: GraphEdge) -> String {
+        edge.displayText()
     }
 
     // MARK: - Empty State

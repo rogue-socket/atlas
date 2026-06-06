@@ -16,6 +16,9 @@ struct AISettingsView: View {
     @State private var apiKeyInput: String = ""
     @State private var showAPIKey: Bool = false
     @State private var ollamaBaseURL: String = "http://localhost:11434"
+    @State private var codexAgentSidecarURL: String = "http://127.0.0.1:8775"
+    @State private var embeddingGatewayURL: String = OpenAIEmbeddingModelCatalog.defaultBaseURL
+    @State private var embeddingGatewayAPIKey: String = OpenAIEmbeddingModelCatalog.defaultAPIKey
     @State private var claudeSidecarURL: String = "http://127.0.0.1:8765"
     @State private var testStatus: TestStatus = .idle
 
@@ -31,7 +34,7 @@ struct AISettingsView: View {
             // Backend Selection
             Section("AI Backend") {
                 Picker("Provider", selection: $serviceManager.selectedBackendType) {
-                    ForEach(AIBackendType.allCases) { backend in
+                    ForEach(AIBackendType.chatBackends) { backend in
                         Text(backend.displayName).tag(backend)
                     }
                 }
@@ -40,6 +43,9 @@ struct AISettingsView: View {
                     loadAPIKey(for: newValue)
                     serviceManager.savePreferences()
                     testStatus = .idle
+                    if newValue == .codexAgent {
+                        startCodexSidecar()
+                    }
                 }
 
                 Picker("Model", selection: $serviceManager.selectedModel) {
@@ -50,6 +56,53 @@ struct AISettingsView: View {
                 .onChange(of: serviceManager.selectedModel) { _, _ in
                     serviceManager.savePreferences()
                     testStatus = .idle
+                }
+            }
+
+            Section("Embedding Backend") {
+                Picker("Provider", selection: $serviceManager.selectedEmbeddingBackendType) {
+                    Text("Disabled").tag(nil as AIBackendType?)
+                    ForEach(AIBackendType.embeddingBackends) { backend in
+                        Text(backend.displayName).tag(Optional(backend))
+                    }
+                }
+                .onChange(of: serviceManager.selectedEmbeddingBackendType) { _, newValue in
+                    serviceManager.selectedEmbeddingModel = newValue?.defaultEmbeddingModel ?? ""
+                    serviceManager.savePreferences()
+                }
+
+                if let embeddingBackend = serviceManager.selectedEmbeddingBackendType {
+                    Picker("Model", selection: $serviceManager.selectedEmbeddingModel) {
+                        ForEach(embeddingBackend.availableEmbeddingModels, id: \.self) { model in
+                            Text(model).tag(model)
+                        }
+                    }
+                    .onChange(of: serviceManager.selectedEmbeddingModel) { _, _ in
+                        serviceManager.savePreferences()
+                    }
+                }
+
+                if serviceManager.selectedEmbeddingBackendType == .embeddingGateway {
+                    TextField("Base URL", text: $embeddingGatewayURL)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            UserDefaults.standard.set(embeddingGatewayURL, forKey: AppConstants.aiEmbeddingGatewayBaseURLKey)
+                        }
+
+                    TextField("API Key", text: $embeddingGatewayAPIKey)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            UserDefaults.standard.set(embeddingGatewayAPIKey, forKey: AppConstants.aiEmbeddingGatewayAPIKeyKey)
+                        }
+                }
+
+                Picker("Resolver Preset", selection: $serviceManager.selectedResolverPreset) {
+                    ForEach(ResolverThresholdPreset.allCases) { preset in
+                        Text(preset.displayName).tag(preset)
+                    }
+                }
+                .onChange(of: serviceManager.selectedResolverPreset) { _, _ in
+                    serviceManager.savePreferences()
                 }
             }
 
@@ -102,6 +155,20 @@ struct AISettingsView: View {
                 }
             }
 
+            if serviceManager.selectedBackendType == .codexAgent {
+                Section("Codex Agent") {
+                    TextField("Sidecar URL", text: $codexAgentSidecarURL)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            UserDefaults.standard.set(codexAgentSidecarURL, forKey: AppConstants.codexAgentSidecarURLKey)
+                        }
+
+                    Text("Runs Codex through the local Atlas Codex Agent sidecar. Start it first: python3 atlas/codex-agent-sidecar/server.py")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
             // Claude subscription (sidecar) settings
             if serviceManager.selectedBackendType == .claudeSubscription {
                 Section("Claude Subscription") {
@@ -112,6 +179,20 @@ struct AISettingsView: View {
                         }
 
                     Text("Runs Claude via your subscription. Start the sidecar first: node atlas/claude-sidecar/server.mjs — extraction fails if it isn't running.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            if serviceManager.selectedBackendType == .codexAgent {
+                Section("Codex Agent") {
+                    TextField("Sidecar URL", text: $codexAgentSidecarURL)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            UserDefaults.standard.set(codexAgentSidecarURL, forKey: AppConstants.codexAgentSidecarURLKey)
+                        }
+
+                    Text("Runs Codex through the local Atlas Codex Agent sidecar. Atlas starts it automatically when selected, tested, or analyzing.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -178,12 +259,36 @@ struct AISettingsView: View {
         .onAppear {
             loadAPIKey(for: serviceManager.selectedBackendType)
             ollamaBaseURL = UserDefaults.standard.string(forKey: AppConstants.ollamaBaseURLKey) ?? "http://localhost:11434"
+            codexAgentSidecarURL = UserDefaults.standard.string(forKey: AppConstants.codexAgentSidecarURLKey) ?? "http://127.0.0.1:8775"
+            embeddingGatewayURL = UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingGatewayBaseURLKey) ?? OpenAIEmbeddingModelCatalog.defaultBaseURL
+            embeddingGatewayAPIKey = UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingGatewayAPIKeyKey) ?? OpenAIEmbeddingModelCatalog.defaultAPIKey
             claudeSidecarURL = UserDefaults.standard.string(forKey: AppConstants.claudeSidecarURLKey) ?? "http://127.0.0.1:8765"
+            codexAgentSidecarURL = UserDefaults.standard.string(forKey: AppConstants.codexAgentSidecarURLKey) ?? "http://127.0.0.1:8775"
+            embeddingGatewayURL = UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingGatewayBaseURLKey) ?? OpenAIEmbeddingModelCatalog.defaultBaseURL
+            embeddingGatewayAPIKey = UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingGatewayAPIKeyKey) ?? OpenAIEmbeddingModelCatalog.defaultAPIKey
         }
     }
 
     private func loadAPIKey(for backend: AIBackendType) {
         apiKeyInput = serviceManager.getAPIKey(for: backend) ?? ""
+    }
+
+    private func startCodexSidecar() {
+        guard let backend = serviceManager.createBackend() else {
+            return
+        }
+
+        testStatus = .testing
+        Task {
+            do {
+                try await backend.preflight()
+                testStatus = .success("Sidecar ready")
+            } catch let error as AIError {
+                testStatus = .failure(error.errorDescription ?? error.localizedDescription)
+            } catch {
+                testStatus = .failure(error.localizedDescription)
+            }
+        }
     }
 
     private func runTest() {
@@ -198,6 +303,7 @@ struct AISettingsView: View {
         Task {
             do {
                 let startTime = Date()
+                try await backend.preflight()
                 let response = try await backend.summarizeConcept(
                     "machine learning",
                     sourceText: "Machine learning is a subfield of artificial intelligence."
@@ -208,8 +314,9 @@ struct AISettingsView: View {
                 log.info("[Test] SUCCESS in \(elapsedStr): \(response.prefix(100))")
                 testStatus = .success("OK (\(elapsedStr)) — \(response.prefix(60))...")
             } catch let error as AIError {
-                log.error("[Test] FAILED: \(error.localizedDescription ?? "unknown")")
-                testStatus = .failure(error.localizedDescription ?? "Unknown AI error")
+                let message = error.errorDescription ?? error.localizedDescription
+                log.error("[Test] FAILED: \(message)")
+                testStatus = .failure(message)
             } catch {
                 log.error("[Test] FAILED: \(error.localizedDescription)")
                 testStatus = .failure(error.localizedDescription)

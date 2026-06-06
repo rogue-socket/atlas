@@ -1,0 +1,85 @@
+{
+  "id": "pp1-hybrid-adjudication-v1",
+  "corpus": "pp1 Harvest Hearth",
+  "created": "2026-06-02",
+  "notes": "Seed labels from the 2026-06-02 BGE + Relationship Discovery audit. These labels are intentionally small and should be expanded before promoting the preset to default.",
+  "labels": [
+    {
+      "aLabel": "Revenue share",
+      "bLabel": "E-commerce revenue share",
+      "expectedVerdict": "merge",
+      "rationale": "Same revenue-channel metric at different specificity."
+    },
+    {
+      "aLabel": "Hardwood sourcing",
+      "bLabel": "FSC wood sourcing",
+      "expectedVerdict": "merge",
+      "rationale": "Same sourcing practice in this corpus."
+    },
+    {
+      "aLabel": "Furniture assortment",
+      "bLabel": "FSC wood sourcing",
+      "expectedVerdict": "keep",
+      "rationale": "Adjacent product/sourcing topics, not identity or a typed structural relation."
+    },
+    {
+      "aLabel": "Repair and event workshops",
+      "bLabel": "Repair workshops",
+      "expectedVerdict": "instance_of",
+      "expectedDirection": "ba",
+      "rationale": "Repair workshops are a specific part of the broader repair/event workshop programming."
+    },
+    {
+      "aLabel": "Revenue share",
+      "bLabel": "Kitchen revenue share",
+      "expectedVerdict": "instance_of",
+      "expectedDirection": "ba",
+      "rationale": "Kitchen revenue share is a specific channel/category share under revenue share."
+    },
+    {
+      "aLabel": "Revenue share",
+      "bLabel": "Fiscal 2025 revenue",
+      "expectedVerdict": "attribute_of",
+      "expectedDirection": "ab",
+      "rationale": "Revenue share is a metric/attribute of the fiscal revenue object."
+    },
+    {
+      "aLabel": "Portland distribution center",
+      "bLabel": "Portland headquarters",
+      "expectedVerdict": "keep",
+      "rationale": "Both are Portland facilities but distinct real-world sites."
+    },
+    {
+      "aLabel": "US and Canada retail presence",
+      "bLabel": "US and Canada shipping coverage",
+      "expectedVerdict": "keep",
+      "rationale": "Retail footprint and shipping coverage are related operations, but neither contains or attributes the other."
+    },
+    {
+      "aLabel": "Distribution and sourcing footprint",
+      "bLabel": "Supplier network scale",
+      "expectedVerdict": "instance_of",
+      "expectedDirection": "ba",
+      "rationale": "Supplier network scale is a specific dimension inside the broader sourcing/distribution footprint."
+    },
+    {
+      "aLabel": "Distribution and sourcing footprint",
+      "bLabel": "Distribution and replenishment operations",
+      "expectedVerdict": "process_for",
+      "expectedDirection": "ba",
+      "rationale": "Distribution/replenishment is an operational process serving the footprint."
+    },
+    {
+      "aLabel": "Books selection",
+      "bLabel": "In-store service and programming",
+      "expectedVerdict": "keep",
+      "rationale": "Retail assortment and programming are adjacent, not a structural typed relation."
+    },
+    {
+      "aLabel": "Worksite options",
+      "bLabel": "Customer service operations",
+      "expectedVerdict": "keep",
+      "rationale": "Worksite policy and customer service operations are separate organizational topics."
+    }
+  ]
+}

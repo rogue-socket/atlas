@@ -42,7 +42,7 @@ struct AppConstants {
     // MARK: - Recent Files
     /// Maximum number of recent files to store
     static let maxRecentFiles: Int = 20
-    
+
     // MARK: - Annotations
     /// Default text annotation width
     static let textAnnotationWidth: CGFloat = 200
@@ -56,7 +56,7 @@ struct AppConstants {
     static let annotationFontSize: CGFloat = 12
     /// Vertical offset for text annotations (from click point)
     static let textAnnotationVerticalOffset: CGFloat = 20
-    
+
     // MARK: - UI
     /// Default notification duration in seconds
     static let notificationDuration: Double = 3.0
@@ -72,7 +72,7 @@ struct AppConstants {
     static let minWindowWidth: CGFloat = 800
     /// Minimum window height
     static let minWindowHeight: CGFloat = 600
-    
+
     // MARK: - Zoom
     /// Zoom in/out multiplier
     static let zoomMultiplier: CGFloat = 1.2
@@ -114,12 +114,28 @@ struct AppConstants {
     static let ollamaBaseURLKey = "atlas.ollama.baseURL"
     /// UserDefaults key for the Claude sidecar base URL override
     static let claudeSidecarURLKey = "atlas.claudeSidecar.baseURL"
+    /// UserDefaults key for the Codex Agent sidecar base URL override
+    static let codexAgentSidecarURLKey = "atlas.codexAgentSidecar.baseURL"
+    /// UserDefaults key for max prior-doc lines included in SCE extraction prompts
+    static let scePriorHeaderMaxLinesKey = "atlas.sce.priorHeaderMaxLines"
+    /// UserDefaults key for the ETR embedding backend type (nil = ETR disabled)
+    static let aiEmbeddingBackendTypeKey = "atlas.ai.embedding.backendType"
+    /// UserDefaults key for the ETR embedding model identifier
+    static let aiEmbeddingModelKey = "atlas.ai.embedding.model"
+    /// UserDefaults key for the LAN OpenAI-compatible embedding gateway URL
+    static let aiEmbeddingGatewayBaseURLKey = "atlas.ai.embedding.gateway.baseURL"
+    /// UserDefaults key for the LAN OpenAI-compatible embedding gateway API key placeholder
+    static let aiEmbeddingGatewayAPIKeyKey = "atlas.ai.embedding.gateway.apiKey"
+    /// UserDefaults key for the Hybrid resolver threshold preset
+    static let aiResolverPresetKey = "atlas.ai.resolver.preset"
 }
 
 // MARK: - Notification Names
 
 extension Notification.Name {
     static let openNewDocument = Notification.Name("OpenNewDocument")
+    /// Finder / `open -a pdf_app1 file.pdf` handoff — URLs are security-scoped.
+    static let openDocumentsFromURLs = Notification.Name("OpenDocumentsFromURLs")
     static let openDocumentInNewWindow = Notification.Name("OpenDocumentInNewWindow")
     static let navigateToPage = Notification.Name("NavigateToPage")
     static let closeCurrentTab = Notification.Name("CloseCurrentTab")

@@ -137,7 +137,7 @@ struct PDFViewerView: View {
     @StateObject private var undoRedoManager = UndoRedoManager()
     @StateObject private var searchManager = PDFSearchManager()
     @StateObject private var bookmarkManager = BookmarkManager()
-    @State private var pdfView = HighlightingPDFView()
+    @StateObject private var pdfViewReference = PDFViewReference()
     @State private var currentPage: PDFPage?
     @State private var isSaving = false
     @State private var autoSaveDebouncer = Debouncer(delay: 1.0)
@@ -168,25 +168,34 @@ struct PDFViewerView: View {
     @State private var textAnnotationContent = ""
     @State private var textAnnotationPoint: CGPoint = .zero
 
+    private var pdfView: HighlightingPDFView? {
+        pdfViewReference.pdfView
+    }
 
     var body: some View {
         HStack(spacing: 0) {
             if let panel = sidebarPanel {
                 switch panel {
                 case .thumbnails:
-                    PDFThumbnailViewRepresentable(pdfView: pdfView)
-                        .frame(width: 140)
+                    if let pdfView {
+                        PDFThumbnailViewRepresentable(pdfView: pdfView)
+                            .frame(width: 140)
+                    }
                 case .outline:
-                    PDFOutlinePanel(pdfDocument: pdfDocument, pdfView: pdfView)
-                        .frame(width: 220)
+                    if let pdfView {
+                        PDFOutlinePanel(pdfDocument: pdfDocument, pdfView: pdfView)
+                            .frame(width: 220)
+                    }
                 case .annotations:
-                    AnnotationListPanel(
-                        pdfDocument: pdfDocument,
-                        pdfView: pdfView,
-                        undoRedoManager: undoRedoManager,
-                        onAnnotationsChanged: { scheduleAutoSave() }
-                    )
-                    .frame(width: 250)
+                    if let pdfView {
+                        AnnotationListPanel(
+                            pdfDocument: pdfDocument,
+                            pdfView: pdfView,
+                            undoRedoManager: undoRedoManager,
+                            onAnnotationsChanged: { scheduleAutoSave() }
+                        )
+                        .frame(width: 250)
+                    }
                 case .projectCorrelations:
                     EmptyView()
                 }
@@ -195,7 +204,7 @@ struct PDFViewerView: View {
 
             ZStack {
                 PDFViewRepresentable(
-                    pdfView: $pdfView,
+                    pdfViewReference: pdfViewReference,
                     pdfDocument: pdfDocument,
                     annotationMode: annotationMode,
                     highlightColor: highlightColor,
@@ -262,7 +271,14 @@ struct PDFViewerView: View {
         .onChange(of: isFullscreen) { _, new in toolbarBridge.isFullscreen = new }
         .onChange(of: isSaving) { _, new in toolbarBridge.isSaving = new }
         .onChange(of: bookmarkManager.bookmarks) { _, _ in refreshToolbarBridge() }
-        .onReceive(NotificationCenter.default.publisher(for: .PDFViewScaleChanged, object: pdfView)) { _ in
+        .onChange(of: pdfViewReference.revision) { _, _ in
+            setupPDFView()
+            refreshToolbarBridge()
+            syncZoomText()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .PDFViewScaleChanged)) { notification in
+            guard let changedView = notification.object as? PDFView,
+                  changedView === pdfView else { return }
             syncZoomText()
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToPage)) { notification in
@@ -279,7 +295,8 @@ struct PDFViewerView: View {
                 }
 
                 goToPage(pageIndex)
-                guard let document = pdfView.document,
+                guard let pdfView,
+                      let document = pdfView.document,
                       pageIndex < document.pageCount,
                       let page = document.page(at: pageIndex) else { return }
 
@@ -327,7 +344,7 @@ struct PDFViewerView: View {
             )
         }
         .overlay(alignment: .top) {
-            if showingSearch {
+            if showingSearch, let pdfView {
                 SearchBarView(
                     searchManager: searchManager,
                     pdfView: pdfView,
@@ -365,7 +382,7 @@ struct PDFViewerView: View {
 
     private func goToPage(_ index: Int) {
         let clamped = max(0, min(index, pdfDocument.pageCount - 1))
-        guard let page = pdfDocument.page(at: clamped) else { return }
+        guard let pdfView, let page = pdfDocument.page(at: clamped) else { return }
         pdfView.go(to: page)
         currentPage = page
         pageNumberText = "\(clamped + 1)"
@@ -374,8 +391,8 @@ struct PDFViewerView: View {
     private func refreshToolbarBridge() {
         toolbarBridge.currentPageIndex = currentPageIndex
         toolbarBridge.pageCount = pdfDocument.pageCount
-        toolbarBridge.canGoBack = pdfView.canGoBack
-        toolbarBridge.canGoForward = pdfView.canGoForward
+        toolbarBridge.canGoBack = pdfView?.canGoBack ?? false
+        toolbarBridge.canGoForward = pdfView?.canGoForward ?? false
         toolbarBridge.canUndo = undoRedoManager.canUndo
         toolbarBridge.canRedo = undoRedoManager.canRedo
         toolbarBridge.bookmarks = bookmarkManager.bookmarks
@@ -418,9 +435,6 @@ struct PDFViewerView: View {
     }
 
     private func setupPDFView() {
-        pdfView.document = pdfDocument
-        pdfView.displayMode = .singlePageContinuous
-        pdfView.displayDirection = .vertical
         // Initial fit is owned by PDFViewRepresentable's frame-change observer,
         // which fires deterministically when AppKit lays out the view. Calling
         // here directly handles the re-appear path (tab switch back) where
@@ -431,6 +445,7 @@ struct PDFViewerView: View {
     }
 
     private func fitEntirePage() {
+        guard let pdfView else { return }
         guard let page = pdfView.document?.page(at: 0) else {
             pdfView.autoScales = true
             return
@@ -449,30 +464,34 @@ struct PDFViewerView: View {
     
     
     private func goBack() {
-        pdfView.goToPreviousPage(nil)
+        pdfView?.goToPreviousPage(nil)
     }
     
     private func goForward() {
-        pdfView.goToNextPage(nil)
+        pdfView?.goToNextPage(nil)
     }
 
     private func goToFirstPage() {
+        guard let pdfView else { return }
         pdfView.goToFirstPage(nil)
         currentPage = pdfView.currentPage
         pageNumberText = "\(currentPageIndex + 1)"
     }
 
     private func goToLastPage() {
+        guard let pdfView else { return }
         pdfView.goToLastPage(nil)
         currentPage = pdfView.currentPage
         pageNumberText = "\(currentPageIndex + 1)"
     }
     
     private func zoomIn() {
+        guard let pdfView else { return }
         pdfView.scaleFactor *= AppConstants.zoomMultiplier
     }
     
     private func zoomOut() {
+        guard let pdfView else { return }
         pdfView.scaleFactor /= AppConstants.zoomMultiplier
     }
     
@@ -481,7 +500,7 @@ struct PDFViewerView: View {
     }
 
     private func fitToWidth() {
-        guard let page = pdfView.currentPage else { return }
+        guard let pdfView, let page = pdfView.currentPage else { return }
         let pageWidth = page.bounds(for: .mediaBox).width
         let viewWidth = pdfView.bounds.width - 20
         guard pageWidth > 0 else { return }
@@ -489,11 +508,19 @@ struct PDFViewerView: View {
     }
 
     private func syncZoomText() {
+        guard let pdfView else {
+            zoomText = "100%"
+            return
+        }
         let pct = Int(pdfView.scaleFactor * 100)
         zoomText = "\(pct)%"
     }
 
     private func applyZoomFromField() {
+        guard let pdfView else {
+            syncZoomText()
+            return
+        }
         let cleaned = zoomText.replacingOccurrences(of: "%", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard let value = Double(cleaned) else {
             syncZoomText()
@@ -506,12 +533,13 @@ struct PDFViewerView: View {
 
     private func setDisplayMode(_ mode: PDFDisplayMode) {
         pdfDisplayMode = mode
+        guard let pdfView else { return }
         pdfView.displayMode = mode
         pdfView.displaysAsBook = (mode == .twoUp || mode == .twoUpContinuous)
     }
 
     private func rotatePageCW() {
-        guard let page = pdfView.currentPage else { return }
+        guard let pdfView, let page = pdfView.currentPage else { return }
         let oldRotation = page.rotation
         let newRotation = (oldRotation + 90) % 360
         page.rotation = newRotation
@@ -520,7 +548,7 @@ struct PDFViewerView: View {
     }
 
     private func rotatePageCCW() {
-        guard let page = pdfView.currentPage else { return }
+        guard let pdfView, let page = pdfView.currentPage else { return }
         let oldRotation = page.rotation
         let newRotation = (oldRotation + 270) % 360
         page.rotation = newRotation
@@ -530,6 +558,7 @@ struct PDFViewerView: View {
 
     private func setReadingMode(_ mode: ReadingMode) {
         readingMode = mode
+        guard let pdfView else { return }
         // Dark mode uses layer filter
         if mode == .dark {
             pdfView.wantsLayer = true
@@ -594,7 +623,7 @@ struct PDFViewerView: View {
     }
     
     private func addTextAnnotation(at point: CGPoint, text: String) {
-        guard let page = pdfView.currentPage else {
+        guard let pdfView, let page = pdfView.currentPage else {
             notificationManager.showError("Cannot add annotation: No page selected")
             return
         }

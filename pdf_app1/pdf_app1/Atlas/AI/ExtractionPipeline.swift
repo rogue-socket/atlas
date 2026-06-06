@@ -12,6 +12,16 @@ import Observation
 import os.log
 
 private let log = AtlasLogger.pipeline
+private let defaultSCEPriorDocsHeaderMaxLines = 120
+private let edgeProposalCandidateLimit = 120
+
+struct RelationshipEdgeInsertionResult: Equatable {
+    var added = 0
+    var missingEndpoint = 0
+    var containment = 0
+    var duplicate = 0
+    var selfLoop = 0
+}
 
 @Observable
 class ExtractionPipeline {
@@ -31,6 +41,31 @@ class ExtractionPipeline {
     private let textExtractor = TextExtractor()
     private let layoutAnalyzer = LayoutAnalyzer()
     private let deepPipeline = DeepExtractionPipeline()
+
+    static var scePriorDocsHeaderMaxLines: Int {
+        scePriorDocsHeaderMaxLines(
+            environment: ProcessInfo.processInfo.environment,
+            defaults: .standard
+        )
+    }
+
+    static func scePriorDocsHeaderMaxLines(
+        environment: [String: String],
+        defaults: UserDefaults
+    ) -> Int {
+        if let envValue = environment["ATLAS_SCE_PRIOR_HEADER_MAX_LINES"],
+           let parsed = parseSCEPriorDocsHeaderMaxLines(envValue) {
+            return parsed
+        }
+        let stored = defaults.integer(forKey: AppConstants.scePriorHeaderMaxLinesKey)
+        return stored > 0 ? stored : defaultSCEPriorDocsHeaderMaxLines
+    }
+
+    private static func parseSCEPriorDocsHeaderMaxLines(_ raw: String) -> Int? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Int(trimmed), value > 0 else { return nil }
+        return value
+    }
     private let batchSize = 5
 
     func cancel() {
@@ -115,10 +150,35 @@ class ExtractionPipeline {
 
         totalPages = pageRange.count
 
+        // SCE: detect doc-N>1 by checking for any node anchored in another doc.
+        // The cumulative-state header is built once per doc against the live graph
+        // (which carries the prior docs' nodes) and passed to every batch.
+        let hasPriorDocNodes = graph.allNodes.contains { node in
+            node.sourceAnchors.contains { $0.documentURL != documentURL }
+        }
+        let priorDocsHeaderLineCount: Int? = hasPriorDocNodes
+            ? PromptTemplates.cumulativeStateHeader(priorDocsGraph: graph, currentDocURL: documentURL)
+                .split(separator: "\n")
+                .count
+            : nil
+        let priorDocsLabelMap: [String: String] = hasPriorDocNodes
+            ? PromptTemplates.priorDocsLabelMap(graph: graph, currentDocURL: documentURL)
+            : [:]
+        if let lineCount = priorDocsHeaderLineCount {
+            log.info("[SCE] doc=\(documentURL.lastPathComponent, privacy: .public) prior-docs-header: \(lineCount) line(s), cap=\(Self.scePriorDocsHeaderMaxLines), label-map: \(priorDocsLabelMap.count) entries")
+        }
+
+        // Cross-doc reuse via `graph.node(matching:)` (exact-lowercase label
+        // match) only fires when batches write directly to the live graph;
+        // an intermediate buffer would shadow the live labelIndex, so a node
+        // the LLM intentionally reuses by label would land as a duplicate
+        // UUID on UUID-keyed merge. existingLabels feeds the LLM the
+        // already-known set (cumulative across all docs), the same shape
+        // the SCE prompt header is enriching.
         var existingLabels = graph.allNodes.map { $0.label }
         let outlineEntries = layoutAnalyzer.extractOutline(from: document)
         let outlineHints = outlineEntries.map { $0.title }
-        log.info("Outline entries: \(outlineEntries.count), existing concepts: \(existingLabels.count)")
+        log.info("Outline entries: \(outlineEntries.count), existing labels: \(existingLabels.count)")
 
         var pageIndex = pageRange.lowerBound
         var batchNumber = 0
@@ -146,9 +206,12 @@ class ExtractionPipeline {
                     graph: graph,
                     backend: backend,
                     existingLabels: existingLabels,
-                    outlineHints: outlineHints
+                    outlineHints: outlineHints,
+                    priorDocsHeaderLineCount: priorDocsHeaderLineCount,
+                    priorDocsLabelMap: priorDocsLabelMap
                 )
-                // Update existing labels for next batch so the LLM doesn't re-extract
+                let promptTokens = backend.lastResponsePromptTokens.map(String.init) ?? "?"
+                log.info("[SCE] doc=\(documentURL.lastPathComponent, privacy: .public) batch=\(batchNumber) prompt_tokens=\(promptTokens, privacy: .public)")
                 existingLabels = graph.allNodes.map { $0.label }
                 log.info("Batch \(batchNumber) done. Graph now has \(graph.nodeCount) nodes, \(graph.edgeCount) edges")
             } catch is CancellationError {
@@ -197,6 +260,13 @@ class ExtractionPipeline {
             log.info("[Pipeline] Synthesized \(synthesized) chapter-level aggregated edge(s)")
         }
 
+        // Final save now that chapter / document / L2 enrichments are in the
+        // live graph. processBatch's per-batch save only captures concept +
+        // entity state (encoding happens synchronously at call time), so
+        // without this trailing call the per-doc file would never include
+        // chapters or the document-summary node.
+        GraphStore.shared.scheduleSave(graph, for: documentURL)
+
         isProcessing = false
         statusMessage = "Done — \(graph.nodeCount) concepts extracted"
         graph.documentProcessingState[documentURL] = .complete
@@ -232,6 +302,66 @@ class ExtractionPipeline {
 
     // MARK: - Batch Processing
 
+    /// Per-claim SCE diagnostic. Logs the raw `prior_label_match` / `match_kind`
+    /// the LLM emitted and how `resolveMatchAction` resolved it — so a run log
+    /// distinguishes "LLM chose same_entity" (match_kind same_entity/nil) from
+    /// typed-edge claims, and surfaces claims that failed to resolve (label
+    /// drift). Absence of any of these lines means the LLM made no cross-doc
+    /// claims; absence of the per-doc `match_summary` means SCE never ran.
+    private func logSCEMatchClaim(
+        kind: String,
+        label: String,
+        priorLabelMatch: String?,
+        matchKind: String?,
+        action: PromptTemplates.SCEMatchAction
+    ) {
+        let resolved: String
+        switch action {
+        case .noMatch:
+            resolved = "UNRESOLVED (claimed label not in prior-docs map, or unknown kind)"
+        case .mergeByRename(let canonical):
+            resolved = "merge → \"\(canonical)\""
+        case .typedEdge(let canonical, let edgeType):
+            resolved = "typed-edge \(edgeType.rawValue) → \"\(canonical)\""
+        }
+        log.info("[SCE] \(kind, privacy: .public) resolveMatchAction: label=\"\(label, privacy: .public)\" prior_label_match=\"\(priorLabelMatch ?? "nil", privacy: .public)\" match_kind=\"\(matchKind ?? "nil", privacy: .public)\" → \(resolved, privacy: .public)")
+    }
+
+    @discardableResult
+    private func applySCETypedEdge(
+        graph: KnowledgeGraph,
+        sourceNodeID: UUID,
+        priorNode: ConceptNode,
+        currentLabel: String,
+        currentLevel: NodeLevel,
+        currentSummary: String?,
+        edgeType: EdgeType,
+        confidence: Double,
+        kind: String
+    ) -> Bool {
+        guard PromptTemplates.isValidSCETypedEdgeDirection(
+            currentLabel: currentLabel,
+            currentLevel: currentLevel,
+            currentSummary: currentSummary,
+            priorLabel: priorNode.label,
+            priorLevel: priorNode.level,
+            priorSummary: priorNode.summary
+        ) else {
+            log.info("[SCE] \(kind, privacy: .public) typed-edge rejected (direction): \"\(currentLabel, privacy: .public)\" -[\(edgeType.rawValue, privacy: .public)]→ \"\(priorNode.label, privacy: .public)\"")
+            return false
+        }
+
+        let edge = GraphEdge(
+            sourceNodeID: sourceNodeID,
+            targetNodeID: priorNode.id,
+            type: edgeType,
+            confidence: confidence
+        )
+        graph.addEdge(edge)
+        log.info("[SCE] \(kind, privacy: .public) typed-edge: \"\(currentLabel, privacy: .public)\" -[\(edgeType.rawValue, privacy: .public)]→ \"\(priorNode.label, privacy: .public)\"")
+        return true
+    }
+
     private func processBatch(
         document: PDFDocument,
         documentURL: URL,
@@ -239,7 +369,9 @@ class ExtractionPipeline {
         graph: KnowledgeGraph,
         backend: any AtlasModel,
         existingLabels: [String],
-        outlineHints: [String]
+        outlineHints: [String],
+        priorDocsHeaderLineCount: Int? = nil,
+        priorDocsLabelMap: [String: String] = [:]
     ) async throws {
         // Step 1: Extract text
         let pageResults = textExtractor.extractPages(from: document, pageRange: pageRange)
@@ -301,14 +433,28 @@ class ExtractionPipeline {
             documentTitle: documentURL.lastPathComponent,
             pageRange: pageRange,
             existingConcepts: existingLabels,
-            outlineHints: outlineHints
+            outlineHints: outlineHints,
+            priorDocsContext: priorDocsHeaderLineCount == nil ? nil : PromptTemplates.cumulativeStateHeader(
+                priorDocsGraph: graph,
+                currentDocURL: documentURL,
+                relevanceText: contextText,
+                maxLines: Self.scePriorDocsHeaderMaxLines
+            ),
+            priorDocsLabelMap: priorDocsLabelMap
         )
+        if let priorDocsHeaderLineCount {
+            let effectiveLineCount = context.priorDocsContext?.split(separator: "\n").count ?? 0
+            if effectiveLineCount < priorDocsHeaderLineCount {
+                log.info("[SCE] doc=\(documentURL.lastPathComponent, privacy: .public) pages=\(pageRange.lowerBound + 1)-\(pageRange.upperBound) prior-docs-header-filtered: \(effectiveLineCount)/\(priorDocsHeaderLineCount) line(s)")
+            }
+        }
 
         // Step 4: AI concept extraction (hierarchical)
         log.info("[Step 4] Sending to AI for hierarchical concept extraction...")
-        let rawConcepts: [RawConcept]
+        let extraction: ExtractionResponse
         do {
-            rawConcepts = try await backend.extractConcepts(from: contextText, context: context)
+            extraction = try await backend.extractConceptGraph(from: contextText, context: context)
+            let rawConcepts = extraction.concepts
             log.info("[Step 4] AI returned \(rawConcepts.count) raw concepts")
             for (i, c) in rawConcepts.enumerated() {
                 let entityCount = c.entities?.count ?? 0
@@ -318,6 +464,7 @@ class ExtractionPipeline {
             log.error("[Step 4] AI extraction failed: \(error)")
             throw error
         }
+        let rawConcepts = extraction.concepts
 
         if rawConcepts.isEmpty {
             log.warning("[Step 4] AI returned 0 concepts — check prompt or model output")
@@ -327,6 +474,12 @@ class ExtractionPipeline {
         // Step 5: Anchor resolution + hierarchical graph integration
         var anchored = 0
         var rejected = 0
+        // SCE Option D/E telemetry — tracked at batch level
+        var scePriorMatchClaims = 0       // LLM populated prior_label_match
+        var scePriorMatchRenames = 0      // valid claim with same_entity → rename
+        var scePriorMatchMerges = 0       // same_entity claim landed on an existing node
+        var scePriorMatchTypedEdges = 0   // valid claim with instance_of/attribute_of/process_for → typed edge
+        var scePriorMatchTypedEdgesRejectedDirection = 0
 
         for rawConcept in rawConcepts {
             // Resolve concept-level node
@@ -348,11 +501,37 @@ class ExtractionPipeline {
             // This prevents orphan entities when the LLM returns a flat list.
             let effectiveLevel: NodeLevel = .concept
 
-            // Check for existing concept node with same label
-            let existingNode = graph.node(matching: rawConcept.label)
+            // SCE Option D+E: resolve action from (prior_label_match, match_kind).
+            let conceptAction = PromptTemplates.resolveMatchAction(
+                priorLabelMatch: rawConcept.priorLabelMatch,
+                matchKind: rawConcept.matchKind,
+                priorDocsLabelMap: priorDocsLabelMap
+            )
+            if rawConcept.priorLabelMatch != nil {
+                scePriorMatchClaims += 1
+                logSCEMatchClaim(kind: "concept", label: rawConcept.label,
+                                 priorLabelMatch: rawConcept.priorLabelMatch,
+                                 matchKind: rawConcept.matchKind, action: conceptAction)
+            }
+            let conceptLookupLabel: String
+            switch conceptAction {
+            case .mergeByRename(let canonical):
+                conceptLookupLabel = canonical
+                if canonical.lowercased() != rawConcept.label.lowercased() {
+                    scePriorMatchRenames += 1
+                    log.info("[SCE] concept rename: \"\(rawConcept.label, privacy: .public)\" → \"\(canonical, privacy: .public)\" via same_entity")
+                }
+            case .typedEdge, .noMatch:
+                conceptLookupLabel = rawConcept.label
+            }
+
+            let existingNode = graph.node(matching: conceptLookupLabel)
             let conceptNodeID: UUID
 
             if var existing = existingNode {
+                if case .mergeByRename = conceptAction {
+                    scePriorMatchMerges += 1
+                }
                 existing.sourceAnchors.append(conceptAnchor)
                 if let summary = rawConcept.summary, existing.summary == nil {
                     existing.summary = summary
@@ -364,7 +543,7 @@ class ExtractionPipeline {
             } else {
                 let colorIndex = effectiveLevel == .concept ? graph.nextHighlightColorIndex() : nil
                 let node = ConceptNode(
-                    label: rawConcept.label,
+                    label: conceptLookupLabel,
                     type: conceptType,
                     summary: rawConcept.summary,
                     sourceAnchors: [conceptAnchor],
@@ -375,6 +554,28 @@ class ExtractionPipeline {
                 graph.addNode(node)
                 conceptNodeID = node.id
                 log.debug("[Step 5] Added concept: \"\(node.label)\"")
+            }
+
+            // SCE Option E typed-edge: when match_kind classifies the new node
+            // as a non-equivalence relationship to a prior canonical, record
+            // it as a typed cross-doc edge instead of merging.
+            if case .typedEdge(let canonical, let edgeType) = conceptAction,
+               let priorNode = graph.node(matching: canonical) {
+                if applySCETypedEdge(
+                   graph: graph,
+                   sourceNodeID: conceptNodeID,
+                   priorNode: priorNode,
+                   currentLabel: rawConcept.label,
+                   currentLevel: effectiveLevel,
+                   currentSummary: rawConcept.summary,
+                   edgeType: edgeType,
+                   confidence: rawConcept.confidence ?? 0.7,
+                   kind: "concept"
+               ) {
+                    scePriorMatchTypedEdges += 1
+                } else {
+                    scePriorMatchTypedEdgesRejectedDirection += 1
+                }
             }
 
             // Note: `rawConcept.subtopicOf` is ignored under the 4-level model.
@@ -400,11 +601,37 @@ class ExtractionPipeline {
 
                 let entityType = rawEntity.type.asConceptType(default: .definition)
 
-                // Check if entity already exists
-                let existingEntity = graph.node(matching: rawEntity.label)
+                // SCE Option D+E: same action-based branching for entities.
+                let entityAction = PromptTemplates.resolveMatchAction(
+                    priorLabelMatch: rawEntity.priorLabelMatch,
+                    matchKind: rawEntity.matchKind,
+                    priorDocsLabelMap: priorDocsLabelMap
+                )
+                if rawEntity.priorLabelMatch != nil {
+                    scePriorMatchClaims += 1
+                    logSCEMatchClaim(kind: "entity", label: rawEntity.label,
+                                     priorLabelMatch: rawEntity.priorLabelMatch,
+                                     matchKind: rawEntity.matchKind, action: entityAction)
+                }
+                let entityLookupLabel: String
+                switch entityAction {
+                case .mergeByRename(let canonical):
+                    entityLookupLabel = canonical
+                    if canonical.lowercased() != rawEntity.label.lowercased() {
+                        scePriorMatchRenames += 1
+                        log.info("[SCE] entity rename: \"\(rawEntity.label, privacy: .public)\" → \"\(canonical, privacy: .public)\" via same_entity")
+                    }
+                case .typedEdge, .noMatch:
+                    entityLookupLabel = rawEntity.label
+                }
+
+                let existingEntity = graph.node(matching: entityLookupLabel)
 
                 let entityNodeID: UUID
                 if var existing = existingEntity {
+                    if case .mergeByRename = entityAction {
+                        scePriorMatchMerges += 1
+                    }
                     existing.sourceAnchors.append(entityAnchor)
                     if let summary = rawEntity.summary, existing.summary == nil {
                         existing.summary = summary
@@ -417,7 +644,7 @@ class ExtractionPipeline {
                     // Inherit highlight color from parent concept
                     let parentColor = graph.node(for: conceptNodeID)?.highlightColorIndex
                     let entity = ConceptNode(
-                        label: rawEntity.label,
+                        label: entityLookupLabel,
                         type: entityType,
                         summary: rawEntity.summary,
                         sourceAnchors: [entityAnchor],
@@ -428,6 +655,26 @@ class ExtractionPipeline {
                     graph.addNode(entity)
                     entityNodeID = entity.id
                     log.debug("[Step 5] Added entity: \"\(entity.label)\" under \"\(rawConcept.label)\"")
+                }
+
+                // SCE Option E typed-edge for entities.
+                if case .typedEdge(let canonical, let edgeType) = entityAction,
+                   let priorNode = graph.node(matching: canonical) {
+                    if applySCETypedEdge(
+                       graph: graph,
+                       sourceNodeID: entityNodeID,
+                       priorNode: priorNode,
+                       currentLabel: rawEntity.label,
+                       currentLevel: .entity,
+                       currentSummary: rawEntity.summary,
+                       edgeType: edgeType,
+                       confidence: rawEntity.confidence ?? 0.7,
+                       kind: "entity"
+                   ) {
+                        scePriorMatchTypedEdges += 1
+                    } else {
+                        scePriorMatchTypedEdgesRejectedDirection += 1
+                    }
                 }
 
                 // Ensure containsEntity edge exists (concept → entity).
@@ -448,49 +695,38 @@ class ExtractionPipeline {
             }
         }
         log.info("[Step 5] Anchor resolution: \(anchored) anchored, \(rejected) rejected")
+        if !priorDocsLabelMap.isEmpty {
+            log.info("[SCE] doc=\(documentURL.lastPathComponent, privacy: .public) pages=\(pageRange.lowerBound + 1)-\(pageRange.upperBound) match_summary: claims=\(scePriorMatchClaims) renames=\(scePriorMatchRenames) merges=\(scePriorMatchMerges) typed_edges=\(scePriorMatchTypedEdges) typed_rejected_direction=\(scePriorMatchTypedEdgesRejectedDirection)")
+        }
 
-        // Step 6: Edge proposal
-        let conceptLabels = graph.allNodes.map { $0.label }
-        if conceptLabels.count >= 2 {
-            log.info("[Step 6] Requesting edge proposals for \(conceptLabels.count) concepts...")
+        if !extraction.edges.isEmpty {
+            let result = Self.addRelationshipEdges(extraction.edges, to: graph)
+            log.info("[Step 5.5] extraction-response edges: added=\(result.added) missing_endpoint=\(result.missingEndpoint) containment=\(result.containment) duplicate=\(result.duplicate) self_loop=\(result.selfLoop) raw=\(extraction.edges.count)")
+        }
+
+        // Step 6: Relationship proposal over current-batch concept/entity
+        // candidates. Endpoints are constrained to exact labels so entity
+        // relationships can survive parser lookup without bloating the prompt
+        // with the full project graph.
+        let edgeCandidates = Self.edgeProposalCandidates(
+            graph: graph,
+            documentURL: documentURL,
+            pageRange: pageRange,
+            maxCount: edgeProposalCandidateLimit
+        )
+        if edgeCandidates.count >= 2 {
+            log.info("[Step 6] Requesting edge proposals for \(edgeCandidates.count) concept/entity candidates...")
             do {
-                let rawEdges = try await backend.proposeEdges(between: conceptLabels, context: contextText)
+                let rawEdges = try await backend.proposeEdges(between: edgeCandidates, context: contextText)
                 log.info("[Step 6] AI returned \(rawEdges.count) raw edges")
 
-                var added = 0
-                for rawEdge in rawEdges {
-                    guard let sourceNode = graph.node(matching: rawEdge.sourceLabel),
-                          let targetNode = graph.node(matching: rawEdge.targetLabel) else {
-                        log.debug("[Step 6] Edge skipped (node not found): \"\(rawEdge.sourceLabel)\" -> \"\(rawEdge.targetLabel)\"")
-                        continue
-                    }
-
-                    // Skip if edge already exists or if it's a containsEntity edge (those are implicit)
-                    let exists = graph.allEdges.contains {
-                        ($0.sourceNodeID == sourceNode.id && $0.targetNodeID == targetNode.id) ||
-                        ($0.sourceNodeID == targetNode.id && $0.targetNodeID == sourceNode.id && $0.type == .containsEntity)
-                    }
-                    guard !exists else { continue }
-
-                    let edgeType = rawEdge.type.asEdgeType()
-                    // Don't create duplicate containsEntity edges from LLM suggestions
-                    guard edgeType != .containsEntity else { continue }
-                    let edge = GraphEdge(
-                        sourceNodeID: sourceNode.id,
-                        targetNodeID: targetNode.id,
-                        type: edgeType,
-                        confidence: rawEdge.confidence ?? 0.7,
-                        label: rawEdge.linkingPhrase
-                    )
-                    graph.addEdge(edge)
-                    added += 1
-                }
-                log.info("[Step 6] Added \(added) edges to graph")
+                let result = Self.addRelationshipEdges(rawEdges, to: graph)
+                log.info("[Step 6] proposal edges: added=\(result.added) missing_endpoint=\(result.missingEndpoint) containment=\(result.containment) duplicate=\(result.duplicate) self_loop=\(result.selfLoop) raw=\(rawEdges.count)")
             } catch {
                 log.error("[Step 6] Edge proposal failed: \(error) — continuing without edges")
             }
         } else {
-            log.info("[Step 6] Skipped edge proposal (only \(conceptLabels.count) concepts)")
+            log.info("[Step 6] Skipped edge proposal (only \(edgeCandidates.count) candidates)")
         }
 
         // Step 7: Auto-save. `scheduleSave` scopes via `encodeSubgraph(for:)`
@@ -498,6 +734,87 @@ class ExtractionPipeline {
         // regardless of how big the in-memory project graph is.
         GraphStore.shared.scheduleSave(graph, for: documentURL)
         log.info("[Step 7] Scheduled per-document auto-save")
+    }
+
+    @discardableResult
+    static func addRelationshipEdges(_ rawEdges: [RawEdge], to graph: KnowledgeGraph) -> RelationshipEdgeInsertionResult {
+        var result = RelationshipEdgeInsertionResult()
+        for rawEdge in rawEdges {
+            let edgeType = rawEdge.type.asEdgeType()
+            guard !edgeType.isContainment else {
+                result.containment += 1
+                continue
+            }
+            guard let sourceNode = graph.node(matching: rawEdge.sourceLabel),
+                  let targetNode = graph.node(matching: rawEdge.targetLabel) else {
+                result.missingEndpoint += 1
+                continue
+            }
+            guard sourceNode.id != targetNode.id else {
+                result.selfLoop += 1
+                continue
+            }
+
+            let linkingPhrase = rawEdge.linkingPhrase?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalizedLabel = linkingPhrase?.isEmpty == false ? linkingPhrase : nil
+            let exists = graph.allEdges.contains { existing in
+                existing.sourceNodeID == sourceNode.id &&
+                    existing.targetNodeID == targetNode.id &&
+                    existing.type == edgeType &&
+                    (existing.label ?? "") == (normalizedLabel ?? "")
+            }
+            guard !exists else {
+                result.duplicate += 1
+                continue
+            }
+
+            let edge = GraphEdge(
+                sourceNodeID: sourceNode.id,
+                targetNodeID: targetNode.id,
+                type: edgeType,
+                confidence: rawEdge.confidence ?? 0.7,
+                label: normalizedLabel
+            )
+            graph.addEdge(edge)
+            result.added += 1
+        }
+        return result
+    }
+
+    static func edgeProposalCandidates(
+        graph: KnowledgeGraph,
+        documentURL: URL,
+        pageRange: Range<Int>,
+        maxCount: Int
+    ) -> [EdgeProposalCandidate] {
+        let nodes = graph.allNodes.filter { node in
+            (node.level == .concept || node.level == .entity) &&
+                node.sourceAnchors.contains { anchor in
+                    anchor.documentURL == documentURL && pageRange.contains(anchor.pageIndex)
+                }
+        }
+
+        let sorted = nodes.sorted {
+            if $0.level != $1.level { return $0.level == .concept }
+            return $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
+        }
+
+        return sorted.prefix(maxCount).map { node in
+            let parentLabel: String?
+            if node.level == .entity,
+               let parent = graph.parentConcept(of: node.id) {
+                parentLabel = parent.label
+            } else {
+                parentLabel = nil
+            }
+            return EdgeProposalCandidate(
+                label: node.label,
+                level: node.level,
+                type: node.type,
+                parentLabel: parentLabel,
+                summary: node.summary
+            )
+        }
     }
 
     // MARK: - Deep Mode Text Chunking

@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A1456DED2ED3B86500E65C44 /* PDFKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1456DEC2ED3B86500E65C44 /* PDFKit.framework */; };
+		CDA100022ED5000000E65C44 /* server.py in Resources */ = {isa = PBXBuildFile; fileRef = CDA100012ED5000000E65C44 /* server.py */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -24,6 +25,7 @@
 		A1456DD22ED3B74400E65C44 /* pdf_app1.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = pdf_app1.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1456DEC2ED3B86500E65C44 /* PDFKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = PDFKit.framework; path = System/Library/Frameworks/PDFKit.framework; sourceTree = SDKROOT; };
 		B2567E022ED4A00000E65C44 /* pdf_app1Tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = pdf_app1Tests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		CDA100012ED5000000E65C44 /* server.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; name = server.py; path = "../codex-agent-sidecar/server.py"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -63,6 +65,7 @@
 			children = (
 				A1456DD42ED3B74400E65C44 /* pdf_app1 */,
 				B2567E032ED4A00000E65C44 /* pdf_app1Tests */,
+				CDA100012ED5000000E65C44 /* server.py */,
 				A1456DEB2ED3B86500E65C44 /* Frameworks */,
 				A1456DD32ED3B74400E65C44 /* Products */,
 			);
@@ -176,6 +179,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CDA100022ED5000000E65C44 /* server.py in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

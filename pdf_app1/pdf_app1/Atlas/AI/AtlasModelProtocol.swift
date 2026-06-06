@@ -18,6 +18,25 @@ struct RawConcept: Codable {
     let level: String?       // "concept" or "entity" — nil for flat extraction
     let parentLabel: String? // label of parent concept (for entities)
     let entities: [RawConcept]? // nested entities when using hierarchical extraction
+    // SCE step 2 (Option D): the LLM declares a match against a prior-doc label
+    // listed in the prior-docs header. Parser-side label-rewrite uses this to
+    // bridge the textSpan-verbatim-vs-label-reuse tension surfaced in
+    // 2026-05-16 findings (label-copy instructions consistently lost to the
+    // current-doc textSpan anchor). Optional + tolerated absent in legacy
+    // responses (decoder uses defaultValue).
+    let priorLabelMatch: String?
+    // SCE step 3: the LLM categorizes the relationship between this concept
+    // and `priorLabelMatch`. `same_entity` → parser merges by rename. The
+    // typed-relation kinds (`instance_of`, `attribute_of`, `process_for`)
+    // become typed cross-doc edges instead of merges, preserving signal
+    // that prior label-only matching collapsed into precision losses.
+    let matchKind: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case label, type, summary, textSpan, confidence, level, parentLabel, entities
+        case priorLabelMatch = "prior_label_match"
+        case matchKind = "match_kind"
+    }
 }
 
 // MARK: - Raw Edge (from AI)
@@ -30,6 +49,14 @@ struct RawEdge: Codable {
     let linkingPhrase: String? // natural-language verb phrase for Novak-style edges
 }
 
+struct EdgeProposalCandidate: Hashable {
+    let label: String
+    let level: NodeLevel
+    let type: ConceptType
+    let parentLabel: String?
+    let summary: String?
+}
+
 // MARK: - Extraction Context
 
 struct ExtractionContext {
@@ -37,6 +64,31 @@ struct ExtractionContext {
     let pageRange: Range<Int>
     let existingConcepts: [String] // labels of concepts already extracted
     let outlineHints: [String] // TOC entries for structure hints
+    // SCE: cumulative-state header for cross-doc reuse. Pre-serialized natural-language
+    // listing of nodes anchored in prior docs (label · type · summary, one per line).
+    // nil for doc 1 in an SCE run and for all non-SCE runs.
+    let priorDocsContext: String?
+    // SCE step 3: lowercased → canonical map of prior-doc labels. Backend uses
+    // the canonical list to constrain `prior_label_match` as a Gemini enum
+    // (no hallucinations possible). Parser uses the map for case-insensitive
+    // lookup at rewrite time. Empty when no prior docs.
+    let priorDocsLabelMap: [String: String]
+
+    init(
+        documentTitle: String,
+        pageRange: Range<Int>,
+        existingConcepts: [String],
+        outlineHints: [String],
+        priorDocsContext: String? = nil,
+        priorDocsLabelMap: [String: String] = [:]
+    ) {
+        self.documentTitle = documentTitle
+        self.pageRange = pageRange
+        self.existingConcepts = existingConcepts
+        self.outlineHints = outlineHints
+        self.priorDocsContext = priorDocsContext
+        self.priorDocsLabelMap = priorDocsLabelMap
+    }
 }
 
 // MARK: - Answer With Citations
@@ -92,12 +144,21 @@ protocol AtlasModel: Sendable {
     var modelIdentifier: String { get }
     var isAvailable: Bool { get }
 
+    /// SCE telemetry: prompt token count from the most recent transport call.
+    /// Only Gemini implements this in v1 (per integration decision #4); other
+    /// backends return nil. Read immediately after `extractConcepts` to capture
+    /// the concept-extraction prompt's size; subsequent calls overwrite it.
+    var lastResponsePromptTokens: Int? { get }
+
+    func extractConceptGraph(from text: String, context: ExtractionContext) async throws -> ExtractionResponse
+
     /// Verify the backend is reachable before a run starts. Default: no-op.
     /// Backends with an out-of-process dependency (e.g. a local sidecar)
     /// override this to fail fast with an actionable error.
     func preflight() async throws
 
     func extractConcepts(from text: String, context: ExtractionContext) async throws -> [RawConcept]
+    func proposeEdges(between candidates: [EdgeProposalCandidate], context: String) async throws -> [RawEdge]
     func proposeEdges(between concepts: [String], context: String) async throws -> [RawEdge]
     func summarizeConcept(_ label: String, sourceText: String) async throws -> String
     func answerQuestion(_ question: String, context: String) async throws -> AnswerWithCitations
@@ -110,6 +171,17 @@ protocol AtlasModel: Sendable {
 }
 
 extension AtlasModel {
+    var lastResponsePromptTokens: Int? { nil }
+
+    func extractConceptGraph(from text: String, context: ExtractionContext) async throws -> ExtractionResponse {
+        let concepts = try await extractConcepts(from: text, context: context)
+        return ExtractionResponse(concepts: concepts, edges: [])
+    }
+
+    func proposeEdges(between candidates: [EdgeProposalCandidate], context: String) async throws -> [RawEdge] {
+        try await proposeEdges(between: candidates.map(\.label), context: context)
+    }
+
     func preflight() async throws { }
 
     func proposeMerges(
@@ -174,8 +246,18 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
     case gemini = "Gemini"
     case ollama = "Ollama"
     case claudeSubscription = "ClaudeSubscription"
+    case codexAgent = "CodexAgent"
+    case embeddingGateway = "EmbeddingGateway"
 
     var id: String { rawValue }
+
+    static var chatBackends: [AIBackendType] {
+        allCases.filter { $0 != .embeddingGateway }
+    }
+
+    static var embeddingBackends: [AIBackendType] {
+        [.gemini, .embeddingGateway]
+    }
 
     var displayName: String {
         switch self {
@@ -184,12 +266,14 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
         case .gemini: return "Google Gemini"
         case .ollama: return "Ollama (Local)"
         case .claudeSubscription: return "Claude (Subscription)"
+        case .codexAgent: return "Codex Agent"
+        case .embeddingGateway: return "LAN Embedding Gateway"
         }
     }
 
     var requiresAPIKey: Bool {
         switch self {
-        case .ollama, .claudeSubscription: return false
+        case .ollama, .claudeSubscription, .codexAgent, .embeddingGateway: return false
         default: return true
         }
     }
@@ -201,6 +285,8 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
         case .gemini: return "https://generativelanguage.googleapis.com"
         case .ollama: return "http://localhost:11434"
         case .claudeSubscription: return "http://127.0.0.1:8765"
+        case .codexAgent: return "http://127.0.0.1:8775"
+        case .embeddingGateway: return OpenAIEmbeddingModelCatalog.defaultBaseURL
         }
     }
 
@@ -211,7 +297,21 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
         case .gemini: return ["gemini-2.5-pro", "gemini-2.5-flash"]
         case .ollama: return ["llama3.1", "mistral", "qwen2.5"]
         case .claudeSubscription: return ["opus", "sonnet", "haiku"]
+        case .codexAgent: return ["gpt-5.3-codex-spark"]
+        case .embeddingGateway: return OpenAIEmbeddingModelCatalog.availableModels
         }
+    }
+
+    var availableEmbeddingModels: [String] {
+        switch self {
+        case .gemini: return ["gemini-embedding-2-preview", "gemini-embedding-001"]
+        case .embeddingGateway: return OpenAIEmbeddingModelCatalog.availableModels
+        default: return []
+        }
+    }
+
+    var defaultEmbeddingModel: String {
+        availableEmbeddingModels.first ?? ""
     }
 }
 

@@ -103,17 +103,17 @@ class DocumentManager: ObservableObject {
     
     // MARK: - Document Management
     @discardableResult
-    func openDocument(_ url: URL, projectID: UUID? = nil) -> OpenResult {
-        guard canAddDocument else {
-            log.warning("[DocManager] openDocument rejected: too many tabs (\(self.documents.count)/\(self.maxOpenDocuments))")
-            return .tooManyTabs
-        }
-
+    func openDocument(_ url: URL, projectID: UUID? = nil, securityScopedAccessStarted: Bool = false) -> OpenResult {
         // Check if already open
         if documents.contains(where: { $0.url == url }) {
             log.info("[DocManager] openDocument: already open, selecting \(url.lastPathComponent)")
             selectDocument(url: url)
             return .alreadyOpen
+        }
+
+        guard canAddDocument else {
+            log.warning("[DocManager] openDocument rejected: too many tabs (\(self.documents.count)/\(self.maxOpenDocuments))")
+            return .tooManyTabs
         }
 
         guard FileManager.default.isReadableFile(atPath: url.path) else {
@@ -125,7 +125,8 @@ class DocumentManager: ObservableObject {
             return .invalidPDF
         }
 
-        let pdfDoc = PDFDocumentItem(url: url, document: document, projectID: projectID)
+        let pdfDoc = PDFDocumentItem(url: url, document: document, projectID: projectID,
+                                     needsScopeRelease: securityScopedAccessStarted)
         documents.append(pdfDoc)
         selectedDocumentID = pdfDoc.id
         recentFilesManager.addRecentFile(url)
@@ -155,9 +156,7 @@ class DocumentManager: ObservableObject {
     
     func closeDocument(_ document: PDFDocumentItem) {
         log.info("[DocManager] closeDocument: \(document.url.lastPathComponent) (remaining \(self.documents.count - 1)/\(self.maxOpenDocuments))")
-        if document.needsScopeRelease {
-            scopeAccessor.stop(for: document.url)
-        }
+        releaseScopeIfNeeded(for: document)
         documents.removeAll { $0.id == document.id }
 
         // Update selection
@@ -167,6 +166,26 @@ class DocumentManager: ObservableObject {
 
         // Update comparison if needed
         updateComparisonAfterClosing(document)
+        saveOpenSession()
+    }
+
+    func closeOtherDocuments(keeping retainedDocument: PDFDocumentItem) {
+        guard documents.contains(where: { $0.id == retainedDocument.id }) else { return }
+
+        let closingDocuments = documents.filter { $0.id != retainedDocument.id }
+        guard !closingDocuments.isEmpty else {
+            selectedDocumentID = retainedDocument.id
+            return
+        }
+
+        log.info("[DocManager] closeOtherDocuments: keeping \(retainedDocument.url.lastPathComponent), closing \(closingDocuments.count) tab(s)")
+        for document in closingDocuments {
+            releaseScopeIfNeeded(for: document)
+            updateComparisonAfterClosing(document)
+        }
+
+        documents.removeAll { $0.id != retainedDocument.id }
+        selectedDocumentID = retainedDocument.id
         saveOpenSession()
     }
     
@@ -195,6 +214,12 @@ class DocumentManager: ObservableObject {
     func exitComparisonMode() {
         viewMode = .single
         comparisonDocuments = (nil, nil)
+    }
+
+    private func releaseScopeIfNeeded(for document: PDFDocumentItem) {
+        if document.needsScopeRelease {
+            scopeAccessor.stop(for: document.url)
+        }
     }
     
     private func updateComparisonAfterClosing(_ closedDocument: PDFDocumentItem) {

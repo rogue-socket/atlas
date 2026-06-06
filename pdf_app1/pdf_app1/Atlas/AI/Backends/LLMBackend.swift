@@ -17,14 +17,14 @@ protocol LLMBackend: AtlasModel {
 }
 
 extension LLMBackend {
-    func extractConcepts(from text: String, context: ExtractionContext) async throws -> [RawConcept] {
+    func extractConceptGraph(from text: String, context: ExtractionContext) async throws -> ExtractionResponse {
         log.info("[\(self.logTag)] extractConcepts: prompt \(text.count) chars")
         let prompt = PromptTemplates.conceptExtraction(text: text, context: context)
         let response = try await transport(prompt: prompt)
         do {
             let parsed = try LLMResponseParser.parseExtractionResponse(response)
             log.info("[\(self.logTag)] Parsed \(parsed.concepts.count) concepts, \(parsed.edges.count) edges from response")
-            return parsed.concepts
+            return parsed
         } catch {
             log.error("[\(self.logTag)] Failed to parse extraction response: \(error)")
             log.error("[\(self.logTag)] Raw response (first 500 chars): \(String(response.prefix(500)))")
@@ -32,9 +32,13 @@ extension LLMBackend {
         }
     }
 
-    func proposeEdges(between concepts: [String], context: String) async throws -> [RawEdge] {
-        log.info("[\(self.logTag)] proposeEdges for \(concepts.count) concepts")
-        let prompt = PromptTemplates.edgeProposal(concepts: concepts, context: context)
+    func extractConcepts(from text: String, context: ExtractionContext) async throws -> [RawConcept] {
+        try await extractConceptGraph(from: text, context: context).concepts
+    }
+
+    func proposeEdges(between candidates: [EdgeProposalCandidate], context: String) async throws -> [RawEdge] {
+        log.info("[\(self.logTag)] proposeEdges for \(candidates.count) candidates")
+        let prompt = PromptTemplates.edgeProposal(candidates: candidates, context: context)
         let response = try await transport(prompt: prompt)
         do {
             let edges = try LLMResponseParser.parseEdgesResponse(response)
@@ -45,6 +49,13 @@ extension LLMBackend {
             log.error("[\(self.logTag)] Raw response (first 500 chars): \(String(response.prefix(500)))")
             throw error
         }
+    }
+
+    func proposeEdges(between concepts: [String], context: String) async throws -> [RawEdge] {
+        let candidates = concepts.map {
+            EdgeProposalCandidate(label: $0, level: .concept, type: .concept, parentLabel: nil, summary: nil)
+        }
+        return try await proposeEdges(between: candidates, context: context)
     }
 
     func summarizeConcept(_ label: String, sourceText: String) async throws -> String {

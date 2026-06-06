@@ -21,6 +21,14 @@ class AIServiceManager {
     var isConfigured: Bool = false
     var totalTokensUsed: Int = 0
 
+    // ETR: embedding backend selected independently from the chat backend.
+    // nil = no embedding configured → ETR features disabled in UI.
+    // Defaults preserve existing behavior; the LAN gateway is selectable as
+    // an embedding-only alternative when Gemini quota/key use is undesirable.
+    var selectedEmbeddingBackendType: AIBackendType? = .gemini
+    var selectedEmbeddingModel: String = "gemini-embedding-2-preview"
+    var selectedResolverPreset: ResolverThresholdPreset = .conservative
+
     private var responseCache: [String: String] = [:]
     private let cacheDirectory: URL
 
@@ -65,7 +73,86 @@ class AIServiceManager {
                 ?? AIBackendType.claudeSubscription.defaultBaseURL
             log.info("[AIService] Using Claude sidecar at \(baseURL)")
             return ClaudeSidecarBackend(baseURL: baseURL, model: selectedModel)
+        case .codexAgent:
+            let baseURL = UserDefaults.standard.string(forKey: AppConstants.codexAgentSidecarURLKey)
+                ?? AIBackendType.codexAgent.defaultBaseURL
+            let envModel = ProcessInfo.processInfo.environment["ATLAS_CODEX_AGENT_MODEL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let envReasoningEffort = ProcessInfo.processInfo.environment["ATLAS_CODEX_AGENT_REASONING_EFFORT"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let model = (envModel?.isEmpty == false) ? envModel! : selectedModel
+            let reasoningEffort = (envReasoningEffort?.isEmpty == false) ? envReasoningEffort : nil
+            log.info("[AIService] Using Codex Agent sidecar at \(baseURL) model=\(model) reasoningEffort=\(reasoningEffort ?? "<default>")")
+            return CodexAgentBackend(baseURL: baseURL, model: model, reasoningEffort: reasoningEffort)
+        case .embeddingGateway:
+            log.warning("[AIService] LAN Embedding Gateway is embedding-only")
+            return nil
         }
+    }
+
+    // MARK: - Embedding Backend Creation (ETR)
+
+    /// True when the embedding backend selected for ETR has a usable
+    /// credential. UI surfaces "ETR unavailable" when this is false.
+    var isEmbeddingConfigured: Bool {
+        guard let type = selectedEmbeddingBackendType else { return false }
+        switch type {
+        case .ollama: return true
+        case .embeddingGateway: return OpenAIEmbeddingModelCatalog.isValidBaseURL(embeddingGatewayBaseURL)
+        case .claude, .claudeSubscription, .codexAgent: return false
+        default: return (getAPIKey(for: type) ?? "").isEmpty == false
+        }
+    }
+
+    /// Constructs an embedding backend per current selection. Returns nil when
+    /// no embedding backend is configured OR the chosen vendor doesn't expose
+    /// an embedding API (Claude). Callers gate ETR features on the returned
+    /// non-nil value.
+    func createEmbeddingBackend() -> (any AtlasEmbeddingBackend)? {
+        guard let type = selectedEmbeddingBackendType else {
+            log.info("[AIService] createEmbeddingBackend: no embedding backend selected")
+            return nil
+        }
+        switch type {
+        case .gemini:
+            let apiKey = getAPIKey(for: .gemini) ?? ""
+            guard !apiKey.isEmpty else {
+                log.warning("[AIService] No API key for Gemini (embedding)")
+                return nil
+            }
+            return GeminiEmbeddingBackend(apiKey: apiKey, model: selectedEmbeddingModel)
+        case .embeddingGateway:
+            let model = selectedEmbeddingModel.isEmpty ? type.defaultEmbeddingModel : selectedEmbeddingModel
+            return OpenAICompatibleEmbeddingBackend(
+                apiKey: embeddingGatewayAPIKey,
+                model: model,
+                vectorDimension: OpenAIEmbeddingModelCatalog.vectorDimension(for: model),
+                baseURL: embeddingGatewayBaseURL
+            )
+        case .claude, .claudeSubscription, .codexAgent:
+            // These chat backends have no embedding API; ETR must use a
+            // different vendor for vectors.
+            log.warning("[AIService] \(type.rawValue) has no embedding API — ETR unavailable with this selection")
+            return nil
+        case .openai, .ollama:
+            // Deferred until ETR proves end-to-end with Gemini (per SCE-style
+            // integration decision #4 carried into ETR v1 scope).
+            log.warning("[AIService] Embedding backend for \(type.rawValue) not yet implemented in v1")
+            return nil
+        }
+    }
+
+    var embeddingGatewayBaseURL: String {
+        if let override = ProcessInfo.processInfo.environment["ATLAS_EMBEDDING_GATEWAY_BASE_URL"],
+           !override.isEmpty,
+           OpenAIEmbeddingModelCatalog.isValidBaseURL(override) {
+            return override
+        }
+        return UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingGatewayBaseURLKey)
+            ?? OpenAIEmbeddingModelCatalog.defaultBaseURL
+    }
+
+    var embeddingGatewayAPIKey: String {
+        UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingGatewayAPIKeyKey)
+            ?? OpenAIEmbeddingModelCatalog.defaultAPIKey
     }
 
     // MARK: - API Key Management (Keychain)
@@ -103,6 +190,24 @@ class AIServiceManager {
 
     func getAPIKey(for backend: AIBackendType) -> String? {
         if Self.isRunningUnderXCTest { return nil }
+        // Dev-mode lookup order (Keychain prompts on every fresh process are
+        // painful for headless / repeated runs). All sources are local-only.
+        //
+        //   1. Process env var (e.g. ATLAS_GEMINI_API_KEY) — per-invocation override
+        //   2. Dev keys file inside the app's sandbox container — opting in here
+        //      is *authoritative*: missing keys for a backend return nil rather
+        //      than falling through to Keychain, so backends you haven't seeded
+        //      in the file never trigger an ACL prompt (matters for the test
+        //      host, which defaults to Claude before UserDefaults loads).
+        //   3. Keychain — production storage (only consulted when the dev file
+        //      doesn't exist at all)
+        if let envKey = ProcessInfo.processInfo.environment[envVarName(for: backend)],
+           !envKey.isEmpty {
+            return envKey
+        }
+        if FileManager.default.fileExists(atPath: devKeysFileURL.path) {
+            return devKeysFileLookup(backend: backend)
+        }
 
         let service = "com.atlas.apikey.\(backend.rawValue)"
         let query: [String: Any] = [
@@ -117,6 +222,43 @@ class AIServiceManager {
 
         guard status == errSecSuccess, let data = result as? Data else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+
+    // MARK: - Dev key sources (env var + plaintext file)
+
+    private func envVarName(for backend: AIBackendType) -> String {
+        "ATLAS_\(backend.rawValue.uppercased())_API_KEY"
+    }
+
+    /// Path: `<app sandbox>/Data/atlas-dev-keys.json`. The Application Support
+    /// directory resolves into the sandbox container, so this stays accessible
+    /// to the app without entitlement changes. JSON shape:
+    ///   `{ "claude": "...", "openai": "...", "gemini": "...", "ollama": "..." }`
+    /// Missing or unreadable file = nil (silently fall through to Keychain).
+    private var devKeysFileURL: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        // appSupport here is `<container>/Data/Library/Application Support`.
+        // Two levels up gets us to `<container>/Data/`, where the file is least
+        // intrusive (next to other top-level container junk, not buried).
+        return appSupport
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("atlas-dev-keys.json")
+    }
+
+    private func devKeysFileLookup(backend: AIBackendType) -> String? {
+        let url = devKeysFileURL
+        guard FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String]
+        else { return nil }
+        // Case-insensitive key match so the file can use either the enum's
+        // rawValue ("Gemini") or the more natural lowercase form ("gemini").
+        let target = backend.rawValue.lowercased()
+        for (k, v) in obj where k.lowercased() == target {
+            return v
+        }
+        return nil
     }
 
     // MARK: - Response Caching
@@ -150,11 +292,24 @@ class AIServiceManager {
 
     private func loadPreferences() {
         if let type = UserDefaults.standard.string(forKey: AppConstants.aiBackendTypeKey),
-           let backendType = AIBackendType(rawValue: type) {
+           let backendType = AIBackendType(rawValue: type),
+           backendType != .embeddingGateway {
             selectedBackendType = backendType
         }
         if let model = UserDefaults.standard.string(forKey: AppConstants.aiModelKey) {
             selectedModel = model
+        }
+        // ETR embedding selection. Empty string sentinel = "explicitly none"
+        // (user disabled ETR). Missing key entirely = default to .gemini.
+        if let raw = UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingBackendTypeKey) {
+            selectedEmbeddingBackendType = raw.isEmpty ? nil : AIBackendType(rawValue: raw)
+        }
+        if let m = UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingModelKey) {
+            selectedEmbeddingModel = m
+        }
+        if let raw = UserDefaults.standard.string(forKey: AppConstants.aiResolverPresetKey),
+           let preset = ResolverThresholdPreset(rawValue: raw) {
+            selectedResolverPreset = preset
         }
         updateConfiguredState()
     }
@@ -162,6 +317,11 @@ class AIServiceManager {
     func savePreferences() {
         UserDefaults.standard.set(selectedBackendType.rawValue, forKey: AppConstants.aiBackendTypeKey)
         UserDefaults.standard.set(selectedModel, forKey: AppConstants.aiModelKey)
+        UserDefaults.standard.set(selectedEmbeddingBackendType?.rawValue ?? "",
+                                   forKey: AppConstants.aiEmbeddingBackendTypeKey)
+        UserDefaults.standard.set(selectedEmbeddingModel, forKey: AppConstants.aiEmbeddingModelKey)
+        UserDefaults.standard.set(selectedResolverPreset.rawValue, forKey: AppConstants.aiResolverPresetKey)
+        updateConfiguredState()
     }
 
     private func updateConfiguredState() {

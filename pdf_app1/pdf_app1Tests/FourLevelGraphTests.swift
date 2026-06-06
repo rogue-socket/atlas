@@ -122,6 +122,34 @@ final class FourLevelGraphTests: XCTestCase {
         }
     }
 
+    func test_densityManager_relationshipContext_includesNonContainmentEdgeEndpoints() {
+        let graph = KnowledgeGraph()
+        let concept = ConceptNode(label: "Attention", type: .concept, level: .concept)
+        let entity = ConceptNode(label: "Query Matrix", type: .definition, level: .entity)
+        let unrelatedEntity = ConceptNode(label: "Optimizer", type: .definition, level: .entity)
+        for node in [concept, entity, unrelatedEntity] { graph.addNode(node) }
+        graph.addEdge(GraphEdge(sourceNodeID: concept.id, targetNodeID: entity.id, type: .uses))
+
+        let visible = DensityManager().visibleNodesIncludingRelationshipContext(from: graph, zoomLevel: .concept)
+
+        XCTAssertTrue(visible.contains { $0.id == concept.id })
+        XCTAssertTrue(visible.contains { $0.id == entity.id })
+        XCTAssertFalse(visible.contains { $0.id == unrelatedEntity.id })
+    }
+
+    func test_densityManager_relationshipContext_ignoresContainmentEdgeEndpoints() {
+        let graph = KnowledgeGraph()
+        let concept = ConceptNode(label: "Attention", type: .concept, level: .concept)
+        let entity = ConceptNode(label: "Query Matrix", type: .definition, level: .entity)
+        for node in [concept, entity] { graph.addNode(node) }
+        graph.addEdge(GraphEdge(sourceNodeID: concept.id, targetNodeID: entity.id, type: .containsEntity))
+
+        let visible = DensityManager().visibleNodesIncludingRelationshipContext(from: graph, zoomLevel: .concept)
+
+        XCTAssertTrue(visible.contains { $0.id == concept.id })
+        XCTAssertFalse(visible.contains { $0.id == entity.id })
+    }
+
     // MARK: - merge() last-modified reconciliation
 
     func test_merge_collisionPicksLaterLastModified() {
@@ -195,7 +223,7 @@ final class FourLevelGraphTests: XCTestCase {
         XCTAssertEqual(restored.allNodes.map(\.label), ["A-node"])
     }
 
-    func test_encodeSubgraph_dropsEdgesWhoseEndpointsStraddleScope() throws {
+    func test_encodeSubgraph_dropsGenericEdgesWhoseEndpointsStraddleScope() throws {
         let urlA = docURL("a.pdf")
         let urlB = docURL("b.pdf")
         let a1 = ConceptNode(label: "A1", sourceAnchors: [anchor(urlA)], level: .concept)
@@ -213,6 +241,47 @@ final class FourLevelGraphTests: XCTestCase {
         let restored = KnowledgeGraph()
         try restored.decode(from: snapshot.data)
         XCTAssertEqual(restored.allEdges.map(\.type), [.dependsOn])
+    }
+
+    func test_encodeSubgraph_preservesSCETypedEdgeToPriorDocumentNode() throws {
+        let urlA = docURL("a.pdf")
+        let urlB = docURL("b.pdf")
+        let prior = ConceptNode(label: "Prior", sourceAnchors: [anchor(urlA)], level: .concept)
+        let current = ConceptNode(label: "Current", sourceAnchors: [anchor(urlB)], level: .concept)
+
+        let g = KnowledgeGraph()
+        g.addNode(prior)
+        g.addNode(current)
+        g.addEdge(GraphEdge(sourceNodeID: current.id, targetNodeID: prior.id, type: .instanceOf))
+
+        let snapshot = try g.encodeSubgraph(for: urlB)
+        XCTAssertEqual(snapshot.nodeCount, 2, "B's subgraph should carry the one-hop prior endpoint")
+        XCTAssertEqual(snapshot.edgeCount, 1, "SCE typed cross-doc edge should survive per-doc persistence")
+
+        let restored = KnowledgeGraph()
+        try restored.decode(from: snapshot.data)
+
+        XCTAssertEqual(Set(restored.allNodes.map(\.label)), ["Prior", "Current"])
+        XCTAssertEqual(restored.allEdges.map(\.type), [.instanceOf])
+    }
+
+    func test_mergeSubgraph_preservesSCETypedEdgeToPriorDocumentNode() throws {
+        let urlA = docURL("a.pdf")
+        let urlB = docURL("b.pdf")
+        let prior = ConceptNode(label: "Prior", sourceAnchors: [anchor(urlA)], level: .concept)
+        let current = ConceptNode(label: "Current", sourceAnchors: [anchor(urlB)], level: .concept)
+
+        let saved = KnowledgeGraph()
+        saved.addNode(prior)
+        saved.addNode(current)
+        saved.addEdge(GraphEdge(sourceNodeID: current.id, targetNodeID: prior.id, type: .attributeOf))
+        let snapshot = try saved.encodeSubgraph(for: urlB)
+
+        let restored = KnowledgeGraph()
+        try restored.mergeSubgraph(from: snapshot.data, scopedTo: urlB)
+
+        XCTAssertEqual(Set(restored.allNodes.map(\.label)), ["Prior", "Current"])
+        XCTAssertEqual(restored.allEdges.map(\.type), [.attributeOf])
     }
 
     // MARK: - Per-doc subgraph merge (B4)

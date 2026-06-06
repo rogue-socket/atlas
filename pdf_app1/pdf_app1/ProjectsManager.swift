@@ -287,6 +287,13 @@ final class ProjectsManager: ObservableObject {
 
         var isStale = false
         guard let url = bookmarker.resolveBookmark(projects[pIdx].files[fIdx].bookmarkData, isStale: &isStale) else {
+            // Headless bootstrap may stage PDFs inside the app container where
+            // security-scoped bookmarks are unnecessary; fall back to the
+            // recorded path when the file is directly readable.
+            let fallback = URL(fileURLWithPath: projects[pIdx].files[fIdx].lastKnownPath)
+            if FileManager.default.isReadableFile(atPath: fallback.path) {
+                return fallback
+            }
             return nil
         }
 
@@ -314,8 +321,15 @@ final class ProjectsManager: ObservableObject {
     }
 
     private func makeProjectFile(from url: URL) -> ProjectFile? {
-        guard let bookmarkData = bookmarker.createBookmark(for: url) else { return nil }
-        return ProjectFile(displayName: url.lastPathComponent, bookmarkData: bookmarkData, lastKnownPath: url.path)
+        if let bookmarkData = bookmarker.createBookmark(for: url) {
+            return ProjectFile(displayName: url.lastPathComponent, bookmarkData: bookmarkData, lastKnownPath: url.path)
+        }
+        // Container-local fixtures (headless bootstrap): readable without a scope bookmark.
+        guard FileManager.default.isReadableFile(atPath: url.path) else { return nil }
+        let minimal = (try? url.bookmarkData(options: .minimalBookmark,
+                                              includingResourceValuesForKeys: nil,
+                                              relativeTo: nil)) ?? Data()
+        return ProjectFile(displayName: url.lastPathComponent, bookmarkData: minimal, lastKnownPath: url.path)
     }
 
     private func uniqueProjectName(_ name: String, excluding excludedProjectID: UUID?) -> String {
