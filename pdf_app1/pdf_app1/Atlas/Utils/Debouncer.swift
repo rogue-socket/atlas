@@ -3,7 +3,7 @@ import Foundation
 // Trailing-edge debouncer for imperative call-sites — i.e. "fire this
 // action `delay` seconds after the most recent call, cancelling any
 // pending invocation." Use Combine's `.debounce` when the source is
-// already a Publisher (see ScrollTracker, ProjectsManager).
+// already a Publisher (see ProjectsManager).
 //
 // Not thread-safe — confine to a single actor / queue. All current
 // callers are main-thread.

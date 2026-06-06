@@ -28,7 +28,6 @@ enum SidebarPanel: Hashable {
     case thumbnails
     case outline
     case annotations
-    case projectCorrelations
 }
 
 enum ReadingMode: String {

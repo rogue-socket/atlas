@@ -187,8 +187,6 @@ struct PDFViewerView: View {
                         onAnnotationsChanged: { scheduleAutoSave() }
                     )
                     .frame(width: 250)
-                case .projectCorrelations:
-                    EmptyView()
                 }
                 Divider()
             }

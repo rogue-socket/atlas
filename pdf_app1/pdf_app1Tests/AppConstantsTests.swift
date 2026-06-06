@@ -83,8 +83,8 @@ final class AppConstantsTests: XCTestCase {
     // MARK: - SidebarPanel hashability
 
     func test_sidebarPanel_isHashable() {
-        let set: Set<SidebarPanel> = [.thumbnails, .outline, .annotations, .projectCorrelations]
-        XCTAssertEqual(set.count, 4)
+        let set: Set<SidebarPanel> = [.thumbnails, .outline, .annotations]
+        XCTAssertEqual(set.count, 3)
     }
 
     // MARK: - ReadingMode raw values
