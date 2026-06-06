@@ -913,10 +913,26 @@ extension EmbeddingResolver {
     ]
 
     /// Significant tokens of a label: lowercased, split on non-alphanumerics,
-    /// stopwords and tokens shorter than 3 characters dropped.
+    /// simple English plurals folded, stopwords and tokens shorter than 3
+    /// characters dropped.
     static func lexicalTokens(_ label: String) -> Set<String> {
         let parts = label.lowercased().split { !$0.isLetter && !$0.isNumber }
-        return Set(parts.map(String.init).filter { $0.count >= 3 && !lexicalStopwords.contains($0) })
+        return Set(parts.map { lexicalTokenKey(String($0)) }
+            .filter { $0.count >= 3 && !lexicalStopwords.contains($0) })
+    }
+
+    static func lexicalTokenKey(_ token: String) -> String {
+        if token.count > 4 && token.hasSuffix("ies") {
+            return String(token.dropLast(3)) + "y"
+        }
+        if token.count > 4,
+           token.hasSuffix("s"),
+           !token.hasSuffix("ss"),
+           !token.hasSuffix("us"),
+           !token.hasSuffix("is") {
+            return String(token.dropLast())
+        }
+        return token
     }
 
     /// Embedding-free candidate generation: cross-doc pairs whose labels share

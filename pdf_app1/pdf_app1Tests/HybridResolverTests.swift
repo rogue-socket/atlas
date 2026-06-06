@@ -303,6 +303,11 @@ final class HybridResolverTests: XCTestCase {
         XCTAssertEqual(toks, ["substance", "use", "disorder", "program"])
     }
 
+    func test_lexicalTokens_foldsSimplePluralsWithoutDamagingStableEndings() {
+        let toks = EmbeddingResolver.lexicalTokens("Policies Services Status Business Analysis")
+        XCTAssertEqual(toks, ["policy", "service", "status", "business", "analysis"])
+    }
+
     func test_lexicalCandidatePairs_pairsCrossDocNodesSharingTokens() {
         let a = node("Behavioral Health Services", doc: "/a.pdf")
         let b = node("Behavioral Health Privacy", doc: "/b.pdf")
@@ -311,6 +316,17 @@ final class HybridResolverTests: XCTestCase {
         XCTAssertEqual(cands.count, 1, "only a↔b share ≥2 significant tokens across docs")
         XCTAssertEqual(Set([cands[0].aID, cands[0].bID]), Set([a.id, b.id]))
         XCTAssertGreaterThan(cands[0].similarity, 0)
+    }
+
+    func test_lexicalCandidatePairs_pairsPluralSingularLabels() {
+        let a = node("Consent Policies", doc: "/a.pdf")
+        let b = node("Consent Policy", doc: "/b.pdf")
+
+        let cands = EmbeddingResolver.lexicalCandidatePairs(among: [a, b])
+
+        XCTAssertEqual(cands.count, 1)
+        XCTAssertEqual(Set([cands[0].aID, cands[0].bID]), Set([a.id, b.id]))
+        XCTAssertEqual(cands[0].similarity, 1.0)
     }
 
     func test_lexicalCandidatePairs_skipsSameDocPairs() {
