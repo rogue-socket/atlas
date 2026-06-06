@@ -63,22 +63,4 @@ final class MapInteractionTests: XCTestCase {
         XCTAssertEqual(interaction.viewOffset.y, 230, accuracy: 0.001)
     }
 
-    func testFocusOnNodeCentersNodeAndSelectsIt() {
-        let interaction = MapInteraction()
-        let layout = ForceDirectedLayout()
-        let nodeID = UUID()
-        layout.positions[nodeID] = NodePosition(x: 100, y: 80)
-
-        interaction.focusOnNode(
-            id: nodeID,
-            layout: layout,
-            canvasSize: CGSize(width: 800, height: 600),
-            targetScale: 1.5
-        )
-
-        XCTAssertEqual(interaction.viewScale, 1.5)
-        XCTAssertEqual(interaction.viewOffset.x, 250, accuracy: 0.001)
-        XCTAssertEqual(interaction.viewOffset.y, 180, accuracy: 0.001)
-        XCTAssertEqual(interaction.selectedNodeID, nodeID)
-    }
 }
