@@ -82,6 +82,27 @@ run_live() {
         rm -f "$raw_log"
         exit 1
     fi
+
+    local relation_rows merge_rows summary_relations summary_merges
+    relation_rows="$(printf '%s\n' "$filtered" | awk '/^HYBRID_RELATION / { count++ } END { print count + 0 }')"
+    merge_rows="$(printf '%s\n' "$filtered" | awk '/^HYBRID_MERGE / { count++ } END { print count + 0 }')"
+    summary_relations="$(printf '%s\n' "$summary" | sed -n 's/.* relations=\([0-9][0-9]*\).*/\1/p')"
+    summary_merges="$(printf '%s\n' "$summary" | sed -n 's/.* decisions=\([0-9][0-9]*\).*/\1/p')"
+    if [[ -z "$summary_relations" || -z "$summary_merges" ]]; then
+        echo "[ERROR] $tag limit=$limit summary missing decisions/relations counts" >&2
+        rm -f "$raw_log"
+        exit 1
+    fi
+    if [[ "$relation_rows" != "$summary_relations" ]]; then
+        echo "[ERROR] $tag limit=$limit relation rows ($relation_rows) != summary relations ($summary_relations)" >&2
+        rm -f "$raw_log"
+        exit 1
+    fi
+    if [[ "$merge_rows" != "$summary_merges" ]]; then
+        echo "[ERROR] $tag limit=$limit merge rows ($merge_rows) != summary decisions ($summary_merges)" >&2
+        rm -f "$raw_log"
+        exit 1
+    fi
     rm -f "$raw_log"
 }
 
