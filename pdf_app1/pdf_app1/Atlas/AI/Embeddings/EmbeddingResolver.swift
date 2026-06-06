@@ -192,7 +192,8 @@ struct ResolverAuditEntry: Codable, Sendable {
     let similarity: Float
     let band: String       // "autoMerge" | "adjudication" | "exactLabel"
     let exactLabelMatch: Bool
-    let llmVerdict: String?  // "approved" | "rejected" | null (no LLM run)
+    let llmVerdict: String?  // "merge" | "keep" | typed verdict | null (no LLM run)
+    let llmDirection: String? // "ab" | "ba" for typed verdicts; nil otherwise
     let finalReason: String? // MergeReason raw value, or nil if not in plan
 }
 
@@ -526,7 +527,17 @@ extension EmbeddingResolver {
                 let raw = try await generateWithRetry(llm: llm, prompt: prompt)
                 let results = try PromptTemplates.parseHybridAdjudicationResponse(raw, expectedCount: pairsForPrompt.count)
                 var mergeCount = 0, relationCount = 0
-                for (cand, result) in zip(batch, results) {
+                for (index, cand) in batch.enumerated() {
+                    guard let a = nodesByID[cand.aID], let b = nodesByID[cand.bID] else { continue }
+                    var result = results[index]
+                    if result.verdict == .keep,
+                       let inferred = inferTypedRelationForKeepPair(a: a, b: b, similarity: cand.similarity) {
+                        result = inferred
+                    }
+                    if !typedRelationPassesPlausibility(result: result, a: a, b: b, similarity: cand.similarity) {
+                        result = AdjudicationResult(verdict: .keep, direction: .ab)
+                    }
+
                     switch result.verdict {
                     case .merge:
                         adjudicated.append(MergeDecision(aID: cand.aID, bID: cand.bID,
@@ -546,13 +557,13 @@ extension EmbeddingResolver {
                     case .keep:
                         break
                     }
-                    if auditOutputDir != nil,
-                       let a = nodesByID[cand.aID], let b = nodesByID[cand.bID] {
+                    if auditOutputDir != nil {
                         auditEntries.append(makeAuditEntry(
                             a: a, b: b, sim: cand.similarity,
                             band: "adjudication",
                             exactLabel: false,
                             llmVerdict: result.verdict.rawValue,
+                            llmDirection: result.verdict.edgeType == nil ? nil : result.direction.rawValue,
                             finalReason: result.verdict == .merge ? MergeReason.llmAdjudicated.rawValue : nil))
                     }
                 }
@@ -588,6 +599,7 @@ extension EmbeddingResolver {
                                sim: Float, band: String,
                                exactLabel: Bool,
                                llmVerdict: String?,
+                               llmDirection: String? = nil,
                                finalReason: String?) -> ResolverAuditEntry {
         let docNames: (ConceptNode) -> [String] = { node in
             Set(node.sourceAnchors.map { $0.documentURL.lastPathComponent }).sorted()
@@ -605,6 +617,7 @@ extension EmbeddingResolver {
             band: band,
             exactLabelMatch: exactLabel,
             llmVerdict: llmVerdict,
+            llmDirection: llmDirection,
             finalReason: finalReason
         )
     }
@@ -696,10 +709,68 @@ extension EmbeddingResolver {
 
 extension EmbeddingResolver {
 
+    static let defaultLexicalCandidateLimit = 120
+
+    /// If the adjudicator returns `keep` for a high-overlap pair of entity labels,
+    /// infer a conservative `instance_of` relation when one label's significant
+    /// tokens are a strict subset of the other's.
+    static func inferTypedRelationForKeepPair(aLabel: String,
+                                              aLevel: NodeLevel,
+                                              bLabel: String,
+                                              bLevel: NodeLevel,
+                                              similarity: Float) -> AdjudicationResult? {
+        guard aLevel == .entity,
+              bLevel == .entity,
+              similarity >= 0.78 else { return nil }
+
+        let aTokens = lexicalTokens(aLabel)
+        let bTokens = lexicalTokens(bLabel)
+        guard !aTokens.isEmpty, !bTokens.isEmpty else { return nil }
+
+        let sizeDelta = abs(aTokens.count - bTokens.count)
+        guard sizeDelta <= 2 else { return nil }
+
+        if aTokens.isSubset(of: bTokens) && aTokens != bTokens {
+            return AdjudicationResult(verdict: .instanceOf, direction: .ab)
+        }
+        if bTokens.isSubset(of: aTokens) && aTokens != bTokens {
+            return AdjudicationResult(verdict: .instanceOf, direction: .ba)
+        }
+        return nil
+    }
+
+    private static func inferTypedRelationForKeepPair(a: ConceptNode,
+                                                      b: ConceptNode,
+                                                      similarity: Float) -> AdjudicationResult? {
+        inferTypedRelationForKeepPair(aLabel: a.label,
+                                      aLevel: a.level,
+                                      bLabel: b.label,
+                                      bLevel: b.level,
+                                      similarity: similarity)
+    }
+
+    private static func typedRelationPassesPlausibility(result: AdjudicationResult,
+                                                       a: ConceptNode,
+                                                       b: ConceptNode,
+                                                       similarity: Float) -> Bool {
+        guard result.verdict == .processFor else { return true }
+        guard similarity < 0.30 else { return true }
+
+        let processLabel = result.direction == .ab ? a.label : b.label
+        return !lexicalTokens(processLabel).isDisjoint(with: processCueTokens)
+    }
+
     private static let lexicalStopwords: Set<String> = [
         "the", "a", "an", "of", "and", "or", "for", "to", "in", "on", "with",
         "by", "at", "is", "are", "be", "as", "from", "that", "this", "its",
         "their", "our", "via", "per",
+    ]
+
+    private static let processCueTokens: Set<String> = [
+        "authorization", "coordination", "curation", "follow", "follows",
+        "governance", "management", "managing", "matching", "onboarding",
+        "operations", "procurement", "process", "replenishment", "reporting",
+        "scheduling", "sourcing", "staffing", "vendor"
     ]
 
     /// Significant tokens of a label: lowercased, split on non-alphanumerics,
@@ -714,12 +785,14 @@ extension EmbeddingResolver {
     /// shares `minShared`+ significant tokens; results are sorted by score
     /// descending and capped at `limit` — so the cap keeps the highest-overlap
     /// pairs and `minShared: 1` is a recall floor, not the real selector.
-    /// Used when no embedding backend is available (the hybrid runs Claude-only).
+    /// Used when no embedding backend is available (the hybrid runs LLM-only).
     static func lexicalCandidatePairs(among nodes: [ConceptNode],
                                       minShared: Int = 1,
-                                      limit: Int = 60) -> [MergeCandidate] {
+                                      limit: Int = defaultLexicalCandidateLimit) -> [MergeCandidate] {
+        guard limit > 0 else { return [] }
+
         let toks = nodes.map { lexicalTokens($0.label) }
-        var out: [MergeCandidate] = []
+        var out: [(candidate: MergeCandidate, sharedCount: Int, unionCount: Int, labelKey: String)] = []
         for i in 0..<nodes.count {
             for j in (i + 1)..<nodes.count {
                 guard isCrossDoc(nodes[i], nodes[j]) else { continue }
@@ -730,10 +803,33 @@ extension EmbeddingResolver {
                 let (a, b) = nodes[i].id.uuidString < nodes[j].id.uuidString
                     ? (nodes[i].id, nodes[j].id)
                     : (nodes[j].id, nodes[i].id)
-                out.append(MergeCandidate(aID: a, bID: b, similarity: jaccard))
+                let labels = [nodes[i].label.lowercased(), nodes[j].label.lowercased()].sorted()
+                out.append((
+                    candidate: MergeCandidate(aID: a, bID: b, similarity: jaccard),
+                    sharedCount: shared.count,
+                    unionCount: union.count,
+                    labelKey: labels.joined(separator: "\u{0}")
+                ))
             }
         }
-        return Array(out.sorted { $0.similarity > $1.similarity }.prefix(limit))
+        return Array(out.sorted { lhs, rhs in
+            if lhs.candidate.similarity != rhs.candidate.similarity {
+                return lhs.candidate.similarity > rhs.candidate.similarity
+            }
+            if lhs.sharedCount != rhs.sharedCount {
+                return lhs.sharedCount > rhs.sharedCount
+            }
+            if lhs.unionCount != rhs.unionCount {
+                return lhs.unionCount < rhs.unionCount
+            }
+            if lhs.labelKey != rhs.labelKey {
+                return lhs.labelKey < rhs.labelKey
+            }
+            if lhs.candidate.aID != rhs.candidate.aID {
+                return lhs.candidate.aID.uuidString < rhs.candidate.aID.uuidString
+            }
+            return lhs.candidate.bID.uuidString < rhs.candidate.bID.uuidString
+        }.prefix(limit).map(\.candidate))
     }
 
     /// Embedding-free hybrid resolution. Generates candidate pairs lexically
@@ -744,7 +840,8 @@ extension EmbeddingResolver {
     static func resolveLexical(
         graph: KnowledgeGraph,
         llmBackend: any AtlasModel,
-        thresholds: ResolverThresholds = .default
+        thresholds: ResolverThresholds = .default,
+        candidateLimit: Int = defaultLexicalCandidateLimit
     ) async throws -> MergePlan {
         let eligible = eligibleNodes(in: graph)
         log.info("[Lexical] eligible: \(eligible.count) nodes (concept+entity)")
@@ -753,7 +850,7 @@ extension EmbeddingResolver {
 
         var autoMerges: [MergeDecision] = []
         var candidates: [MergeCandidate] = []
-        for cand in lexicalCandidatePairs(among: eligible) {
+        for cand in lexicalCandidatePairs(among: eligible, limit: candidateLimit) {
             guard let a = nodesByID[cand.aID], let b = nodesByID[cand.bID] else { continue }
             if isExactLabelMatch(a, b) {
                 autoMerges.append(MergeDecision(aID: cand.aID, bID: cand.bID,
@@ -781,7 +878,17 @@ extension EmbeddingResolver {
             let raw = try await generateWithRetry(llm: llmBackend, prompt: prompt)
             let results = try PromptTemplates.parseHybridAdjudicationResponse(raw, expectedCount: pairsForPrompt.count)
             var mergeCount = 0, relationCount = 0
-            for (cand, result) in zip(batch, results) {
+            for (index, cand) in batch.enumerated() {
+                guard let a = nodesByID[cand.aID], let b = nodesByID[cand.bID] else { continue }
+                var result = results[index]
+                if result.verdict == .keep,
+                   let inferred = inferTypedRelationForKeepPair(a: a, b: b, similarity: cand.similarity) {
+                    result = inferred
+                }
+                if !typedRelationPassesPlausibility(result: result, a: a, b: b, similarity: cand.similarity) {
+                    result = AdjudicationResult(verdict: .keep, direction: .ab)
+                }
+
                 switch result.verdict {
                 case .merge:
                     adjudicated.append(MergeDecision(aID: cand.aID, bID: cand.bID,

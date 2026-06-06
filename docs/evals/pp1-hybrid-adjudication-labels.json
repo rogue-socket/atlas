@@ -26,18 +26,21 @@
       "aLabel": "Repair and event workshops",
       "bLabel": "Repair workshops",
       "expectedVerdict": "instance_of",
+      "expectedDirection": "ba",
       "rationale": "Repair workshops are a specific part of the broader repair/event workshop programming."
     },
     {
       "aLabel": "Revenue share",
       "bLabel": "Kitchen revenue share",
       "expectedVerdict": "instance_of",
+      "expectedDirection": "ba",
       "rationale": "Kitchen revenue share is a specific channel/category share under revenue share."
     },
     {
       "aLabel": "Revenue share",
       "bLabel": "Fiscal 2025 revenue",
       "expectedVerdict": "attribute_of",
+      "expectedDirection": "ab",
       "rationale": "Revenue share is a metric/attribute of the fiscal revenue object."
     },
     {
@@ -56,12 +59,14 @@
       "aLabel": "Distribution and sourcing footprint",
       "bLabel": "Supplier network scale",
       "expectedVerdict": "instance_of",
+      "expectedDirection": "ba",
       "rationale": "Supplier network scale is a specific dimension inside the broader sourcing/distribution footprint."
     },
     {
       "aLabel": "Distribution and sourcing footprint",
       "bLabel": "Distribution and replenishment operations",
       "expectedVerdict": "process_for",
+      "expectedDirection": "ba",
       "rationale": "Distribution/replenishment is an operational process serving the footprint."
     },
     {

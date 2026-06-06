@@ -35,8 +35,11 @@ struct HeadlessRunnerConfig {
     let hybridResolveDir: String?
     /// When true, `--hybrid-resolve` generates candidate pairs lexically
     /// (shared label tokens) instead of by embedding cosine — runs the hybrid
-    /// entirely on the Claude backend with no embedding provider.
+    /// entirely on the LLM backend with no embedding provider.
     let hybridLexical: Bool
+    /// Optional cap for lexical candidates before LLM adjudication. Nil keeps
+    /// the resolver default.
+    let hybridLexicalLimit: Int?
     /// Standalone scoring mode: compare a resolver audit JSON against a
     /// task-specific adjudication label set.
     let hybridAdjudicationAuditPath: String?
@@ -45,6 +48,7 @@ struct HeadlessRunnerConfig {
     init(projectName: String, mode: ExtractionMode, runETR: Bool, etrOnly: Bool,
          etrThresholds: ResolverThresholds?, scoreRubricPath: String?,
          hybridResolveDir: String? = nil, hybridLexical: Bool = false,
+         hybridLexicalLimit: Int? = nil,
          hybridAdjudicationAuditPath: String? = nil,
          hybridAdjudicationEvalPath: String? = nil) {
         self.projectName = projectName
@@ -55,6 +59,7 @@ struct HeadlessRunnerConfig {
         self.scoreRubricPath = scoreRubricPath
         self.hybridResolveDir = hybridResolveDir
         self.hybridLexical = hybridLexical
+        self.hybridLexicalLimit = hybridLexicalLimit
         self.hybridAdjudicationAuditPath = hybridAdjudicationAuditPath
         self.hybridAdjudicationEvalPath = hybridAdjudicationEvalPath
     }
@@ -81,6 +86,7 @@ struct HeadlessRunnerConfig {
         var scoreRubricPath: String?
         var hybridResolveDir: String?
         var hybridLexical = false
+        var hybridLexicalLimit: Int?
         var hybridAdjudicationAuditPath: String?
         var hybridAdjudicationEvalPath: String?
         var autoMerge: Float?
@@ -118,6 +124,12 @@ struct HeadlessRunnerConfig {
             }
             if a == "--lexical" {
                 hybridLexical = true; i += 1; continue
+            }
+            if a == "--lexical-limit", i + 1 < args.count {
+                if let limit = Int(args[i + 1]), limit > 0 {
+                    hybridLexicalLimit = limit
+                }
+                i += 2; continue
             }
             if a == "--auto-merge", i + 1 < args.count {
                 autoMerge = Float(args[i + 1]); i += 2; continue
@@ -169,6 +181,7 @@ struct HeadlessRunnerConfig {
                                     scoreRubricPath: scoreRubricPath,
                                     hybridResolveDir: hybridResolveDir,
                                     hybridLexical: hybridLexical,
+                                    hybridLexicalLimit: hybridLexicalLimit,
                                     hybridAdjudicationAuditPath: hybridAdjudicationAuditPath,
                                     hybridAdjudicationEvalPath: hybridAdjudicationEvalPath)
     }
@@ -214,6 +227,7 @@ final class HeadlessRunner {
 
         if let hybridDir = config.hybridResolveDir {
             await runHybridResolve(dir: hybridDir, lexical: config.hybridLexical,
+                                   lexicalLimit: config.hybridLexicalLimit,
                                    thresholds: config.etrThresholds,
                                    aiService: aiService, graph: graph)
             return
@@ -261,6 +275,11 @@ final class HeadlessRunner {
         // bookmark fails to resolve are dropped here with a warning.
         let projectURLs: [URL] = files.compactMap { file in
             guard let url = projectsManager.resolveURL(for: project.id, fileID: file.id) else {
+                if FileManager.default.fileExists(atPath: file.lastKnownPath) {
+                    log.warning("[Headless] up-front bookmark resolve failed for \(file.displayName, privacy: .public); using lastKnownPath fallback")
+                    return URL(fileURLWithPath: file.lastKnownPath)
+                }
+
                 log.error("[Headless] bookmark resolve failed up-front: \(file.displayName, privacy: .public) — file will be skipped")
                 return nil
             }
@@ -295,7 +314,41 @@ final class HeadlessRunner {
             log.info("[Headless] \(tag) resolving bookmark: \(file.displayName, privacy: .public)")
 
             guard let url = projectsManager.resolveURL(for: project.id, fileID: file.id) else {
-                log.error("[Headless] \(tag) bookmark resolve failed: \(file.displayName, privacy: .public) — skipping")
+                guard FileManager.default.fileExists(atPath: file.lastKnownPath) else {
+                    log.error("[Headless] \(tag) bookmark resolve failed: \(file.displayName, privacy: .public) — skipping")
+                    continue
+                }
+                log.warning("[Headless] \(tag) up-front bookmark resolve failed for extraction; using lastKnownPath fallback")
+                let fallback = URL(fileURLWithPath: file.lastKnownPath)
+                log.info("[Headless] \(tag) resolved fallback URL: \(fallback.path, privacy: .public)")
+                // Continue with fallback URL only when the file still exists at
+                // its known location.
+                // This keeps headless runs working when security-scoped
+                // bookmarks become invalid across app lifecycle boundaries.
+                let didStart = fallback.startAccessingSecurityScopedResource()
+                if !didStart { log.warning("[Headless] \(tag) fallback startAccessingSecurityScopedResource returned false") }
+                let didStartFallback = didStart
+
+                guard let pdf = PDFDocument(url: fallback) else {
+                    log.error("[Headless] \(tag) PDFDocument(url:) failed for fallback URL \(file.displayName, privacy: .public) — skipping")
+                    if didStartFallback { fallback.stopAccessingSecurityScopedResource() }
+                    continue
+                }
+
+                let docStart = Date()
+                log.info("[Headless] \(tag) starting extraction (fallback): \(file.displayName, privacy: .public) (\(pdf.pageCount) pages)")
+                graph.documentProcessingState[fallback] = .processing
+                await pipeline.processPages(
+                    document: pdf,
+                    documentURL: fallback,
+                    pageRange: 0..<pdf.pageCount,
+                    graph: graph,
+                    aiService: aiService,
+                    mode: config.mode
+                )
+                let elapsed = Date().timeIntervalSince(docStart)
+                log.info("[Headless] \(tag) DONE (fallback) in \(String(format: "%.1f", elapsed))s: live graph now \(graph.nodeCount)n/\(graph.edgeCount)e")
+                if didStartFallback { fallback.stopAccessingSecurityScopedResource() }
                 continue
             }
 
@@ -400,6 +453,7 @@ final class HeadlessRunner {
     /// runs anywhere the graph files and the configured backends are present.
     private func runHybridResolve(dir: String,
                                   lexical: Bool,
+                                  lexicalLimit: Int?,
                                   thresholds: ResolverThresholds?,
                                   aiService: AIServiceManager,
                                   graph: KnowledgeGraph) async {
@@ -455,24 +509,29 @@ final class HeadlessRunner {
         log.info("[Hybrid] merged \(loadedDocs) doc(s) → \(graph.nodeCount)n/\(graph.edgeCount)e; synthetic projectID=\(projectID.uuidString, privacy: .public)")
 
         if lexical {
-            // Embedding-free path: lexical candidate generation + hybrid Claude
+            // Embedding-free path: lexical candidate generation + hybrid LLM
             // adjudication. Runs entirely on the LLM backend — no embedding
             // provider, no Gemini quota dependency.
             guard let llm = aiService.createBackend() else {
                 log.error("[Hybrid] --lexical: no LLM backend configured")
                 exit(3)
             }
-            log.info("[Hybrid] lexical mode — embedding-free candidate generation, Claude-only")
+            log.info("[Hybrid] lexical mode — embedding-free candidate generation, LLM-only")
             do {
                 let plan = try await EmbeddingResolver.resolveLexical(
                     graph: graph,
                     llmBackend: llm,
-                    thresholds: thresholds ?? aiService.selectedResolverPreset.thresholds
+                    thresholds: thresholds ?? aiService.selectedResolverPreset.thresholds,
+                    candidateLimit: lexicalLimit ?? EmbeddingResolver.defaultLexicalCandidateLimit
                 )
+                printHybridPlanDetails(plan, graph: graph)
                 let result = EmbeddingMergeApplier.apply(plan, to: graph)
                 log.info("[Hybrid] lexical resolve: plan=\(plan.decisions.count) merges + \(plan.relations.count) relations; applied=\(result.groupsApplied) groups, removed=\(result.nodesRemoved) nodes, deduped=\(result.edgesDeduplicated), relations=\(result.relationsAdded)")
+                print("HYBRID_RESOLVE_SUMMARY mode=lexical candidateLimit=\(lexicalLimit ?? EmbeddingResolver.defaultLexicalCandidateLimit) decisions=\(plan.decisions.count) relations=\(plan.relations.count) appliedGroups=\(result.groupsApplied) removedNodes=\(result.nodesRemoved) dedupedEdges=\(result.edgesDeduplicated) addedRelations=\(result.relationsAdded) finalNodes=\(graph.nodeCount) finalEdges=\(graph.edgeCount)")
             } catch {
                 log.error("[Hybrid] lexical resolve failed: \(error.localizedDescription, privacy: .public)")
+                print("HYBRID_RESOLVE_ERROR mode=lexical message=\"\(error.localizedDescription)\"")
+                exit(3)
             }
         } else {
             let cfg = HeadlessRunnerConfig(projectName: "", mode: .fast,
@@ -485,5 +544,26 @@ final class HeadlessRunner {
         log.info("[Hybrid] done — resolved graph: \(graph.nodeCount)n/\(graph.edgeCount)e")
         try? await Task.sleep(for: .milliseconds(500))
         exit(0)
+    }
+
+    private func printHybridPlanDetails(_ plan: MergePlan, graph: KnowledgeGraph) {
+        for decision in plan.decisions {
+            let a = graph.node(for: decision.aID)
+            let b = graph.node(for: decision.bID)
+            print("HYBRID_MERGE similarity=\(String(format: "%.3f", decision.similarity)) reason=\(decision.reason.rawValue) a=\"\(Self.printableLabel(a?.label))\" b=\"\(Self.printableLabel(b?.label))\"")
+        }
+
+        for relation in plan.relations {
+            let source = graph.node(for: relation.sourceID)
+            let target = graph.node(for: relation.targetID)
+            print("HYBRID_RELATION type=\(relation.edgeType.rawValue) similarity=\(String(format: "%.3f", relation.similarity)) source=\"\(Self.printableLabel(source?.label))\" target=\"\(Self.printableLabel(target?.label))\"")
+        }
+    }
+
+    private static func printableLabel(_ label: String?) -> String {
+        (label ?? "<missing>")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+            .replacingOccurrences(of: "\"", with: "'")
     }
 }

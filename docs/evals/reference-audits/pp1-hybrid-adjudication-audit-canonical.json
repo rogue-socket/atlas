@@ -1,0 +1,246 @@
+{
+  "eligibleNodeCount": 136,
+  "entries": [
+    {
+      "aDocs": [
+        "harvest_hearth_company_and_people.pdf"
+      ],
+      "aID": "75184DC7-73C1-4EBC-A2D2-CC3DD87E694F",
+      "aLabel": "US and Canada retail presence",
+      "aLevel": "entity",
+      "bDocs": [
+        "harvest_hearth_customer_experience_and_operations.pdf"
+      ],
+      "bID": "D72EA39C-728E-4B4A-AE1D-37EDE16597E5",
+      "bLabel": "US and Canada shipping coverage",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "keep",
+      "similarity": 0.7250265
+    },
+    {
+      "aDocs": [
+        "harvest_hearth_company_and_people.pdf",
+        "harvest_hearth_customer_experience_and_operations.pdf"
+      ],
+      "aID": "5B5038C8-1414-42BE-B390-5C9820C1E20A",
+      "aLabel": "Portland distribution center",
+      "aLevel": "entity",
+      "bDocs": [
+        "harvest_hearth_company_and_people.pdf"
+      ],
+      "bID": "831CDD8A-7CB4-4927-9E42-77FCDA0DEEB2",
+      "bLabel": "Portland headquarters",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "keep",
+      "similarity": 0.7415924
+    },
+    {
+      "aDocs": [
+        "harvest_hearth_product_lines_and_pricing.pdf"
+      ],
+      "aID": "55CB589F-BAC3-4D47-81FE-EE85BECD91E6",
+      "aLabel": "Furniture assortment",
+      "aLevel": "concept",
+      "bDocs": [
+        "harvest_hearth_customer_experience_and_operations.pdf"
+      ],
+      "bID": "A0092C84-D8CA-4F81-896F-288D3F825FB2",
+      "bLabel": "FSC wood sourcing",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "keep",
+      "similarity": 0.6770099
+    },
+    {
+      "aDocs": [
+        "harvest_hearth_customer_experience_and_operations.pdf",
+        "harvest_hearth_product_lines_and_pricing.pdf"
+      ],
+      "aID": "36387190-26C7-4DCA-AF75-F48A58E48576",
+      "aLabel": "Revenue share",
+      "aLevel": "entity",
+      "bDocs": [
+        "harvest_hearth_customer_experience_and_operations.pdf"
+      ],
+      "bID": "F5B36BA6-0BFF-4E32-94E0-DB3E0CD2A1D1",
+      "bLabel": "E-commerce revenue share",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "finalReason": "llmAdjudicated",
+      "llmVerdict": "merge",
+      "similarity": 0.88493377
+    },
+    {
+      "aDocs": [
+        "harvest_hearth_company_and_people.pdf"
+      ],
+      "aID": "36B099C2-8909-410B-928A-1ADC01CFBB93",
+      "aLabel": "Distribution and sourcing footprint",
+      "aLevel": "concept",
+      "bDocs": [
+        "harvest_hearth_company_and_people.pdf",
+        "harvest_hearth_customer_experience_and_operations.pdf"
+      ],
+      "bID": "B8D731D4-67D3-4E48-90FA-EFC2B6C930AC",
+      "bLabel": "Supplier network scale",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "instance_of",
+      "similarity": 0.75580055,
+      "llmDirection": "ba"
+    },
+    {
+      "aDocs": [
+        "harvest_hearth_customer_experience_and_operations.pdf"
+      ],
+      "aID": "0026B389-B44B-4105-A779-3774A38BACD4",
+      "aLabel": "Repair and event workshops",
+      "aLevel": "entity",
+      "bDocs": [
+        "harvest_hearth_company_and_people.pdf"
+      ],
+      "bID": "CF9D5586-5D62-4730-9B30-EB00F6AF2CA6",
+      "bLabel": "Repair workshops",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "keep",
+      "similarity": 0.79045624
+    },
+    {
+      "aDocs": [
+        "harvest_hearth_product_lines_and_pricing.pdf"
+      ],
+      "aID": "0DBC74E2-A680-4EBC-9353-D4683BC73B15",
+      "aLabel": "Hardwood sourcing",
+      "aLevel": "entity",
+      "bDocs": [
+        "harvest_hearth_customer_experience_and_operations.pdf"
+      ],
+      "bID": "A0092C84-D8CA-4F81-896F-288D3F825FB2",
+      "bLabel": "FSC wood sourcing",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "finalReason": "llmAdjudicated",
+      "llmVerdict": "merge",
+      "similarity": 0.8316524
+    },
+    {
+      "aDocs": [
+        "harvest_hearth_customer_experience_and_operations.pdf",
+        "harvest_hearth_product_lines_and_pricing.pdf"
+      ],
+      "aID": "36387190-26C7-4DCA-AF75-F48A58E48576",
+      "aLabel": "Revenue share",
+      "aLevel": "entity",
+      "bDocs": [
+        "harvest_hearth_company_and_people.pdf"
+      ],
+      "bID": "93A9996F-732F-4CDF-A07E-DC497D03BC2D",
+      "bLabel": "Fiscal 2025 revenue",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "attribute_of",
+      "similarity": 0.7438902,
+      "llmDirection": "ab"
+    },
+    {
+      "aDocs": [
+        "harvest_hearth_company_and_people.pdf"
+      ],
+      "aID": "36B099C2-8909-410B-928A-1ADC01CFBB93",
+      "aLabel": "Distribution and sourcing footprint",
+      "aLevel": "concept",
+      "bDocs": [
+        "harvest_hearth_customer_experience_and_operations.pdf"
+      ],
+      "bID": "A069CDB9-17DF-4847-BE3F-A89A5930CEFF",
+      "bLabel": "Distribution and replenishment operations",
+      "bLevel": "concept",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "process_for",
+      "similarity": 0.722536,
+      "llmDirection": "ba"
+    },
+    {
+      "aDocs": [
+        "harvest_hearth_product_lines_and_pricing.pdf"
+      ],
+      "aID": "6855D893-9D49-4BBB-8037-DEF7F3A20071",
+      "aLabel": "Books selection",
+      "aLevel": "concept",
+      "bDocs": [
+        "harvest_hearth_customer_experience_and_operations.pdf"
+      ],
+      "bID": "8DCF6417-E2E6-4F9F-B718-44AEE2206C1F",
+      "bLabel": "In-store service and programming",
+      "bLevel": "concept",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "keep",
+      "similarity": 0.7205673
+    },
+    {
+      "aDocs": [
+        "harvest_hearth_company_and_people.pdf"
+      ],
+      "aID": "C3F2856B-F51B-4087-A98D-E9C6026CB663",
+      "aLabel": "Worksite options",
+      "aLevel": "entity",
+      "bDocs": [
+        "harvest_hearth_customer_experience_and_operations.pdf"
+      ],
+      "bID": "E115A82F-6161-42B7-87D5-D154299B1FFD",
+      "bLabel": "Customer service operations",
+      "bLevel": "concept",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "keep",
+      "similarity": 0.6519075
+    },
+    {
+      "aDocs": [
+        "harvest_hearth_customer_experience_and_operations.pdf",
+        "harvest_hearth_product_lines_and_pricing.pdf"
+      ],
+      "aID": "36387190-26C7-4DCA-AF75-F48A58E48576",
+      "aLabel": "Revenue share",
+      "aLevel": "entity",
+      "bDocs": [
+        "harvest_hearth_product_lines_and_pricing.pdf"
+      ],
+      "bID": "642C235C-63C2-432C-A286-AF5414EB7B7D",
+      "bLabel": "Kitchen revenue share",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "instance_of",
+      "similarity": 0.75033605,
+      "llmDirection": "ba"
+    }
+  ],
+  "modelIdentifier": "bge-base-en-v1.5",
+  "pairsEvaluated": 5846,
+  "thresholds": {
+    "adjudicationBatchSize": 18,
+    "adjudicationFloor": 0.8,
+    "adjudicationFloorPerKind": {
+      "conceptConcept": 0.72,
+      "crossLevel": 0.65,
+      "entityEntity": 0.72
+    },
+    "autoMerge": 0.95
+  },
+  "timestamp": "2026-06-01T20:49:13Z",
+  "vectorDimension": 768
+}

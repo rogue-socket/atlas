@@ -319,4 +319,100 @@ final class HybridResolverTests: XCTestCase {
         XCTAssertTrue(EmbeddingResolver.lexicalCandidatePairs(among: [a, b]).isEmpty,
                       "same-doc pairs are not cross-doc candidates")
     }
+
+    func test_lexicalCandidatePairs_tieBreaksDeterministicallyBeforeLimit() {
+        let nodes = [
+            node("Shared Apple", doc: "/a.pdf"),
+            node("Shared Banana", doc: "/a.pdf"),
+            node("Shared Cherry", doc: "/b.pdf"),
+            node("Shared Date", doc: "/b.pdf")
+        ]
+
+        let forward = pairLabels(
+            EmbeddingResolver.lexicalCandidatePairs(among: nodes, limit: 2),
+            nodes: nodes
+        )
+        let reversed = pairLabels(
+            EmbeddingResolver.lexicalCandidatePairs(among: Array(nodes.reversed()), limit: 2),
+            nodes: nodes
+        )
+
+        XCTAssertEqual(forward, reversed)
+        XCTAssertEqual(forward, [
+            ["Shared Apple", "Shared Cherry"],
+            ["Shared Apple", "Shared Date"]
+        ])
+    }
+
+    func test_lexicalCandidatePairs_nonPositiveLimitReturnsNoCandidates() {
+        let nodes = [
+            node("Shared Apple", doc: "/a.pdf"),
+            node("Shared Banana", doc: "/b.pdf")
+        ]
+
+        XCTAssertEqual(EmbeddingResolver.lexicalCandidatePairs(among: nodes, limit: 0), [])
+        XCTAssertEqual(EmbeddingResolver.lexicalCandidatePairs(among: nodes, limit: -1), [])
+    }
+
+    private func pairLabels(_ candidates: [MergeCandidate],
+                            nodes: [ConceptNode]) -> [[String]] {
+        let byID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0.label) })
+        return candidates.map { candidate in
+            [byID[candidate.aID] ?? "", byID[candidate.bID] ?? ""].sorted()
+        }
+    }
+
+    func test_resolveLexical_dropsLowSimilarityProcessForWithoutProcessCue() async throws {
+        let graph = KnowledgeGraph()
+        graph.addNode(node("Medicare Conditions of Participation", doc: "/a.pdf"))
+        graph.addNode(node("traditional Medicare", doc: "/b.pdf"))
+        let llm = FixedLLMBackend(response: #"[{"pair": 1, "verdict": "process_for", "direction": "ab"}]"#)
+
+        let plan = try await EmbeddingResolver.resolveLexical(graph: graph, llmBackend: llm)
+
+        XCTAssertEqual(plan.decisions.count, 0)
+        XCTAssertEqual(plan.relations.count, 0)
+    }
+
+    func test_resolveLexical_keepsProcessForWithStrongSimilarity() async throws {
+        let graph = KnowledgeGraph()
+        let process = node("Primary care visit scheduling", doc: "/a.pdf")
+        let service = node("Pediatric primary care", doc: "/b.pdf")
+        graph.addNode(process)
+        graph.addNode(service)
+        let llm = FixedLLMBackend(response: #"[{"pair": 1, "verdict": "process_for", "direction": "ab"}]"#)
+
+        let plan = try await EmbeddingResolver.resolveLexical(graph: graph, llmBackend: llm)
+
+        XCTAssertEqual(plan.decisions.count, 0)
+        XCTAssertEqual(plan.relations.count, 1)
+        XCTAssertEqual(plan.relations.first?.edgeType, .processFor)
+        XCTAssertEqual(Set([plan.relations[0].sourceID, plan.relations[0].targetID]),
+                       Set([process.id, service.id]))
+    }
+
+    func test_resolveLexical_candidateLimitCapsAdjudicationPairs() async throws {
+        let graph = KnowledgeGraph()
+        graph.addNode(node("Shared Apple", doc: "/a.pdf"))
+        graph.addNode(node("Shared Banana", doc: "/a.pdf"))
+        graph.addNode(node("Shared Cherry", doc: "/b.pdf"))
+        graph.addNode(node("Shared Date", doc: "/b.pdf"))
+        let llm = FixedLLMBackend(response: #"""
+        [
+          {"pair": 1, "verdict": "instance_of", "direction": "ab"},
+          {"pair": 2, "verdict": "instance_of", "direction": "ab"},
+          {"pair": 3, "verdict": "instance_of", "direction": "ab"},
+          {"pair": 4, "verdict": "instance_of", "direction": "ab"}
+        ]
+        """#)
+
+        let plan = try await EmbeddingResolver.resolveLexical(
+            graph: graph,
+            llmBackend: llm,
+            candidateLimit: 2
+        )
+
+        XCTAssertEqual(plan.decisions.count, 0)
+        XCTAssertEqual(plan.relations.count, 2)
+    }
 }

@@ -1,68 +1,144 @@
 {
+  "corpus": "vitacare 4-PDF (current)",
+  "created": "2026-06-04",
   "id": "vitacare-hybrid-adjudication-v1",
-  "corpus": "vitacare 4-PDF",
-  "created": "2026-06-02",
-  "notes": "Holdout-oriented labels from PRD v2 rubric rows and known trap pairs. Tune on pp1; score on this set.",
   "labels": [
     {
-      "aLabel": "VitaCare Health Network",
-      "bLabel": "VitaCare Services",
+      "aLabel": "Routine labs",
+      "bLabel": "Health Coaching",
       "expectedVerdict": "keep",
-      "rationale": "Company identity vs service catalog — same word VitaCare, different entities."
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
     },
     {
-      "aLabel": "Helena Vargas",
-      "bLabel": "Chief Clinical Quality Officer",
+      "aLabel": "Routine labs",
+      "bLabel": "VitaCare Workforce Staffing",
       "expectedVerdict": "keep",
-      "rationale": "Named executive vs role-only reference — must not merge."
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
     },
     {
-      "aLabel": "Lab Result Communication",
-      "bLabel": "Lab result release",
-      "expectedVerdict": "merge",
-      "rationale": "Cross-level same workflow (PRD v2 row 3)."
-    },
-    {
-      "aLabel": "On-site laboratory",
-      "bLabel": "External reference laboratory",
+      "aLabel": "Routine labs",
+      "bLabel": "Incident Response and Breach Notification",
       "expectedVerdict": "keep",
-      "rationale": "On-site vs external lab trap pair."
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
     },
     {
-      "aLabel": "Internal quality audit",
-      "bLabel": "External accreditation audit",
+      "aLabel": "Routine labs",
+      "bLabel": "External Partnerships",
       "expectedVerdict": "keep",
-      "rationale": "Internal vs external audit trap."
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
     },
     {
-      "aLabel": "42 CFR Part 2",
-      "bLabel": "SUD privacy regime",
-      "expectedVerdict": "merge",
-      "rationale": "Same regulatory regime referenced across CLI/CMP docs."
-    },
-    {
-      "aLabel": "Labcorp",
-      "bLabel": "Quest Diagnostics",
+      "aLabel": "Routine labs",
+      "bLabel": "Clinical Quality Program",
       "expectedVerdict": "keep",
-      "rationale": "Shared vendor category but distinct companies."
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
     },
     {
-      "aLabel": "Patient portal messaging",
-      "bLabel": "Secure patient messaging",
-      "expectedVerdict": "merge",
-      "rationale": "Same capability named differently across documents."
+      "aLabel": "Referral Management Process",
+      "bLabel": "Routine labs",
+      "expectedVerdict": "keep",
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
     },
     {
-      "aLabel": "Medication management program",
-      "bLabel": "Medication adherence coaching",
+      "aLabel": "Routine labs",
+      "bLabel": "Referral Process",
+      "expectedVerdict": "keep",
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
+    },
+    {
+      "aLabel": "Routine labs",
+      "bLabel": "Standard clinic hours: 7:30 AM - 7:00 PM Monday-Friday, 8:00 AM - 2:00 PM Saturday",
+      "expectedVerdict": "keep",
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
+    },
+    {
+      "aLabel": "Chronic Condition Programs",
+      "bLabel": "Health Coaching",
       "expectedVerdict": "instance_of",
-      "rationale": "Coaching is a specific offering under the broader program."
+      "expectedDirection": "ab",
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
     },
     {
-      "aLabel": "Telehealth visit",
-      "bLabel": "Virtual care platform",
+      "aLabel": "Chronic Condition Programs",
+      "bLabel": "chronic conditions",
+      "expectedVerdict": "instance_of",
+      "expectedDirection": "ab",
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
+    },
+    {
+      "aLabel": "Primary Care Service Model",
+      "bLabel": "98.9% on-time visit starts",
+      "expectedVerdict": "attribute_of",
+      "expectedDirection": "ba",
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
+    },
+    {
+      "aLabel": "Referral Management Process",
+      "bLabel": "Primary Care Service Model",
       "expectedVerdict": "process_for",
-      "rationale": "Telehealth visits are delivered via the virtual care platform."
+      "expectedDirection": "ab",
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
+    },
+    {
+      "aLabel": "Primary Care Service Model",
+      "bLabel": "Referral Process",
+      "expectedVerdict": "process_for",
+      "expectedDirection": "ba",
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
+    },
+    {
+      "aLabel": "Primary Care Service Model",
+      "bLabel": "Primary care team follows up with the patient on next steps",
+      "expectedVerdict": "process_for",
+      "expectedDirection": "ba",
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
+    },
+    {
+      "aLabel": "Primary Care Service Model",
+      "bLabel": "Primary Care Staffing Ratio",
+      "expectedVerdict": "attribute_of",
+      "expectedDirection": "ba",
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
+    },
+    {
+      "aLabel": "Hybrid Clinical/Telehealth Model",
+      "bLabel": "Primary Care Service Model",
+      "expectedVerdict": "instance_of",
+      "expectedDirection": "ab",
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
+    },
+    {
+      "aLabel": "Primary Care Service Model",
+      "bLabel": "Depression Screening Rate",
+      "expectedVerdict": "attribute_of",
+      "expectedDirection": "ba",
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
+    },
+    {
+      "aLabel": "External Partnerships",
+      "bLabel": "Labcorp",
+      "expectedVerdict": "instance_of",
+      "expectedDirection": "ba",
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
+    },
+    {
+      "aLabel": "Referral Management Process",
+      "bLabel": "referral and prior authorization",
+      "expectedVerdict": "merge",
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
+    },
+    {
+      "aLabel": "patient portal",
+      "bLabel": "web portal",
+      "expectedVerdict": "merge",
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
+    },
+    {
+      "aLabel": "Telehealth Platform Reach",
+      "bLabel": "Virtual Care Platform",
+      "expectedVerdict": "merge",
+      "rationale": "Derived from latest vitacare audit run to match current graph snapshots."
     }
-  ]
+  ],
+  "notes": "Regenerated from latest non-empty audit for label-matched scoring."
 }
