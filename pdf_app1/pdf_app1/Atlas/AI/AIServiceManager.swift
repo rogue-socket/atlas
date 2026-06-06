@@ -60,6 +60,15 @@ class AIServiceManager {
             let baseURL = UserDefaults.standard.string(forKey: AppConstants.ollamaBaseURLKey) ?? "http://localhost:11434"
             log.info("[AIService] Using Ollama at \(baseURL)")
             return OpenAIBackend(apiKey: "", model: selectedModel, baseURL: baseURL + "/v1", displayName: "Ollama")
+        case .codexAgent:
+            let baseURL = UserDefaults.standard.string(forKey: AppConstants.codexAgentSidecarURLKey)
+                ?? AIBackendType.codexAgent.defaultBaseURL
+            let envModel = ProcessInfo.processInfo.environment["ATLAS_CODEX_AGENT_MODEL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let envReasoningEffort = ProcessInfo.processInfo.environment["ATLAS_CODEX_AGENT_REASONING_EFFORT"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let model = (envModel?.isEmpty == false) ? envModel! : selectedModel
+            let reasoningEffort = (envReasoningEffort?.isEmpty == false) ? envReasoningEffort : nil
+            log.info("[AIService] Using Codex Agent sidecar at \(baseURL) model=\(model) reasoningEffort=\(reasoningEffort ?? "<default>")")
+            return CodexAgentBackend(baseURL: baseURL, model: model, reasoningEffort: reasoningEffort)
         case .claudeSubscription:
             let baseURL = UserDefaults.standard.string(forKey: AppConstants.claudeSidecarURLKey)
                 ?? AIBackendType.claudeSubscription.defaultBaseURL
@@ -102,7 +111,19 @@ class AIServiceManager {
     }
 
     func getAPIKey(for backend: AIBackendType) -> String? {
+        // Hard-guard: tests never touch Keychain (avoids ACL prompts in CI
+        // and ensures deterministic behavior regardless of dev-file presence).
         if Self.isRunningUnderXCTest { return nil }
+
+        // Dev-mode lookup order (Process environment, optional dev keys file, then keychain).
+        // 1. Process env var (e.g. ATLAS_GEMINI_API_KEY)
+        if let envKey = ProcessInfo.processInfo.environment[envVarName(for: backend)],
+           !envKey.isEmpty {
+            return envKey
+        }
+        if FileManager.default.fileExists(atPath: devKeysFileURL.path) {
+            return devKeysFileLookup(backend: backend)
+        }
 
         let service = "com.atlas.apikey.\(backend.rawValue)"
         let query: [String: Any] = [
@@ -117,6 +138,43 @@ class AIServiceManager {
 
         guard status == errSecSuccess, let data = result as? Data else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+
+    // MARK: - Dev key sources (env var + plaintext file)
+
+    private func envVarName(for backend: AIBackendType) -> String {
+        "ATLAS_\(backend.rawValue.uppercased())_API_KEY"
+    }
+
+    /// Path: `<app sandbox>/Data/atlas-dev-keys.json`. The Application Support
+    /// directory resolves into the sandbox container, so this stays accessible
+    /// to the app without entitlement changes. JSON shape:
+    ///   `{ "claude": "...", "openai": "...", "gemini": "...", "ollama": "..." }`
+    /// Missing or unreadable file = nil (silently fall through to Keychain).
+    private var devKeysFileURL: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        // appSupport here is `<container>/Data/Library/Application Support`.
+        // Two levels up gets us to `<container>/Data/`, where the file is least
+        // intrusive (next to other top-level container junk, not buried).
+        return appSupport
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("atlas-dev-keys.json")
+    }
+
+    private func devKeysFileLookup(backend: AIBackendType) -> String? {
+        let url = devKeysFileURL
+        guard FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String]
+        else { return nil }
+        // Case-insensitive key match so the file can use either the enum's
+        // rawValue ("Gemini") or the lowercase form ("gemini").
+        let target = backend.rawValue.lowercased()
+        for (k, v) in obj where k.lowercased() == target {
+            return v
+        }
+        return nil
     }
 
     // MARK: - Response Caching
@@ -162,6 +220,7 @@ class AIServiceManager {
     func savePreferences() {
         UserDefaults.standard.set(selectedBackendType.rawValue, forKey: AppConstants.aiBackendTypeKey)
         UserDefaults.standard.set(selectedModel, forKey: AppConstants.aiModelKey)
+        updateConfiguredState()
     }
 
     private func updateConfiguredState() {

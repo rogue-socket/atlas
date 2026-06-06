@@ -42,7 +42,7 @@ struct AppConstants {
     // MARK: - Recent Files
     /// Maximum number of recent files to store
     static let maxRecentFiles: Int = 20
-    
+
     // MARK: - Annotations
     /// Default text annotation width
     static let textAnnotationWidth: CGFloat = 200
@@ -56,7 +56,7 @@ struct AppConstants {
     static let annotationFontSize: CGFloat = 12
     /// Vertical offset for text annotations (from click point)
     static let textAnnotationVerticalOffset: CGFloat = 20
-    
+
     // MARK: - UI
     /// Default notification duration in seconds
     static let notificationDuration: Double = 3.0
@@ -72,7 +72,7 @@ struct AppConstants {
     static let minWindowWidth: CGFloat = 800
     /// Minimum window height
     static let minWindowHeight: CGFloat = 600
-    
+
     // MARK: - Zoom
     /// Zoom in/out multiplier
     static let zoomMultiplier: CGFloat = 1.2
@@ -112,8 +112,12 @@ struct AppConstants {
     static let aiModelKey = "atlas.ai.model"
     /// UserDefaults key for Ollama base URL override
     static let ollamaBaseURLKey = "atlas.ollama.baseURL"
+    /// UserDefaults key for the Codex Agent sidecar base URL override
+    static let codexAgentSidecarURLKey = "atlas.codexAgentSidecar.baseURL"
     /// UserDefaults key for the Claude sidecar base URL override
     static let claudeSidecarURLKey = "atlas.claudeSidecar.baseURL"
+    /// UserDefaults key for max prior-doc lines included in SCE extraction prompts
+    static let scePriorHeaderMaxLinesKey = "atlas.sce.priorHeaderMaxLines"
 }
 
 // MARK: - Notification Names

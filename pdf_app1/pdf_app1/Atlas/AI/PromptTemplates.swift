@@ -20,10 +20,45 @@ enum PromptTemplates {
             ? ""
             : "\nDocument outline hints: \(context.outlineHints.joined(separator: " > "))"
 
+        let priorDocsBlock: String
+        if let header = context.priorDocsContext, !header.isEmpty {
+            priorDocsBlock = """
+
+            ## Prior Documents — Cross-Document Reuse
+
+            The following concepts and entities were extracted from earlier documents in this project:
+
+            \(header)
+
+            When the current text discusses one of the prior items above, FLAG the relationship using two optional fields on the concept/entity: `prior_label_match` (the value MUST be COPIED character-for-character from one of the bullet labels above — any value not in that list will be silently discarded by the parser) and `match_kind` (one of: `same_entity`, `instance_of`, `attribute_of`, `process_for`). Keep your `label` and `textSpan` natural for the current document; the parser uses these two fields to merge or to add a typed cross-document edge.
+
+            DIRECTION RULE (strict): for every `match_kind` except `same_entity`, the CURRENT item must be the MORE SPECIFIC, NARROWER, or DERIVED thing, and the PRIOR bullet must be the BROADER, more general parent thing. If the relationship is reversed (current is broader than prior), OMIT both `prior_label_match` and `match_kind`. Do not flag a relationship just because two things are related; the direction must be current(narrow) → prior(broad).
+
+            `match_kind` semantics — pick the ONE that fits, and only when the direction rule holds:
+            - `same_entity` — current item is THE SAME real-world thing as the prior bullet, just framed differently (different wording, abbreviation, expansion, casing, or sub-phrase). Parser will MERGE the two into one node. (Direction symmetric; no narrow/broad constraint.)
+            - `instance_of` — current is a SPECIFIC INSTANCE or sub-type of the prior bullet's broader category. Example direction: current "MRI" → prior "Medical imaging". REJECT direction: current "Medical imaging" → prior "MRI" (broader → narrower is wrong; omit instead).
+            - `attribute_of` — current is a PROPERTY, VALUE, COUNT, MEASUREMENT, or SPECIFICATION of the prior bullet. Example direction: current "8pm closing time" → prior "Clinic Operating Hours". REJECT direction: current "Clinic Operating Hours" → prior "8pm closing time" (the named entity is broader than its value; omit).
+            - `process_for` — current is an ACTION, PROCEDURE, WORKFLOW, or PROCESS that operates ON or PRODUCES the prior bullet. Example direction: current "Visit Scheduling" → prior "Annual Wellness Visit". REJECT direction: current "Annual Wellness Visit" → prior "Visit Scheduling" (the entity is not a process for its own scheduling; omit).
+
+            Pattern templates (abstract — apply to whatever domain the text is from):
+            - same_entity: prior `<Canonical Phrase>` ↔ current `<paraphrase / abbreviation / expansion>` referring to the SAME thing.
+            - instance_of: prior `<Broad Category>` ↔ current `<specific named instance under that category>`.
+            - attribute_of: prior `<Entity X>` ↔ current `<a time / count / SLA / metric / policy / value of X>`.
+            - process_for: prior `<Entity X>` ↔ current `<scheduling / matching / generating / validating / measuring X>`.
+
+            If NONE of the four apply — the current item is a genuinely separate real-world thing — OMIT both `prior_label_match` and `match_kind`. Do not flag.
+
+            The `type` shown on prior nodes is advisory. Cross-level matches (concept ↔ entity) are allowed for any `match_kind`.
+
+            """
+        } else {
+            priorDocsBlock = ""
+        }
+
         return """
         You are a concept map extraction system. Analyze the following text from "\(context.documentTitle)" (pages \(context.pageRange.lowerBound + 1)-\(context.pageRange.upperBound)) and extract concepts, their entities, and relationships between concepts.
         \(outlineHints)
-
+        \(priorDocsBlock)
         Already extracted concepts (do not duplicate): \(existingList)
 
         ## Core Principle
@@ -55,13 +90,17 @@ enum PromptTemplates {
               "summary": "One sentence explaining this concept",
               "textSpan": "exact verbatim quote from text",
               "confidence": 0.95,
+              "prior_label_match": "Exact Prior Label",
+              "match_kind": "same_entity",
               "entities": [
                 {
                   "label": "Specific Entity Name",
                   "type": "definition",
                   "summary": "One sentence explanation",
                   "textSpan": "exact verbatim quote from text",
-                  "confidence": 0.9
+                  "confidence": 0.9,
+                  "prior_label_match": "Exact Prior Label",
+                  "match_kind": "same_entity"
                 }
               ]
             }
@@ -80,6 +119,7 @@ enum PromptTemplates {
         REQUIRED concept fields: label, type, summary, textSpan, confidence
         REQUIRED entity fields: label, type, summary, textSpan, confidence
         REQUIRED edge fields: sourceLabel, targetLabel, type, confidence, linkingPhrase
+        OPTIONAL fields on concepts/entities: `prior_label_match` (must come from the cross-document reuse list, if shown) paired with `match_kind` (one of: same_entity, instance_of, attribute_of, process_for). Both present together or both absent. Omit when no relationship to a prior item.
         Concept types: concept, theorem, method, claim
         Entity types: definition, example, person, dataset, result, equation
         Edge types: dependsOn, contradicts, exampleOf, defines, extends, cites, sameTopic, partOf, uses
@@ -94,16 +134,241 @@ enum PromptTemplates {
         """
     }
 
+    // MARK: - SCE Prior-Label-Match Resolution
+
+    /// Build the lowercased→canonical-cased map of labels eligible for
+    /// `prior_label_match` rewriting. Includes every node anchored ONLY in
+    /// prior documents (i.e. not anchored in `currentDocURL`). Match semantics
+    /// mirror `KnowledgeGraph.node(matching:)`'s case-insensitive index, so we
+    /// validate the LLM's claim case-insensitively but preserve the original
+    /// casing on rewrite (the prior node's canonical label).
+    static func priorDocsLabelMap(graph: KnowledgeGraph, currentDocURL: URL) -> [String: String] {
+        var map: [String: String] = [:]
+        for node in graph.allNodes {
+            let anchors = node.sourceAnchors
+            guard !anchors.isEmpty else { continue }
+            if anchors.contains(where: { $0.documentURL == currentDocURL }) { continue }
+            map[node.label.lowercased()] = node.label
+        }
+        return map
+    }
+
+    /// Decide the effective label for graph insertion: if the LLM's claimed
+    /// `prior_label_match` is a member of `priorDocsLabelMap`, return the
+    /// canonical prior label (drives the parser-side merge); otherwise return
+    /// the LLM's original `rawLabel` unchanged.
+    static func resolveEffectiveLabel(
+        rawLabel: String,
+        priorLabelMatch: String?,
+        priorDocsLabelMap: [String: String]
+    ) -> (effectiveLabel: String, renamed: Bool) {
+        guard let claimed = priorLabelMatch?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !claimed.isEmpty,
+              let canonical = canonicalPriorLabel(for: claimed, in: priorDocsLabelMap) else {
+            return (rawLabel, false)
+        }
+        return (canonical, canonical.lowercased() != rawLabel.lowercased())
+    }
+
+    /// SCE step 3: a richer match decision that splits `same_entity` (merge) from
+    /// the typed-edge kinds. Returns `.noMatch` for absent/invalid claims; the
+    /// caller treats those identically to the pre-Option-D code path.
+    enum SCEMatchAction: Equatable {
+        case noMatch
+        case mergeByRename(canonical: String)
+        case typedEdge(canonical: String, edgeType: EdgeType)
+    }
+
+    /// Higher score means the node is more specific/narrow. Typed SCE edges require
+    /// the current item to be strictly more specific than the prior canonical target.
+    static func sceSpecificityScore(label: String, level: NodeLevel, summary: String?) -> Int {
+        var score: Int
+        switch level {
+        case .entity: score = 40
+        case .concept: score = 30
+        case .chapter: score = 20
+        case .document: score = 10
+        }
+        score += label.split(whereSeparator: { $0.isWhitespace }).count * 3
+        if let summary, !summary.isEmpty {
+            score += min(6, summary.split(whereSeparator: { $0.isWhitespace }).count)
+        }
+        return score
+    }
+
+    static func isValidSCETypedEdgeDirection(
+        currentLabel: String,
+        currentLevel: NodeLevel,
+        currentSummary: String?,
+        priorLabel: String,
+        priorLevel: NodeLevel,
+        priorSummary: String?
+    ) -> Bool {
+        let currentScore = sceSpecificityScore(label: currentLabel, level: currentLevel, summary: currentSummary)
+        let priorScore = sceSpecificityScore(label: priorLabel, level: priorLevel, summary: priorSummary)
+        if currentScore == priorScore {
+            let currentWords = currentLabel.lowercased()
+            let priorWords = priorLabel.lowercased()
+            if currentWords.contains(priorWords) || priorWords.contains(currentWords) {
+                return currentWords.count > priorWords.count
+            }
+            return false
+        }
+        return currentScore > priorScore
+    }
+
+    static func resolveMatchAction(
+        priorLabelMatch: String?,
+        matchKind: String?,
+        priorDocsLabelMap: [String: String]
+    ) -> SCEMatchAction {
+        guard let claimed = priorLabelMatch?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !claimed.isEmpty,
+              let canonical = canonicalPriorLabel(for: claimed, in: priorDocsLabelMap) else {
+            return .noMatch
+        }
+        let kind = matchKind?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        switch kind {
+        case "instance_of": return .typedEdge(canonical: canonical, edgeType: .instanceOf)
+        case "attribute_of": return .typedEdge(canonical: canonical, edgeType: .attributeOf)
+        case "process_for": return .typedEdge(canonical: canonical, edgeType: .processFor)
+        case "same_entity", nil, "":
+            // Missing matchKind defaults to merge for backward compat with
+            // step-2 responses that only had prior_label_match.
+            return .mergeByRename(canonical: canonical)
+        default:
+            // Unknown kind — refuse to act. Safer than guessing.
+            return .noMatch
+        }
+    }
+
+    private static func canonicalPriorLabel(for claimed: String, in priorDocsLabelMap: [String: String]) -> String? {
+        if let exact = priorDocsLabelMap[claimed.lowercased()] {
+            return exact
+        }
+
+        let normalizedClaim = normalizedPriorLabelKey(claimed)
+        guard !normalizedClaim.isEmpty else { return nil }
+
+        for canonical in priorDocsLabelMap.values {
+            if normalizedPriorLabelKey(canonical) == normalizedClaim {
+                return canonical
+            }
+        }
+        return nil
+    }
+
+    private static func normalizedPriorLabelKey(_ label: String) -> String {
+        let lowered = label.lowercased()
+        var scalars: [UnicodeScalar] = []
+        var lastWasSpace = true
+
+        for scalar in lowered.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                scalars.append(scalar)
+                lastWasSpace = false
+            } else if !lastWasSpace {
+                scalars.append(" ")
+                lastWasSpace = true
+            }
+        }
+
+        return String(String.UnicodeScalarView(scalars)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - SCE Cumulative-State Header
+
+    /// Build the cross-document reuse header for SCE doc N (N>1).
+    ///
+    /// Emits one line per node anchored ONLY in prior documents (excludes any node
+    /// also anchored in `currentDocURL`). Format per line:
+    ///   `- <label> (<level>·<type>): <summary>`
+    ///
+    /// Natural-language, terse — chosen over JSON to minimize prompt tokens.
+    /// Returns "" when there are no prior-doc nodes (caller treats empty as no-op).
+    static func cumulativeStateHeader(
+        priorDocsGraph: KnowledgeGraph,
+        currentDocURL: URL,
+        relevanceText: String? = nil,
+        maxLines: Int? = nil
+    ) -> String {
+        struct PriorLine {
+            let label: String
+            let text: String
+            let score: Int
+        }
+
+        let relevanceTokens = Set((relevanceText ?? "").sceHeaderTokens)
+        let lines: [PriorLine] = priorDocsGraph.allNodes.compactMap { node in
+            let anchors = node.sourceAnchors
+            guard !anchors.isEmpty else { return nil }
+            // Skip nodes anchored in the current doc — caller handles intra-doc dedup via existingConcepts.
+            if anchors.contains(where: { $0.documentURL == currentDocURL }) { return nil }
+            let levelTag = node.level.rawValue
+            let typeTag = node.type.rawValue
+            let displayLabel = node.label.sceHeaderLineText
+            let summary = (node.summary?.sceHeaderLineText).flatMap {
+                $0.isEmpty ? nil : $0
+            } ?? "(no summary)"
+            let labelTokens = Set(node.label.sceHeaderTokens)
+            let summaryTokens = Set(summary.sceHeaderTokens)
+            let overlapScore = labelTokens.intersection(relevanceTokens).count * 4 +
+                summaryTokens.intersection(relevanceTokens).count
+            let salienceScore: Int
+            switch node.level {
+            case .document: salienceScore = 6
+            case .chapter: salienceScore = 4
+            case .concept: salienceScore = 2
+            case .entity: salienceScore = node.type == .person ? 3 : 1
+            }
+            return PriorLine(
+                label: displayLabel,
+                text: "- \(displayLabel) (\(levelTag)·\(typeTag)): \(summary)",
+                score: relevanceTokens.isEmpty ? 0 : overlapScore + salienceScore
+            )
+        }
+
+        guard let maxLines, maxLines > 0, lines.count > maxLines else {
+            return lines.map(\.text).sorted().joined(separator: "\n")
+        }
+
+        return lines
+            .sorted {
+                if $0.score != $1.score { return $0.score > $1.score }
+                return $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
+            }
+            .prefix(maxLines)
+            .map(\.text)
+            .sorted()
+            .joined(separator: "\n")
+    }
+
     // MARK: - Edge Proposal
 
     static func edgeProposal(concepts: [String], context: String) -> String {
+        let candidates = concepts.map {
+            EdgeProposalCandidate(label: $0, level: .concept, type: .concept, parentLabel: nil, summary: nil)
+        }
+        return edgeProposal(candidates: candidates, context: context)
+    }
+
+    static func edgeProposal(candidates: [EdgeProposalCandidate], context: String) -> String {
+        let candidateList = candidates.map { candidate in
+            let parent = candidate.parentLabel.map { " parent=\"\($0)\"" } ?? ""
+            let summary = candidate.summary.map { " — \($0.sceHeaderLineText)" } ?? ""
+            return "- \"\(candidate.label)\" [\(candidate.level.rawValue)·\(candidate.type.rawValue)\(parent)]\(summary)"
+        }.joined(separator: "\n")
+
         return """
-        Given these concepts: \(concepts.joined(separator: ", "))
+        Given these candidate graph nodes. Edge endpoints MUST be copied exactly from one of these quoted labels:
+        \(candidateList)
 
         And this context text:
         \(context)
 
-        Propose relationships (edges) between the concepts. Do NOT propose edges between a concept and its own child entities — those containment relationships are already captured.
+        Propose semantic relationships (edges) between the candidate nodes. Do NOT propose edges between a concept and its own child entities — those containment relationships are already captured.
 
         Only propose edges between:
         - Two concepts (cross-topic relationships)
@@ -116,11 +381,13 @@ enum PromptTemplates {
             "sourceLabel": "...",
             "targetLabel": "...",
             "type": "...",
-            "confidence": 0.9
+            "confidence": 0.9,
+            "linkingPhrase": "short verb phrase"
           }
         ]
 
         Edge types: dependsOn, contradicts, exampleOf, defines, extends, cites, sameTopic, partOf, uses
+        linkingPhrase: 1-4 word verb phrase making "sourceLabel [phrase] targetLabel" readable
 
         Only propose edges you are confident about. Return valid JSON only.
         """
@@ -379,5 +646,32 @@ enum PromptTemplates {
 
         Return valid JSON only.
         """
+    }
+}
+
+private extension String {
+    var sceHeaderLineText: String {
+        components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    var sceHeaderTokens: [String] {
+        let lowered = lowercased()
+        var current = ""
+        var tokens: [String] = []
+
+        for scalar in lowered.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                current.unicodeScalars.append(scalar)
+            } else if !current.isEmpty {
+                if current.count > 2 { tokens.append(current) }
+                current.removeAll(keepingCapacity: true)
+            }
+        }
+        if current.count > 2 {
+            tokens.append(current)
+        }
+        return tokens
     }
 }
