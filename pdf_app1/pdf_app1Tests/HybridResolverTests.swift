@@ -415,4 +415,24 @@ final class HybridResolverTests: XCTestCase {
         XCTAssertEqual(plan.decisions.count, 0)
         XCTAssertEqual(plan.relations.count, 2)
     }
+
+    func test_resolveLexical_exactLabelAutoMergeIgnoresCandidateLimit() async throws {
+        let graph = KnowledgeGraph()
+        let a = node("AI", level: .entity, doc: "/a.pdf")
+        let b = node("ai", level: .entity, doc: "/b.pdf")
+        graph.addNode(a)
+        graph.addNode(b)
+        let llm = FixedLLMBackend(response: "[]")
+
+        let plan = try await EmbeddingResolver.resolveLexical(
+            graph: graph,
+            llmBackend: llm,
+            candidateLimit: 0
+        )
+
+        XCTAssertEqual(plan.decisions.count, 1)
+        XCTAssertEqual(plan.decisions.first?.reason, .exactLabel)
+        XCTAssertEqual(Set([plan.decisions[0].aID, plan.decisions[0].bID]), Set([a.id, b.id]))
+        XCTAssertEqual(plan.relations.count, 0)
+    }
 }

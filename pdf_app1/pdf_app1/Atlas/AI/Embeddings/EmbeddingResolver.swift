@@ -849,15 +849,27 @@ extension EmbeddingResolver {
         let nodesByID = Dictionary(uniqueKeysWithValues: eligible.map { ($0.id, $0) })
 
         var autoMerges: [MergeDecision] = []
+        var exactPairs = Set<String>()
+        for (aID, bID) in pairsToCompare(among: eligible) {
+            guard let a = nodesByID[aID], let b = nodesByID[bID],
+                  isExactLabelMatch(a, b) else { continue }
+            autoMerges.append(MergeDecision(aID: aID, bID: bID,
+                                            similarity: 1.0, reason: .exactLabel))
+            exactPairs.insert("\(aID.uuidString)|\(bID.uuidString)")
+        }
+
         var candidates: [MergeCandidate] = []
-        for cand in lexicalCandidatePairs(among: eligible, limit: candidateLimit) {
+        guard candidateLimit > 0 else {
+            log.info("[Lexical] \(autoMerges.count) exact-label auto-merge, 0 for adjudication")
+            return MergePlan(decisions: autoMerges, relations: [], thresholds: thresholds)
+        }
+
+        for cand in lexicalCandidatePairs(among: eligible, limit: Int.max) {
+            if exactPairs.contains("\(cand.aID.uuidString)|\(cand.bID.uuidString)") { continue }
+            if candidates.count >= candidateLimit { break }
             guard let a = nodesByID[cand.aID], let b = nodesByID[cand.bID] else { continue }
-            if isExactLabelMatch(a, b) {
-                autoMerges.append(MergeDecision(aID: cand.aID, bID: cand.bID,
-                                                similarity: cand.similarity, reason: .exactLabel))
-            } else {
-                candidates.append(cand)
-            }
+            if isExactLabelMatch(a, b) { continue }
+            candidates.append(cand)
         }
         log.info("[Lexical] \(autoMerges.count) exact-label auto-merge, \(candidates.count) for adjudication")
 
