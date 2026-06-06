@@ -347,10 +347,17 @@ enum EmbeddingResolver {
     }
 
     /// Case-insensitive label match force-merges regardless of similarity.
-    /// "Helena Vargas" == "helena vargas" must always merge even if the
-    /// summaries embed to differ vectors.
+    /// Whitespace is folded so incidental LLM formatting does not miss an
+    /// otherwise exact duplicate.
     static func isExactLabelMatch(_ a: ConceptNode, _ b: ConceptNode) -> Bool {
-        a.label.lowercased() == b.label.lowercased()
+        exactLabelKey(a.label) == exactLabelKey(b.label)
+    }
+
+    static func exactLabelKey(_ label: String) -> String {
+        label
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+            .lowercased()
     }
 }
 

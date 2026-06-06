@@ -200,6 +200,12 @@ final class EmbeddingResolverTests: XCTestCase {
         XCTAssertTrue(EmbeddingResolver.isExactLabelMatch(a, b))
     }
 
+    func test_isExactLabelMatch_foldsWhitespace_true() {
+        let a = ConceptNode(label: "  Helena   Vargas\n", level: .entity)
+        let b = ConceptNode(label: "helena vargas", level: .concept)
+        XCTAssertTrue(EmbeddingResolver.isExactLabelMatch(a, b))
+    }
+
     func test_isExactLabelMatch_differentLabels_false() {
         let a = ConceptNode(label: "Helena Vargas", level: .entity)
         let b = ConceptNode(label: "Anna Schultz", level: .entity)
