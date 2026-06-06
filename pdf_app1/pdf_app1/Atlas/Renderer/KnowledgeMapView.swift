@@ -63,8 +63,7 @@ struct KnowledgeMapView: View {
     // Node detail popover
     @State private var popoverNodeID: UUID?
 
-    // Cached filtered graph to avoid recomputation on every body evaluation
-    @State private var cachedFilteredGraph: KnowledgeGraph?
+    @State private var cachedRenderCache: MapCanvasRenderer.RenderCache = .empty
 
     // Callback to navigate PDF (set by parent). Source document URL is
     // first so the parent can route to the right tab when the clicked
@@ -100,14 +99,14 @@ struct KnowledgeMapView: View {
                 } else {
                     // Map canvas
                     MapCanvasRenderer(
-                        graph: cachedFilteredGraph ?? graph,
                         layout: layout,
                         zoomLevel: $zoomLevel,
                         selectedNodeID: $interaction.selectedNodeID,
                         activeNodeID: activeNodeID,
                         highlightedNodeIDs: filteredNodeIDs,
                         viewScale: interaction.viewScale,
-                        viewOffset: interaction.viewOffset
+                        viewOffset: interaction.viewOffset,
+                        renderCache: cachedRenderCache
                     )
                     .gesture(
                         MagnifyGesture()
@@ -272,7 +271,8 @@ struct KnowledgeMapView: View {
         layout.computeLayout(nodes: nodes, edges: edges, canvasSize: canvasSize, validNodeIDs: allIDs)
         lastLayoutComputationKey = key
 
-        cachedFilteredGraph = graphForCurrentZoom
+        let filteredGraph = graphForCurrentZoom
+        cachedRenderCache = MapCanvasRenderer.makeRenderCache(for: filteredGraph)
 
         if !hasComputedLayout {
             interaction.fitToContent(layout: layout, canvasSize: canvasSize, visibleIDs: nodeIDs)

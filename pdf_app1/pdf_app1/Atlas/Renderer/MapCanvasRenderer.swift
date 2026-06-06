@@ -9,7 +9,6 @@
 import SwiftUI
 
 struct MapCanvasRenderer: View {
-    var graph: KnowledgeGraph
     @Bindable var layout: ForceDirectedLayout
     @Binding var zoomLevel: SemanticZoomLevel
     @Binding var selectedNodeID: UUID?
@@ -17,6 +16,7 @@ struct MapCanvasRenderer: View {
     var highlightedNodeIDs: Set<UUID>
     var viewScale: CGFloat
     var viewOffset: CGPoint
+    let renderCache: RenderCache
 
     var body: some View {
         Canvas { context, size in
@@ -32,10 +32,9 @@ struct MapCanvasRenderer: View {
     // MARK: - Group Backgrounds (hierarchy-based)
 
     private func drawGroupBackgrounds(context: GraphicsContext, transform: CGAffineTransform, size: CGSize) {
-        let conceptGroups = Self.conceptEntityGroups(in: graph)
-        guard !conceptGroups.isEmpty else { return }
+        guard !renderCache.conceptEntityGroups.isEmpty else { return }
 
-        for (conceptNode, entityNodes) in conceptGroups {
+        for (conceptNode, entityNodes) in renderCache.conceptEntityGroups {
             let clusterNodes = [conceptNode] + entityNodes
             let groupPoints = clusterNodes.compactMap { layout.point(for: $0.id)?.applying(transform) }
             guard groupPoints.count >= 1 else { continue }
@@ -65,9 +64,51 @@ struct MapCanvasRenderer: View {
         }
     }
 
-    static func conceptEntityGroups(in graph: KnowledgeGraph) -> [(concept: ConceptNode, entities: [ConceptNode])] {
+    struct RenderCache {
+        let sortedNodes: [ConceptNode]
+        let semanticEdges: [GraphEdge]
+        let entityCountByParent: [UUID: Int]
+        let conceptEntityGroups: [(concept: ConceptNode, entities: [ConceptNode])]
+        let nodeIDsWithChildren: Set<UUID>
+
+        static let empty = RenderCache(
+            sortedNodes: [],
+            semanticEdges: [],
+            entityCountByParent: [:],
+            conceptEntityGroups: [],
+            nodeIDsWithChildren: []
+        )
+    }
+
+    static func makeRenderCache(for graph: KnowledgeGraph) -> RenderCache {
+        let levelOrder: [NodeLevel: Int] = [.entity: 0, .concept: 1, .chapter: 2, .document: 3]
+        let sortedNodes = graph.allNodes.sorted { a, b in
+            (levelOrder[a.level] ?? 0) < (levelOrder[b.level] ?? 0)
+        }
+
+        let allEdges = graph.allEdges
+        let semanticEdges = allEdges.filter { !$0.type.isContainment }
+        let conceptEntityGroups = Self.conceptEntityGroups(in: graph, edges: allEdges)
+        let entityCountByParent = Dictionary(
+            uniqueKeysWithValues: conceptEntityGroups.map { ($0.concept.id, $0.entities.count) }
+        )
+        let nodeIDsWithChildren = Set(allEdges.filter(\.type.isContainment).map(\.sourceNodeID))
+
+        return RenderCache(
+            sortedNodes: sortedNodes,
+            semanticEdges: semanticEdges,
+            entityCountByParent: entityCountByParent,
+            conceptEntityGroups: conceptEntityGroups,
+            nodeIDsWithChildren: nodeIDsWithChildren
+        )
+    }
+
+    static func conceptEntityGroups(
+        in graph: KnowledgeGraph,
+        edges: [GraphEdge]? = nil
+    ) -> [(concept: ConceptNode, entities: [ConceptNode])] {
         var entityIDsByConcept: [UUID: [UUID]] = [:]
-        for edge in graph.allEdges where edge.type == .containsEntity {
+        for edge in edges ?? graph.allEdges where edge.type == .containsEntity {
             entityIDsByConcept[edge.sourceNodeID, default: []].append(edge.targetNodeID)
         }
         guard !entityIDsByConcept.isEmpty else { return [] }
@@ -85,7 +126,7 @@ struct MapCanvasRenderer: View {
     // MARK: - Edges
 
     private func drawEdges(context: GraphicsContext, transform: CGAffineTransform, size: CGSize) {
-        for edge in graph.allEdges {
+        for edge in renderCache.semanticEdges {
             guard let srcPos = layout.point(for: edge.sourceNodeID),
                   let tgtPos = layout.point(for: edge.targetNodeID) else { continue }
             let src = srcPos.applying(transform)
@@ -101,10 +142,6 @@ struct MapCanvasRenderer: View {
             path.addQuadCurve(to: tgt, control: ctrl)
 
             let alpha: Double = (edge.sourceNodeID == selectedNodeID || edge.targetNodeID == selectedNodeID) ? 0.7 : 0.25
-
-            // Skip structural containment edges (drawn implicitly via cluster
-            // backgrounds, not as explicit connectors).
-            if edge.type.isContainment { continue }
 
             context.stroke(path, with: .color(edge.type.color.opacity(alpha)), lineWidth: 1.2)
 
@@ -213,21 +250,7 @@ struct MapCanvasRenderer: View {
     // MARK: - Nodes
 
     private func drawNodes(context: GraphicsContext, transform: CGAffineTransform, size: CGSize) {
-        // Draw deeper levels first (entities → concepts → chapters → documents),
-        // so higher abstractions render on top.
-        let levelOrder: [NodeLevel: Int] = [.entity: 0, .concept: 1, .chapter: 2, .document: 3]
-        let sortedNodes = graph.allNodes.sorted { a, b in
-            (levelOrder[a.level] ?? 0) < (levelOrder[b.level] ?? 0)
-        }
-
-        // Precompute entity counts per concept from containsEntity edges
-        // (replaces the old parentConceptID lookup).
-        var entityCountByParent: [UUID: Int] = [:]
-        for edge in graph.allEdges where edge.type == .containsEntity {
-            entityCountByParent[edge.sourceNodeID, default: 0] += 1
-        }
-
-        for node in sortedNodes {
+        for node in renderCache.sortedNodes {
             guard let pos = layout.point(for: node.id) else { continue }
             let tp = pos.applying(transform)
 
@@ -301,7 +324,7 @@ struct MapCanvasRenderer: View {
 
             // Entity count badge for concept nodes
             if isConcept && viewScale >= 0.5 {
-                let entityCount = entityCountByParent[node.id] ?? 0
+                let entityCount = renderCache.entityCountByParent[node.id] ?? 0
                 if entityCount > 0 {
                     let badge = Text("\(entityCount)")
                         .font(.system(size: max(7, 8 * viewScale), weight: .medium))
@@ -315,7 +338,7 @@ struct MapCanvasRenderer: View {
             }
 
             // Expand/collapse chevron for nodes with children
-            if isConcept && viewScale >= 0.5 && graph.hasChildren(node.id) {
+            if isConcept && viewScale >= 0.5 && renderCache.nodeIDsWithChildren.contains(node.id) {
                 let chevronName = node.expansionState == .expanded ? "chevron.down" : "chevron.right"
                 let chevron = Text(Image(systemName: chevronName))
                     .font(.system(size: max(8, 10 * viewScale), weight: .semibold))

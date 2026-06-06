@@ -135,6 +135,28 @@ final class MapInteractionTests: XCTestCase {
         XCTAssertFalse(groups.contains { $0.concept.id == empty.id })
     }
 
+    func testRenderCacheHoistsSortedNodesSemanticEdgesAndEntityCounts() {
+        let graph = KnowledgeGraph()
+        let document = ConceptNode(label: "Document", level: .document); graph.addNode(document)
+        let chapter = ConceptNode(label: "Chapter", level: .chapter); graph.addNode(chapter)
+        let concept = ConceptNode(label: "Concept", level: .concept); graph.addNode(concept)
+        let entity = ConceptNode(label: "Entity", level: .entity); graph.addNode(entity)
+        let semantic = GraphEdge(sourceNodeID: concept.id, targetNodeID: document.id, type: .dependsOn)
+        graph.addEdge(GraphEdge(sourceNodeID: document.id, targetNodeID: chapter.id, type: .containsChapter))
+        graph.addEdge(GraphEdge(sourceNodeID: chapter.id, targetNodeID: concept.id, type: .containsConcept))
+        graph.addEdge(GraphEdge(sourceNodeID: concept.id, targetNodeID: entity.id, type: .containsEntity))
+        graph.addEdge(semantic)
+
+        let cache = MapCanvasRenderer.makeRenderCache(for: graph)
+
+        XCTAssertEqual(cache.sortedNodes.map(\.level), [.entity, .concept, .chapter, .document])
+        XCTAssertEqual(cache.semanticEdges.map(\.id), [semantic.id])
+        XCTAssertEqual(cache.entityCountByParent[concept.id], 1)
+        XCTAssertEqual(cache.conceptEntityGroups.count, 1)
+        XCTAssertEqual(cache.conceptEntityGroups.first?.concept.id, concept.id)
+        XCTAssertEqual(cache.conceptEntityGroups.first?.entities.map(\.id), [entity.id])
+    }
+
     func testLayoutComputationKeyIsStableForSameInputs() {
         let nodeA = UUID()
         let nodeB = UUID()
