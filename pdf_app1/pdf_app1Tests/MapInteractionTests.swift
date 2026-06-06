@@ -112,6 +112,29 @@ final class MapInteractionTests: XCTestCase {
         XCTAssertEqual(abs(MapCanvasRenderer.edgeTangentAngle(control: leftControl, target: leftTarget)), .pi, accuracy: 0.001)
     }
 
+    func testConceptEntityGroupsEmptyWhenGraphHasNoEntities() {
+        let graph = KnowledgeGraph()
+        graph.addNode(ConceptNode(label: "A", level: .concept))
+        graph.addNode(ConceptNode(label: "B", level: .concept))
+
+        XCTAssertTrue(MapCanvasRenderer.conceptEntityGroups(in: graph).isEmpty)
+    }
+
+    func testConceptEntityGroupsOnlyIncludesConceptsWithEntities() {
+        let graph = KnowledgeGraph()
+        let parent = ConceptNode(label: "Parent", level: .concept); graph.addNode(parent)
+        let empty = ConceptNode(label: "Empty", level: .concept); graph.addNode(empty)
+        let entity = ConceptNode(label: "Entity", level: .entity); graph.addNode(entity)
+        graph.addEdge(GraphEdge(sourceNodeID: parent.id, targetNodeID: entity.id, type: .containsEntity))
+
+        let groups = MapCanvasRenderer.conceptEntityGroups(in: graph)
+
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups.first?.concept.id, parent.id)
+        XCTAssertEqual(groups.first?.entities.map(\.id), [entity.id])
+        XCTAssertFalse(groups.contains { $0.concept.id == empty.id })
+    }
+
     func testLayoutComputationKeyIsStableForSameInputs() {
         let nodeA = UUID()
         let nodeB = UUID()

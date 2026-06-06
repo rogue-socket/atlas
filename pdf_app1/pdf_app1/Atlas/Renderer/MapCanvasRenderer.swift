@@ -32,12 +32,10 @@ struct MapCanvasRenderer: View {
     // MARK: - Group Backgrounds (hierarchy-based)
 
     private func drawGroupBackgrounds(context: GraphicsContext, transform: CGAffineTransform, size: CGSize) {
-        // Group by concept node: each concept + its entities form a cluster
-        let conceptNodes = graph.allNodes.filter { $0.level == .concept }
+        let conceptGroups = Self.conceptEntityGroups(in: graph)
+        guard !conceptGroups.isEmpty else { return }
 
-        for conceptNode in conceptNodes {
-            // Collect concept + its visible entities
-            let entityNodes = graph.entities(for: conceptNode.id)
+        for (conceptNode, entityNodes) in conceptGroups {
             let clusterNodes = [conceptNode] + entityNodes
             let groupPoints = clusterNodes.compactMap { layout.point(for: $0.id)?.applying(transform) }
             guard groupPoints.count >= 1 else { continue }
@@ -65,6 +63,23 @@ struct MapCanvasRenderer: View {
                 context.draw(context.resolve(label), at: CGPoint(x: minX + 8 * viewScale, y: minY + 4 * viewScale), anchor: .topLeading)
             }
         }
+    }
+
+    static func conceptEntityGroups(in graph: KnowledgeGraph) -> [(concept: ConceptNode, entities: [ConceptNode])] {
+        var entityIDsByConcept: [UUID: [UUID]] = [:]
+        for edge in graph.allEdges where edge.type == .containsEntity {
+            entityIDsByConcept[edge.sourceNodeID, default: []].append(edge.targetNodeID)
+        }
+        guard !entityIDsByConcept.isEmpty else { return [] }
+
+        return entityIDsByConcept.compactMap { conceptID, entityIDs in
+            guard let conceptNode = graph.node(for: conceptID),
+                  conceptNode.level == .concept else { return nil }
+            let entityNodes = entityIDs.compactMap { graph.node(for: $0) }.filter { $0.level == .entity }
+            guard !entityNodes.isEmpty else { return nil }
+            return (conceptNode, entityNodes)
+        }
+        .sorted { $0.concept.label.localizedStandardCompare($1.concept.label) == .orderedAscending }
     }
 
     // MARK: - Edges
