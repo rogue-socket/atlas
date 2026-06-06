@@ -5,7 +5,7 @@
 #   - Built Debug app: cd pdf_app1 && xcodebuild -project pdf_app1.xcodeproj -scheme pdf_app1 -configuration Debug -derivedDataPath build build
 #   - Project "vitacare" with per-doc graphs already on disk (extract once in app or headless)
 #   - LAN embedding gateway on lv (default http://192.168.1.14:8200/v1)
-#   - Gemini (or other) chat backend + API key for LLM adjudication
+#   - Claude subscription sidecar running for LLM adjudication, unless ETR_CHAT_BACKEND/ETR_CHAT_MODEL override it
 #
 # Usage:
 #   ./scripts/etr_threshold_sweep.sh
@@ -24,6 +24,8 @@ APP_BUNDLE="${ETR_APP_BUNDLE:-$DERIVED_DATA/Build/Products/Debug/pdf_app1.app}"
 APP="$APP_BUNDLE/Contents/MacOS/pdf_app1"
 PROJECT="${ETR_PROJECT:-vitacare}"
 GATEWAY_URL="$ATLAS_EMBEDDING_GATEWAY_BASE_URL"
+CHAT_BACKEND="${ETR_CHAT_BACKEND:-ClaudeSubscription}"
+CHAT_MODEL="${ETR_CHAT_MODEL:-sonnet}"
 RUNS="$ROOT/runs/etr-sweep-${PROJECT}-$(date +%Y%m%d-%H%M%S)"
 RUNS_CONTAINER="$HOME/Library/Containers/rogues.pdf-app1/Data/${RUNS##*/}"
 
@@ -36,11 +38,14 @@ mkdir -p "$RUNS"
 mkdir -p "$RUNS_CONTAINER"
 echo "Runs → $RUNS"
 echo "Gateway → $GATEWAY_URL"
+echo "Chat backend → $CHAT_BACKEND / $CHAT_MODEL"
 
 defaults write rogues.pdf-app1 atlas.ai.embedding.backendType EmbeddingGateway
 defaults write rogues.pdf-app1 atlas.ai.embedding.model bge-base-en-v1.5
 defaults write rogues.pdf-app1 atlas.ai.embedding.gateway.baseURL "$GATEWAY_URL"
 defaults write rogues.pdf-app1 atlas.ai.embedding.gateway.apiKey none
+defaults write rogues.pdf-app1 atlas.ai.backendType "$CHAT_BACKEND"
+defaults write rogues.pdf-app1 atlas.ai.model "$CHAT_MODEL"
 
 # Flat adjudication floors to try (auto-merge stays 0.95). Extend or add per-kind flags as needed.
 FLOORS=(0.78 0.80 0.82 0.84)

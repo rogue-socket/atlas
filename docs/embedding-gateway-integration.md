@@ -40,6 +40,21 @@ defaults write rogues.pdf-app1 atlas.ai.embedding.gateway.baseURL http://192.168
 defaults write rogues.pdf-app1 atlas.ai.embedding.gateway.apiKey none
 ```
 
+The ETR sweep scripts also set the chat adjudication backend. By default they
+use the Claude subscription sidecar:
+
+```sh
+defaults write rogues.pdf-app1 atlas.ai.backendType ClaudeSubscription
+defaults write rogues.pdf-app1 atlas.ai.model sonnet
+```
+
+Override with `ETR_CHAT_BACKEND` and `ETR_CHAT_MODEL` for explicit comparison
+runs. For a Codex Agent comparison, use:
+
+```sh
+ETR_CHAT_BACKEND=CodexAgent ETR_CHAT_MODEL=gpt-5.3-codex-spark ./scripts/etr_threshold_sweep.sh
+```
+
 Switch to MiniLM for a latency baseline:
 
 ```sh
