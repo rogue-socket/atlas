@@ -57,7 +57,8 @@ final class GeminiBackend: LLMBackend, @unchecked Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         var generationConfig: [String: Any] = [
-            "temperature": 0.1,
+            "temperature": 0.0,
+            "topK": 1,
             "maxOutputTokens": 32768,
             "responseMimeType": "application/json"
         ]

@@ -20,7 +20,10 @@ final class CodexAgentBackend: LLMBackend, @unchecked Sendable {
 
     var isAvailable: Bool { true }
 
-    init(baseURL: String = "http://127.0.0.1:8775", model: String = "gpt-5.3-codex-spark", reasoningEffort: String? = nil, session: URLSession? = nil) {
+    init(baseURL: String = "http://127.0.0.1:8775",
+         model: String = "gpt-5.3-codex-spark",
+         reasoningEffort: String? = nil,
+         session: URLSession? = nil) {
         self.baseURL = baseURL
         self.modelIdentifier = model
         self.reasoningEffort = reasoningEffort
@@ -79,7 +82,7 @@ final class CodexAgentBackend: LLMBackend, @unchecked Sendable {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            log.error("[CodexAgent] Request failed — is the sidecar running at \(self.baseURL)? \(error.localizedDescription)")
+            log.error("[CodexAgent] Request failed - is the sidecar running at \(self.baseURL)? \(error.localizedDescription)")
             throw AIError.networkError(error)
         }
 

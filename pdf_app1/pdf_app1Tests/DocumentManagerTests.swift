@@ -130,4 +130,57 @@ final class DocumentManagerTests: XCTestCase {
         XCTAssertEqual(scope.startCount, 0, "openDocument should not acquire scope")
         XCTAssertEqual(scope.stopCount, 0, "closing an openDocument-tab must not call stop")
     }
+
+    @MainActor
+    func testCloseDocument_openedDocumentWithStartedScope_releasesScope() {
+        guard let url = writeTempPDF() else {
+            XCTFail("Failed to write temp PDF")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let scope = CountingScopeAccessor()
+        let (manager, userDefaults, suiteName) = makeManager(scope: scope)
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+
+        let result = manager.openDocument(url, securityScopedAccessStarted: true)
+        XCTAssertEqual(result, .success)
+        guard let doc = manager.documents.first else {
+            XCTFail("Document not added")
+            return
+        }
+
+        manager.closeDocument(doc)
+        XCTAssertEqual(scope.stopCount, 1, "closing an explicitly scoped openDocument-tab should release its scope")
+        XCTAssertEqual(scope.stoppedURLs.first, url)
+    }
+
+    @MainActor
+    func testOpenDocument_existingURLAtCapacity_returnsAlreadyOpen() {
+        var urls: [URL] = []
+        defer {
+            for url in urls {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+
+        let scope = CountingScopeAccessor()
+        let (manager, userDefaults, suiteName) = makeManager(scope: scope)
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+
+        for _ in 0..<10 {
+            guard let url = writeTempPDF() else {
+                XCTFail("Failed to write temp PDF")
+                return
+            }
+            urls.append(url)
+            XCTAssertEqual(manager.openDocument(url), .success)
+        }
+
+        XCTAssertEqual(manager.documents.count, 10)
+        let result = manager.openDocument(urls[0], securityScopedAccessStarted: true)
+        XCTAssertEqual(result, .alreadyOpen)
+        XCTAssertEqual(manager.documents.count, 10)
+        XCTAssertEqual(manager.selectedDocument?.url, urls[0])
+    }
 }

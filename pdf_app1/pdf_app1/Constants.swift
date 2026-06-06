@@ -118,12 +118,22 @@ struct AppConstants {
     static let claudeSidecarURLKey = "atlas.claudeSidecar.baseURL"
     /// UserDefaults key for max prior-doc lines included in SCE extraction prompts
     static let scePriorHeaderMaxLinesKey = "atlas.sce.priorHeaderMaxLines"
+    /// UserDefaults key for the ETR embedding backend type (nil = ETR disabled)
+    static let aiEmbeddingBackendTypeKey = "atlas.ai.embedding.backendType"
+    /// UserDefaults key for the ETR embedding model identifier
+    static let aiEmbeddingModelKey = "atlas.ai.embedding.model"
+    /// UserDefaults key for the LAN OpenAI-compatible embedding gateway URL
+    static let aiEmbeddingGatewayBaseURLKey = "atlas.ai.embedding.gateway.baseURL"
+    /// UserDefaults key for the LAN OpenAI-compatible embedding gateway API key placeholder
+    static let aiEmbeddingGatewayAPIKeyKey = "atlas.ai.embedding.gateway.apiKey"
 }
 
 // MARK: - Notification Names
 
 extension Notification.Name {
     static let openNewDocument = Notification.Name("OpenNewDocument")
+    /// Finder / `open -a pdf_app1 file.pdf` handoff — URLs are security-scoped.
+    static let openDocumentsFromURLs = Notification.Name("OpenDocumentsFromURLs")
     static let openDocumentInNewWindow = Notification.Name("OpenDocumentInNewWindow")
     static let navigateToPage = Notification.Name("NavigateToPage")
     static let closeCurrentTab = Notification.Name("CloseCurrentTab")

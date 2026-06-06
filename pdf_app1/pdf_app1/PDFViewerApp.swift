@@ -14,9 +14,28 @@ import os.log
 // the app is launched in the background (`open -g`).
 final class HeadlessAppDelegate: NSObject, NSApplicationDelegate {
     static var inject: ((NSApplication) -> Void)?
+    private static var didStartHeadless = false
+
+    @MainActor
+    static func startHeadless(_ run: @escaping @MainActor () async -> Void) {
+        guard !didStartHeadless else { return }
+        didStartHeadless = true
+        Task { @MainActor in
+            await run()
+        }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.inject?(NSApplication.shared)
+    }
+
+    /// Finder double-click or `open -a pdf_app1 file.pdf` — grants per-file access
+    /// (Atlas does not use a blanket Documents-folder entitlement).
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard HeadlessRunnerConfig.parse(from: CommandLine.arguments) == nil else { return }
+        let pdfs = urls.filter { $0.pathExtension.lowercased() == "pdf" }
+        guard !pdfs.isEmpty else { return }
+        NotificationCenter.default.post(name: .openDocumentsFromURLs, object: pdfs)
     }
 }
 
@@ -46,7 +65,7 @@ struct PDFViewerApp: App {
             let ai = aiServiceManager
             let graph = knowledgeGraph
             HeadlessAppDelegate.inject = { _ in
-                Task { @MainActor in
+                HeadlessAppDelegate.startHeadless {
                     await HeadlessRunner().run(
                         config: config,
                         projectsManager: projects,
@@ -68,9 +87,19 @@ struct PDFViewerApp: App {
                 .environment(aiServiceManager)
                 .frame(minWidth: AppConstants.minWindowWidth, minHeight: AppConstants.minWindowHeight)
                 .onAppear {
-                    // Headless mode is launched exclusively from the AppDelegate
-                    // hook above so the runner cannot start twice.
-                    if headlessConfig != nil { return }
+                    // Headless mode: bypass session restore + orphan sweep so the
+                    // runner has a clean lifecycle, then drive extraction + exit.
+                    if let config = headlessConfig {
+                        HeadlessAppDelegate.startHeadless {
+                            await HeadlessRunner().run(
+                                config: config,
+                                projectsManager: projectsManager,
+                                aiService: aiServiceManager,
+                                graph: knowledgeGraph
+                            )
+                        }
+                        return
+                    }
 
                     documentManager.restoreOpenSession()
                     configureWindow()

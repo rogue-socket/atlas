@@ -245,10 +245,19 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
     case openai = "OpenAI"
     case gemini = "Gemini"
     case ollama = "Ollama"
-    case codexAgent = "CodexAgent"
     case claudeSubscription = "ClaudeSubscription"
+    case codexAgent = "CodexAgent"
+    case embeddingGateway = "EmbeddingGateway"
 
     var id: String { rawValue }
+
+    static var chatBackends: [AIBackendType] {
+        allCases.filter { $0 != .embeddingGateway }
+    }
+
+    static var embeddingBackends: [AIBackendType] {
+        [.gemini, .embeddingGateway]
+    }
 
     var displayName: String {
         switch self {
@@ -256,14 +265,15 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
         case .openai: return "OpenAI"
         case .gemini: return "Google Gemini"
         case .ollama: return "Ollama (Local)"
-        case .codexAgent: return "Codex Agent"
         case .claudeSubscription: return "Claude (Subscription)"
+        case .codexAgent: return "Codex Agent"
+        case .embeddingGateway: return "LAN Embedding Gateway"
         }
     }
 
     var requiresAPIKey: Bool {
         switch self {
-        case .ollama, .codexAgent, .claudeSubscription: return false
+        case .ollama, .claudeSubscription, .codexAgent, .embeddingGateway: return false
         default: return true
         }
     }
@@ -274,8 +284,9 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
         case .openai: return "https://api.openai.com"
         case .gemini: return "https://generativelanguage.googleapis.com"
         case .ollama: return "http://localhost:11434"
-        case .codexAgent: return "http://127.0.0.1:8775"
         case .claudeSubscription: return "http://127.0.0.1:8765"
+        case .codexAgent: return "http://127.0.0.1:8775"
+        case .embeddingGateway: return OpenAIEmbeddingModelCatalog.defaultBaseURL
         }
     }
 
@@ -285,9 +296,22 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
         case .openai: return ["gpt-4o", "gpt-4o-mini", "gpt-4.1-mini"]
         case .gemini: return ["gemini-2.5-pro", "gemini-2.5-flash"]
         case .ollama: return ["llama3.1", "mistral", "qwen2.5"]
-        case .codexAgent: return ["gpt-5.3-codex-spark", "gpt-5.5"]
         case .claudeSubscription: return ["opus", "sonnet", "haiku"]
+        case .codexAgent: return ["gpt-5.3-codex-spark", "gpt-5.5"]
+        case .embeddingGateway: return OpenAIEmbeddingModelCatalog.availableModels
         }
+    }
+
+    var availableEmbeddingModels: [String] {
+        switch self {
+        case .gemini: return ["gemini-embedding-2-preview", "gemini-embedding-001"]
+        case .embeddingGateway: return OpenAIEmbeddingModelCatalog.availableModels
+        default: return []
+        }
+    }
+
+    var defaultEmbeddingModel: String {
+        availableEmbeddingModels.first ?? ""
     }
 }
 

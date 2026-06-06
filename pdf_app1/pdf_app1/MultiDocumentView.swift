@@ -364,6 +364,20 @@ struct MultiDocumentView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openDocumentsFromURLs)) { notification in
+            guard let urls = notification.object as? [URL] else { return }
+            for url in urls {
+                let scoped = url.startAccessingSecurityScopedResource()
+                let result = documentManager.openDocument(
+                    url,
+                    projectID: projectsManager.selectedProjectID,
+                    securityScopedAccessStarted: scoped
+                )
+                if result != .success && scoped {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .closeCurrentTab)) { _ in
             if let document = documentManager.selectedDocument {
                 documentManager.closeDocument(document)
