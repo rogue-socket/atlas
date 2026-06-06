@@ -130,6 +130,9 @@ enum EmbeddingCacheStore {
         try fileManager.createDirectory(at: graphsDirectory, withIntermediateDirectories: true)
         let url = fileURL(for: projectID, modelIdentifier: cache.modelIdentifier, vectorDimension: cache.vectorDimension)
         let data = try JSONEncoder().encode(cache)
+        if fileManager.fileExists(atPath: url.path) {
+            try? fileManager.removeItem(at: url)
+        }
         try data.write(to: url, options: .atomic)
         log.info("[EmbedCache] Saved \(cache.entries.count) entries (\(data.count) bytes) to \(url.lastPathComponent)")
     }

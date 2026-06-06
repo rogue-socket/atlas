@@ -297,7 +297,7 @@ enum AIBackendType: String, CaseIterable, Codable, Identifiable {
         case .gemini: return ["gemini-2.5-pro", "gemini-2.5-flash"]
         case .ollama: return ["llama3.1", "mistral", "qwen2.5"]
         case .claudeSubscription: return ["opus", "sonnet", "haiku"]
-        case .codexAgent: return ["gpt-5.3-codex-spark", "gpt-5.5"]
+        case .codexAgent: return ["gpt-5.3-codex-spark"]
         case .embeddingGateway: return OpenAIEmbeddingModelCatalog.availableModels
         }
     }

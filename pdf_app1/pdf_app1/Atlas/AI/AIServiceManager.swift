@@ -27,6 +27,7 @@ class AIServiceManager {
     // an embedding-only alternative when Gemini quota/key use is undesirable.
     var selectedEmbeddingBackendType: AIBackendType? = .gemini
     var selectedEmbeddingModel: String = "gemini-embedding-2-preview"
+    var selectedResolverPreset: ResolverThresholdPreset = .conservative
 
     private var responseCache: [String: String] = [:]
     private let cacheDirectory: URL
@@ -67,15 +68,6 @@ class AIServiceManager {
             let baseURL = UserDefaults.standard.string(forKey: AppConstants.ollamaBaseURLKey) ?? "http://localhost:11434"
             log.info("[AIService] Using Ollama at \(baseURL)")
             return OpenAIBackend(apiKey: "", model: selectedModel, baseURL: baseURL + "/v1", displayName: "Ollama")
-        case .codexAgent:
-            let baseURL = UserDefaults.standard.string(forKey: AppConstants.codexAgentSidecarURLKey)
-                ?? AIBackendType.codexAgent.defaultBaseURL
-            let envModel = ProcessInfo.processInfo.environment["ATLAS_CODEX_AGENT_MODEL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let envReasoningEffort = ProcessInfo.processInfo.environment["ATLAS_CODEX_AGENT_REASONING_EFFORT"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let model = (envModel?.isEmpty == false) ? envModel! : selectedModel
-            let reasoningEffort = (envReasoningEffort?.isEmpty == false) ? envReasoningEffort : nil
-            log.info("[AIService] Using Codex Agent sidecar at \(baseURL) model=\(model) reasoningEffort=\(reasoningEffort ?? "<default>")")
-            return CodexAgentBackend(baseURL: baseURL, model: model, reasoningEffort: reasoningEffort)
         case .claudeSubscription:
             let baseURL = UserDefaults.standard.string(forKey: AppConstants.claudeSidecarURLKey)
                 ?? AIBackendType.claudeSubscription.defaultBaseURL
@@ -105,6 +97,7 @@ class AIServiceManager {
         switch type {
         case .ollama: return true
         case .embeddingGateway: return OpenAIEmbeddingModelCatalog.isValidBaseURL(embeddingGatewayBaseURL)
+        case .claude, .claudeSubscription, .codexAgent: return false
         default: return (getAPIKey(for: type) ?? "").isEmpty == false
         }
     }
@@ -196,8 +189,6 @@ class AIServiceManager {
     }
 
     func getAPIKey(for backend: AIBackendType) -> String? {
-        // Hard-guard: tests never touch Keychain (avoids ACL prompts in CI
-        // and ensures deterministic behavior regardless of dev-file presence).
         if Self.isRunningUnderXCTest { return nil }
         // Dev-mode lookup order (Keychain prompts on every fresh process are
         // painful for headless / repeated runs). All sources are local-only.
@@ -210,16 +201,6 @@ class AIServiceManager {
         //      host, which defaults to Claude before UserDefaults loads).
         //   3. Keychain — production storage (only consulted when the dev file
         //      doesn't exist at all)
-        if let envKey = ProcessInfo.processInfo.environment[envVarName(for: backend)],
-           !envKey.isEmpty {
-            return envKey
-        }
-        if FileManager.default.fileExists(atPath: devKeysFileURL.path) {
-            return devKeysFileLookup(backend: backend)
-        }
-
-        // Dev-mode lookup order (Process environment, optional dev keys file, then keychain).
-        // 1. Process env var (e.g. ATLAS_GEMINI_API_KEY)
         if let envKey = ProcessInfo.processInfo.environment[envVarName(for: backend)],
            !envKey.isEmpty {
             return envKey
@@ -272,7 +253,7 @@ class AIServiceManager {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String]
         else { return nil }
         // Case-insensitive key match so the file can use either the enum's
-        // rawValue ("Gemini") or the lowercase form ("gemini").
+        // rawValue ("Gemini") or the more natural lowercase form ("gemini").
         let target = backend.rawValue.lowercased()
         for (k, v) in obj where k.lowercased() == target {
             return v
@@ -326,6 +307,10 @@ class AIServiceManager {
         if let m = UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingModelKey) {
             selectedEmbeddingModel = m
         }
+        if let raw = UserDefaults.standard.string(forKey: AppConstants.aiResolverPresetKey),
+           let preset = ResolverThresholdPreset(rawValue: raw) {
+            selectedResolverPreset = preset
+        }
         updateConfiguredState()
     }
 
@@ -335,6 +320,7 @@ class AIServiceManager {
         UserDefaults.standard.set(selectedEmbeddingBackendType?.rawValue ?? "",
                                    forKey: AppConstants.aiEmbeddingBackendTypeKey)
         UserDefaults.standard.set(selectedEmbeddingModel, forKey: AppConstants.aiEmbeddingModelKey)
+        UserDefaults.standard.set(selectedResolverPreset.rawValue, forKey: AppConstants.aiResolverPresetKey)
         updateConfiguredState()
     }
 

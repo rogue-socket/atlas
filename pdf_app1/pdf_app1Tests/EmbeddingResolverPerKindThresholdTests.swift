@@ -60,6 +60,20 @@ final class EmbeddingResolverPerKindThresholdTests: XCTestCase {
         XCTAssertEqual(t.adjudicationFloor(for: .crossLevel), 0.80, accuracy: 1e-6)
     }
 
+    func test_relationshipDiscoveryPreset_usesTunedPerKindFloors() {
+        let t = ResolverThresholdPreset.relationshipDiscovery.thresholds
+
+        XCTAssertEqual(t.autoMerge, ResolverThresholds.default.autoMerge, accuracy: 1e-6)
+        XCTAssertEqual(t.adjudicationFloor, ResolverThresholds.default.adjudicationFloor, accuracy: 1e-6)
+        XCTAssertEqual(t.adjudicationFloor(for: .conceptConcept), 0.72, accuracy: 1e-6)
+        XCTAssertEqual(t.adjudicationFloor(for: .entityEntity), 0.72, accuracy: 1e-6)
+        XCTAssertEqual(t.adjudicationFloor(for: .crossLevel), 0.65, accuracy: 1e-6)
+    }
+
+    func test_conservativePreset_matchesDefaultThresholds() {
+        XCTAssertEqual(ResolverThresholdPreset.conservative.thresholds, .default)
+    }
+
     // MARK: - classify(similarity:pairKind:thresholds:)
 
     func test_classifyByPairKind_appliesConceptConceptOverride() {

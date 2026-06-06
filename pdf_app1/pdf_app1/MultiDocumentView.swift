@@ -385,8 +385,7 @@ struct MultiDocumentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .closeOtherTabs)) { notification in
             if let currentDocument = notification.object as? PDFDocumentItem {
-                documentManager.documents.removeAll { $0.id != currentDocument.id }
-                documentManager.selectedDocumentID = currentDocument.id
+                documentManager.closeOtherDocuments(keeping: currentDocument)
             }
         }
         // Pane mode keyboard shortcuts
@@ -407,18 +406,10 @@ struct MultiDocumentView: View {
             .opacity(0)
         )
         .onChange(of: documentManager.selectedDocumentID) { _, _ in
-            if let doc = documentManager.selectedDocument {
-                syncManager.setDocumentURL(doc.url)
-                syncManager.setGraph(knowledgeGraph)
-                loadGraphIfNeeded(for: doc.url)
-            }
+            configureSelectedDocument()
         }
         .onAppear {
-            if let doc = documentManager.selectedDocument {
-                syncManager.setDocumentURL(doc.url)
-                syncManager.setGraph(knowledgeGraph)
-                loadGraphIfNeeded(for: doc.url)
-            }
+            configureSelectedDocument()
         }
     }
     
@@ -1512,6 +1503,13 @@ struct MultiDocumentView: View {
     }
 
     // MARK: - Graph Persistence
+
+    private func configureSelectedDocument() {
+        guard let doc = documentManager.selectedDocument else { return }
+        syncManager.setDocumentURL(doc.url)
+        syncManager.setGraph(knowledgeGraph)
+        loadGraphIfNeeded(for: doc.url)
+    }
 
     /// Load the persisted graph for `documentURL` and merge it into the
     /// in-memory project graph (preserving nodes loaded for other open

@@ -174,8 +174,6 @@ final class HeadlessRunnerConfigTests: XCTestCase {
         XCTAssertTrue(c?.etrOnly == true)
     }
 
-    // MARK: - SCE doc-order permutations
-
     func test_parse_acceptsDocOrderReverse() {
         let c = HeadlessRunnerConfig.parse(from: [
             "--headless-extract", "--project", "vitacare", "--doc-order", "reverse"
@@ -214,5 +212,67 @@ final class HeadlessRunnerConfigTests: XCTestCase {
             "--headless-extract", "--project", "p", "--doc-order", "C.pdf,A.pdf"
         ])!
         XCTAssertEqual(c.orderedFiles(from: project).map(\.displayName), ["C.pdf", "A.pdf", "B.pdf"])
+    }
+
+    // MARK: - Hybrid adjudication eval
+
+    func test_parse_hybridAdjudicationEvalStandalone_returnsConfigWithoutProject() {
+        let c = HeadlessRunnerConfig.parse(from: [
+            "--headless-extract",
+            "--score-hybrid-adjudication", "/tmp/audit.json",
+            "--eval", "/tmp/labels.json"
+        ])
+
+        XCTAssertEqual(c?.projectName, "")
+        XCTAssertEqual(c?.hybridAdjudicationAuditPath, "/tmp/audit.json")
+        XCTAssertEqual(c?.hybridAdjudicationEvalPath, "/tmp/labels.json")
+    }
+
+    // MARK: - Hybrid resolve
+
+    func test_parse_hybridResolveStandalone_returnsConfigWithoutProject() {
+        let c = HeadlessRunnerConfig.parse(from: [
+            "--headless-extract",
+            "--hybrid-resolve", "/tmp/graphs",
+            "--lexical"
+        ])
+
+        XCTAssertEqual(c?.projectName, "")
+        XCTAssertEqual(c?.hybridResolveDir, "/tmp/graphs")
+        XCTAssertEqual(c?.hybridLexical, true)
+        XCTAssertNil(c?.hybridLexicalLimit)
+    }
+
+    func test_parse_hybridResolveLexicalLimit_recordsCandidateCap() {
+        let c = HeadlessRunnerConfig.parse(from: [
+            "--headless-extract",
+            "--hybrid-resolve", "/tmp/graphs",
+            "--lexical",
+            "--lexical-limit", "24"
+        ])
+
+        XCTAssertEqual(c?.hybridLexicalLimit, 24)
+    }
+
+    func test_parse_invalidHybridResolveLexicalLimit_ignored() {
+        let c = HeadlessRunnerConfig.parse(from: [
+            "--headless-extract",
+            "--hybrid-resolve", "/tmp/graphs",
+            "--lexical",
+            "--lexical-limit", "nope"
+        ])
+
+        XCTAssertNil(c?.hybridLexicalLimit)
+    }
+
+    func test_parse_nonPositiveHybridResolveLexicalLimit_ignored() {
+        let c = HeadlessRunnerConfig.parse(from: [
+            "--headless-extract",
+            "--hybrid-resolve", "/tmp/graphs",
+            "--lexical",
+            "--lexical-limit", "-1"
+        ])
+
+        XCTAssertNil(c?.hybridLexicalLimit)
     }
 }

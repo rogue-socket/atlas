@@ -44,7 +44,13 @@ final class EmbeddingResolverOrchestratorTests: XCTestCase {
     }
 
     private func wipeCacheFile(for projectID: UUID) {
-        try? FileManager.default.removeItem(at: EmbeddingCacheStore.fileURL(for: projectID))
+        let legacyURL = EmbeddingCacheStore.fileURL(for: projectID)
+        let dir = legacyURL.deletingLastPathComponent()
+        let prefix = "embeddings_\(projectID.uuidString)"
+        let urls = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        for url in urls where url.lastPathComponent.hasPrefix(prefix) {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     // MARK: - resolve
@@ -343,6 +349,7 @@ final class EmbeddingResolverOrchestratorTests: XCTestCase {
         XCTAssertTrue(entry.exactLabelMatch)
         XCTAssertEqual(entry.finalReason, "exactLabel")
         XCTAssertNil(entry.llmVerdict, "Exact-label merge bypasses LLM, so no verdict")
+        XCTAssertNil(entry.llmDirection, "Exact-label merge bypasses LLM, so no direction")
         XCTAssertTrue(entry.aDocs.contains("org.pdf") || entry.bDocs.contains("org.pdf"))
         XCTAssertTrue(entry.aDocs.contains("cmp.pdf") || entry.bDocs.contains("cmp.pdf"))
     }
@@ -386,8 +393,9 @@ final class EmbeddingResolverOrchestratorTests: XCTestCase {
         let backend = FakeEmbeddingBackend(dim: 2) { text in
             text.contains("Telehealth") ? [1, 0] : [0.87, sqrt(1 - 0.87 * 0.87)]
         }
-        // LLM approves (returns [true])
-        let llm = FlakyLLMBackend(failureCount: 0, successResponse: "[true]")
+        // LLM returns a hybrid "merge" verdict for the single pair.
+        let llm = FlakyLLMBackend(failureCount: 0,
+                                  successResponse: #"[{"pair": 1, "verdict": "merge", "direction": "ab"}]"#)
 
         _ = try await EmbeddingResolver.resolve(graph: g, projectID: projectID,
                                                 embeddingBackend: backend,
@@ -402,8 +410,65 @@ final class EmbeddingResolverOrchestratorTests: XCTestCase {
         )
         XCTAssertEqual(audit.entries.count, 1)
         XCTAssertEqual(audit.entries[0].band, "adjudication")
-        XCTAssertEqual(audit.entries[0].llmVerdict, "approved")
+        XCTAssertEqual(audit.entries[0].llmVerdict, "merge")
+        XCTAssertNil(audit.entries[0].llmDirection)
         XCTAssertEqual(audit.entries[0].finalReason, "llmAdjudicated")
+    }
+
+    func test_resolve_mapsHighOverlapEntityKeepToInstanceOf() async throws {
+        let projectID = UUID()
+        let auditDir = FileManager.default.temporaryDirectory.appendingPathComponent("etr-audit-heuristic-\(UUID().uuidString)")
+        defer {
+            wipeCacheFile(for: projectID)
+            try? FileManager.default.removeItem(at: auditDir)
+        }
+
+        let g = KnowledgeGraph()
+        let a = ConceptNode(label: "Repair and event workshops", type: .concept, summary: nil,
+                            sourceAnchors: [anchor("/A.pdf")], level: .entity)
+        let b = ConceptNode(label: "Repair workshops", type: .concept, summary: nil,
+                            sourceAnchors: [anchor("/B.pdf")], level: .entity)
+        g.addNode(a)
+        g.addNode(b)
+
+        let similarity: Float = 0.79
+        let backend = FakeEmbeddingBackend(dim: 2) { text in
+            text.contains("Repair and event") ? [1, 0] : [similarity, sqrt(1 - similarity * similarity)]
+        }
+
+        let llm = FlakyLLMBackend(
+            failureCount: 0,
+            successResponse: #"[{"pair": 1, "verdict": "keep", "direction": "ab"}]"#
+        )
+
+        let plan = try await EmbeddingResolver.resolve(graph: g,
+                                                     projectID: projectID,
+                                                     embeddingBackend: backend,
+                                                     llmBackend: llm,
+                                                     thresholds: ResolverThresholds(adjudicationFloor: 0.75),
+                                                     auditOutputDir: auditDir)
+        XCTAssertEqual(plan.decisions.count, 0)
+        XCTAssertEqual(plan.relations.count, 1)
+        let relation = plan.relations[0]
+        XCTAssertEqual(relation.sourceID, b.id)
+        XCTAssertEqual(relation.targetID, a.id)
+        XCTAssertEqual(relation.edgeType, .instanceOf)
+        XCTAssertEqual(relation.similarity, similarity, accuracy: 1e-6)
+
+        let files = try FileManager.default.contentsOfDirectory(atPath: auditDir.path)
+            .filter { $0.hasPrefix("etr_audit_") }
+        XCTAssertEqual(files.count, 1)
+        let audit = try JSONDecoder().decode(
+            ResolverAudit.self,
+            from: try Data(contentsOf: auditDir.appendingPathComponent(files[0]))
+        )
+        XCTAssertEqual(audit.entries.count, 1)
+        XCTAssertEqual(audit.entries[0].llmVerdict, "instance_of")
+        let entry = audit.entries[0]
+        let sourceLabel = entry.llmDirection == "ab" ? entry.aLabel : entry.bLabel
+        let targetLabel = entry.llmDirection == "ab" ? entry.bLabel : entry.aLabel
+        XCTAssertEqual(sourceLabel, "Repair workshops")
+        XCTAssertEqual(targetLabel, "Repair and event workshops")
     }
 
     func test_resolve_logsThresholdsInPlan() async throws {

@@ -1,8 +1,8 @@
 # Atlas
 
-A native macOS PDF reader that builds a live, AI-generated knowledge map as you read. Open any PDF and Atlas extracts concepts, definitions, theorems, and relationships - rendering them as an interactive force-directed graph linked back to every source passage. Add multiple PDFs to a project and Atlas merges shared concepts across documents, revealing connections you'd otherwise miss.
+A native macOS PDF reader that builds a live, AI-generated knowledge map as you read. Open any PDF and Atlas extracts concepts, definitions, theorems, and relationships - rendering them as an interactive force-directed graph linked back to every source passage. Add multiple PDFs to a project and Atlas builds a shared project graph so repeated concepts connect across documents.
 
-Built entirely with Apple frameworks. No Electron, no web views, no external dependencies.
+The macOS app is built entirely with Apple frameworks. No Electron, no web views, and no third-party app runtime; optional subscription/CLI backends run through localhost sidecars.
 
 ![Atlas - PDF viewer with live knowledge map](docs/images/atlas-screenshot.png)
 
@@ -12,11 +12,12 @@ Built entirely with Apple frameworks. No Electron, no web views, no external dep
 
 - **PDF Viewer** - Full-featured reader with markup tools (highlight / underline / strikethrough, area highlights, ink, shapes — rectangle / circle / line / arrow, sticky notes, move/resize), search, bookmarks, thumbnails, multi-tab, comparison mode, print, and undo/redo
 - **Knowledge Map** - AI extracts concepts from your PDFs in 5-page batches and renders them as a force-directed graph (Fruchterman-Reingold) with semantic zoom levels: document → chapter → concept → entity
+- **Guided Tours** - Generate a read-only walkthrough through valid knowledge-map topics, with progress controls, jump-to-stop navigation, and automatic map centering on each stop
 - **Bidirectional Sync** - Scroll the PDF and the active concept lights up on the map. Click a map node and the PDF jumps to the source passage with a color-matched pulse highlight
 - **Ask Your Documents** - A chat panel answers questions about the open PDF using your configured AI backend, with citations linked back to the source passages
-- **Cross-Document Correlations** *(in development)* - Planned: add multiple PDFs to a project and have Atlas merge shared concepts across documents via fuzzy matching and optional LLM-powered semantic merge proposals. The merge engine (`GraphMergeEngine`) and proposal UI exist in the codebase but are not yet wired into the shipping build
+- **Cross-Document Correlations** *(in development)* - Projects share one live graph and merge exact repeated labels during extraction. Semantic cross-document resolution exists as headless SCE/ETR/hybrid tooling; the older proposal UI (`GraphMergeEngine` / `MergeProposalView`) is still dormant
 - **OCR Fallback** - Scanned PDFs with no embedded text are automatically detected; Vision OCR extracts text page-by-page so the AI pipeline can still analyze them
-- **Pluggable AI** - Bring your own API key for Claude, OpenAI, Gemini, or run locally via Ollama. API keys stored in macOS Keychain
+- **Pluggable AI** - Bring your own API key for Claude, OpenAI, Gemini, use Claude Subscription or Codex Agent via localhost sidecars, or run locally via Ollama. API keys are stored in macOS Keychain
 - **Projects** - Organize PDFs into projects with per-document and batch extraction, and a project-level sidebar showing processing state
 - **Export** - Export your knowledge graph to Obsidian (wikilinks), Markdown, or JSON
 - **Session Restore** - Persisted graphs load automatically when you reopen a document. Window state and split-pane layout are restored across launches
@@ -25,7 +26,9 @@ Built entirely with Apple frameworks. No Electron, no web views, no external dep
 
 - macOS 13.0 (Ventura) or later
 - Xcode 16.0 or later
-- No external dependencies - uses only Apple system frameworks (PDFKit, SwiftUI, AppKit, CryptoKit, Security, Vision)
+- Core app uses only Apple system frameworks (PDFKit, SwiftUI, AppKit, CryptoKit, Security, Vision)
+- Optional Claude Subscription backend requires Node 18+ and the `claude` CLI
+- Optional Codex Agent backend requires a non-`/usr/bin` Python 3 install and the `codex` CLI logged in for the current macOS user. Atlas bundles its own self-contained `codex-agent-sidecar/server.py`.
 
 ## Getting Started
 
@@ -51,8 +54,8 @@ xcodebuild -project pdf_app1.xcodeproj -scheme pdf_app1 -configuration Debug bui
 ### 3. Configure AI (optional but recommended)
 
 1. Open **Settings** (Cmd+,) → **AI** tab
-2. Select a provider: Anthropic Claude, OpenAI, Google Gemini, or Ollama (local)
-3. Enter your API key (stored in macOS Keychain)
+2. Select a provider: Anthropic Claude, OpenAI, Google Gemini, Claude (Subscription), Codex Agent, or Ollama (local)
+3. Enter your API key when the provider needs one (stored in macOS Keychain)
 4. Choose a model (e.g., `claude-sonnet-4-5-20250514`, `gpt-4o`, `gemini-2.5-flash`)
 
 For Ollama (free, local, no API key):
@@ -61,6 +64,21 @@ brew install ollama
 ollama pull llama3.1
 # Atlas connects to http://localhost:11434 by default
 ```
+
+For Claude (Subscription):
+```bash
+cd claude-sidecar
+./install-launchagent.sh
+# Atlas connects to http://127.0.0.1:8765 by default
+```
+
+For Codex Agent:
+- Select **Codex Agent** in Settings -> AI.
+- Atlas starts its bundled `codex-agent-sidecar/server.py` automatically when the provider is selected, when Test API Connection is pressed, and before extraction runs.
+- The sidecar listens on `http://127.0.0.1:8775` by default and wraps `codex exec --json`.
+- Use Test API Connection to verify both sidecar startup and a real Codex request. A successful test shows `OK (...)` in Settings.
+- Logs are written under the app sandbox container: `~/Library/Containers/rogues.pdf-app1/Data/Library/Application Support/Atlas/codex-agent-sidecar.log`.
+- See [`codex-agent-sidecar/README.md`](codex-agent-sidecar/README.md) for prerequisites, sandbox notes, environment knobs, and troubleshooting.
 
 ### 4. Open a PDF and analyze
 
@@ -98,7 +116,7 @@ ollama pull llama3.1
 5. **Source Anchoring** - Each concept's text span is mapped back to a PDF bounding box. Concepts without valid anchors are rejected (hallucination mitigation)
 6. **Graph Rendering** - Force-directed layout (Fruchterman-Reingold) with hierarchical grouping positions nodes. Entities are attracted 3x toward parent concepts. SwiftUI Canvas renders with frustum culling and zoom-dependent LOD (dots → boxes → labels → summaries)
 7. **Bidirectional Sync** - PDF scroll events update the active node; node clicks navigate the PDF with an 800ms pulse animation and color-coded highlight
-8. **Cross-Document Merge** *(planned — not yet in the shipping build)* - Within a project, shared concepts across PDFs would be identified via Levenshtein similarity (>0.5) with optional LLM semantic matching, and presented as merge proposals
+8. **Cross-Document Merge** *(in development)* - Within a project, exact repeated labels are shared in the live graph. Experimental SCE/ETR/hybrid flows run through headless tooling for semantic merge and typed-relation evaluation; the legacy proposal UI is not wired into the shipping app
 
 ## Project Structure
 
@@ -108,6 +126,8 @@ pdf_app1/pdf_app1/
   MultiDocumentView.swift         Main UI: sidebar + split pane detail
   PDFViewerView.swift             PDF viewer + annotation engine
   PDFViewRepresentable.swift      PDFKit NSViewRepresentable bridge + annotation gestures
+  HeadlessRunner.swift            CLI/headless extraction, ETR, rubric, and hybrid resolver entry points
+  RubricScorer.swift              Vitacare rubric scorer for cross-doc resolver experiments
   DocumentManager.swift           Multi-tab document state
   ProjectsManager.swift           Project management + bookmarks
   ProjectViews.swift              Project explorer views
@@ -148,6 +168,12 @@ pdf_app1/pdf_app1/
         ClaudeBackend.swift       Anthropic Messages API
         OpenAIBackend.swift       OpenAI-compatible (also Ollama, LM Studio)
         GeminiBackend.swift       Google Gemini API
+        ClaudeSidecarBackend.swift  Local Claude subscription sidecar client
+        CodexAgentBackend.swift   Auto-started local Codex Agent sidecar client
+      Embeddings/
+        EmbeddingResolver.swift   ETR/hybrid candidate generation and adjudication
+        GeminiEmbeddingBackend.swift  Gemini embedding API client
+        EmbeddingMergeApplier.swift  Applies merge plans and typed relations
     Renderer/
       KnowledgeMapView.swift      Map panel with extraction controls + progress
       MapCanvasRenderer.swift     SwiftUI Canvas graph renderer with LOD
@@ -158,6 +184,11 @@ pdf_app1/pdf_app1/
       MapInteraction.swift        Pan, zoom, click, drag, scroll-wheel zoom
       DensityManager.swift        Filters visible nodes to the active semantic zoom level
       ScrollWheelOverlay.swift    AppKit scroll-wheel capture for zoom-toward-cursor
+    Tour/
+      GuidedTour.swift            Tour model: ordered stops tied to graph node IDs
+      TourGenerator.swift         AI-guided stop selection from valid map topics
+      TourPlayer.swift            Playback state and navigation
+      TourPlaybackView.swift      Read-only tour card UI
     Sync/
       BidirectionalSyncManager.swift  PDF ↔ map sync coordination
       ScrollTracker.swift              PDF page change monitoring (debounced)
@@ -174,7 +205,7 @@ pdf_app1/pdf_app1/
       PDFOutlinePanel.swift       PDF table-of-contents / outline sidebar panel
       AnnotationListPanel.swift   Sidebar panel listing the document's annotations
       FirstRunView.swift          Onboarding experience
-      MapToolbar.swift            Map pane toolbar (zoom, filter, export)
+      MapToolbar.swift            Dormant legacy map toolbar (not currently instantiated)
       MergeProposalView.swift     Accept/reject concept merge proposals (dormant — never instantiated)
       ProjectCorrelationSidebar.swift  Project sidebar with correlation stats (dormant — never instantiated)
       PDFToolbarBridge.swift      Observable state bridge: PDF viewer publishes toolbar state/actions for the sidebar to render
@@ -191,8 +222,8 @@ pdf_app1/pdf_app1/
 - **Local-first** - All graphs, annotations, and settings are stored on your Mac
 - **API keys in Keychain** - Never stored in plain text or UserDefaults
 - **Minimal data sent** - Only the text of pages being analyzed is sent to the AI provider (5-page batches)
-- **No Atlas cloud** - There is no server component. Your documents stay on your machine
+- **No Atlas cloud** - There is no Atlas-hosted service. Claude Subscription and Codex Agent use localhost sidecars; your documents stay on your machine except for text sent to the AI provider or CLI backend you choose
 
 ## License
 
-[Add your license here]
+MIT. See [LICENSE](LICENSE).

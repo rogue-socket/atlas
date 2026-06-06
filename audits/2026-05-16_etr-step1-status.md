@@ -4,7 +4,7 @@
 
 > **Branch:** `feature/etr-cross-doc` (this doc lives here, not on `main`)
 > **Baseline:** `main` at `8225e37` (same as SCE branch — integration decision #6)
-> **HEAD at time of writing:** `b32f376` — **current HEAD: `ca3901b`** (14 ahead of `main`, not pushed)
+> **HEAD at time of writing:** `b32f376` — **then-current HEAD: `ca3901b`** (14 ahead of `main`, not pushed at time of writing; current status 2026-05-26: later branch tip synced to `origin/feature/etr-cross-doc` at `fa0bce9`)
 > **Companion plan:** `atlas/audits/2026-05-16_etr-step1-plan.md` (also on this branch, also stale)
 
 ## Branch state
@@ -16,7 +16,7 @@ e1cf898 Headless extraction harness + dev-keys API key source  ← cherry-picked
 8225e37 Backlog: 2026-05-16 done block + carry-forward for B-series + L2  ← main baseline
 ```
 
-Working tree clean. Branch is local-only — NOT pushed to origin.
+Working tree clean. Branch was local-only at time of writing. Current status 2026-05-26: the later `feature/etr-cross-doc` branch tip is synced to `origin/feature/etr-cross-doc` at `fa0bce9`.
 
 ## What's done
 

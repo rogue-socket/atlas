@@ -17,12 +17,6 @@ final class CodexAgentBackendTests: XCTestCase {
         XCTAssertEqual(AIBackendType.codexAgent.availableModels.first, "gpt-5.3-codex-spark")
     }
 
-    func test_backendDefaultModel_usesSpark() {
-        let backend = CodexAgentBackend()
-
-        XCTAssertEqual(backend.modelIdentifier, "gpt-5.3-codex-spark")
-    }
-
     func test_createBackend_returnsCodexAgentWithoutAPIKey() {
         let service = AIServiceManager()
         service.selectedBackendType = .codexAgent
@@ -45,17 +39,77 @@ final class CodexAgentBackendTests: XCTestCase {
         XCTAssertTrue(service.isConfigured)
     }
 
+    func test_createEmbeddingBackend_returnsNilForCodexAgent() {
+        let service = AIServiceManager()
+        service.selectedEmbeddingBackendType = .codexAgent
+
+        XCTAssertFalse(service.isEmbeddingConfigured)
+        XCTAssertNil(service.createEmbeddingBackend())
+    }
+
+    func test_preflightDoesNotStartSidecarWhenHealthIsOK() async throws {
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/health")
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!,
+                Data(#"{"ok":true}"#.utf8)
+            )
+        }
+        let launcher = MockSidecarLauncher()
+        let backend = CodexAgentBackend(
+            baseURL: "http://codex-agent.test",
+            model: "gpt-5.3-codex-spark",
+            session: Self.mockSession(),
+            sidecarLauncher: launcher
+        )
+
+        try await backend.preflight()
+
+        let startCount = await launcher.startCount()
+        XCTAssertEqual(startCount, 0)
+    }
+
+    func test_preflightStartsSidecarWhenHealthIsUnreachable() async throws {
+        let healthCalls = LockedCounter()
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/health")
+            if healthCalls.increment() == 1 {
+                throw URLError(.cannotConnectToHost)
+            }
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!,
+                Data(#"{"ok":true}"#.utf8)
+            )
+        }
+        let launcher = MockSidecarLauncher()
+        let backend = CodexAgentBackend(
+            baseURL: "http://codex-agent.test",
+            model: "gpt-5.3-codex-spark",
+            session: Self.mockSession(),
+            sidecarLauncher: launcher
+        )
+
+        try await backend.preflight()
+
+        let startCount = await launcher.startCount()
+        XCTAssertEqual(startCount, 1)
+        XCTAssertEqual(healthCalls.value(), 2)
+    }
+
     func test_transportParsesTextResponse() async throws {
         MockURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/extract")
             XCTAssertEqual(request.httpMethod, "POST")
-            if let bodyData = request.httpBody ?? request.httpBodyDataFromStream,
-               let payload = try? JSONSerialization.jsonObject(with: bodyData, options: []) as? [String: Any] {
-                XCTAssertEqual(payload["model"] as? String, "gpt-5.3-codex-spark")
-                XCTAssertNil(payload["reasoning_effort"])
-            } else {
-                XCTFail("Expected JSON payload")
-            }
             return (
                 HTTPURLResponse(
                     url: request.url!,
@@ -76,36 +130,6 @@ final class CodexAgentBackendTests: XCTestCase {
         let response = try await backend.generateRawResponse(prompt: "hello")
 
         XCTAssertEqual(response, "sidecar response")
-    }
-
-    func test_transportIncludesReasoningEffortWhenConfigured() async throws {
-        MockURLProtocol.handler = { request in
-            if let bodyData = request.httpBody ?? request.httpBodyDataFromStream,
-               let payload = try? JSONSerialization.jsonObject(with: bodyData, options: []) as? [String: Any] {
-                XCTAssertEqual(payload["reasoning_effort"] as? String, "high")
-            } else {
-                XCTFail("Expected JSON payload")
-            }
-
-            return (
-                HTTPURLResponse(
-                    url: request.url!,
-                    statusCode: 200,
-                    httpVersion: nil,
-                    headerFields: ["Content-Type": "application/json"]
-                )!,
-                Data(#"{"text":"sidecar response"}"#.utf8)
-            )
-        }
-
-        let backend = CodexAgentBackend(
-            baseURL: "http://codex-agent.test",
-            model: "gpt-5.3-codex-spark",
-            reasoningEffort: "high",
-            session: Self.mockSession()
-        )
-
-        _ = try await backend.generateRawResponse(prompt: "hello")
     }
 
     func test_transportMapsNon200ToHTTPError() async {
@@ -145,28 +169,33 @@ final class CodexAgentBackendTests: XCTestCase {
     }
 }
 
-private extension URLRequest {
-    var httpBodyDataFromStream: Data? {
-        guard let stream = httpBodyStream else { return nil }
-        stream.open()
-        defer { stream.close() }
+private actor MockSidecarLauncher: CodexAgentSidecarLaunching {
+    private var starts = 0
 
-        let bufferSize = 1024
-        var data = Data()
+    func start() async throws {
+        starts += 1
+    }
 
-        while stream.hasBytesAvailable {
-            var buffer = [UInt8](repeating: 0, count: bufferSize)
-            let read = stream.read(&buffer, maxLength: bufferSize)
-            if read < 0 {
-                return nil
-            }
-            if read == 0 {
-                break
-            }
-            data.append(buffer, count: read)
-        }
+    func startCount() -> Int {
+        starts
+    }
+}
 
-        return data
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func increment() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        count += 1
+        return count
+    }
+
+    func value() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
     }
 }
 

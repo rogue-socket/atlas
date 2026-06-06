@@ -1,0 +1,410 @@
+{
+  "eligibleNodeCount": 209,
+  "entries": [
+    {
+      "aDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "aID": "1012FE61-DA7D-443C-89E6-1A991A3407E9",
+      "aLabel": "Routine labs",
+      "aLevel": "entity",
+      "bDocs": [
+        "vitacare_patient_experience_and_operations.pdf"
+      ],
+      "bID": "A738C6F4-E2ED-4F51-A4DF-A48F582DA628",
+      "bLabel": "Health Coaching",
+      "bLevel": "concept",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "keep",
+      "similarity": 0.57664424
+    },
+    {
+      "aDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "aID": "1012FE61-DA7D-443C-89E6-1A991A3407E9",
+      "aLabel": "Routine labs",
+      "aLevel": "entity",
+      "bDocs": [
+        "vitacare_organization_and_people.pdf"
+      ],
+      "bID": "D0B11865-2A2C-4BF5-9759-A541C7EB0E76",
+      "bLabel": "VitaCare Workforce Staffing",
+      "bLevel": "concept",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "keep",
+      "similarity": 0.5985167
+    },
+    {
+      "aDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "aID": "1012FE61-DA7D-443C-89E6-1A991A3407E9",
+      "aLabel": "Routine labs",
+      "aLevel": "entity",
+      "bDocs": [
+        "vitacare_compliance_quality_and_security.pdf"
+      ],
+      "bID": "EB5A0522-FCB8-4BD8-9ABB-44E6EF9A881D",
+      "bLabel": "Incident Response and Breach Notification",
+      "bLevel": "concept",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "keep",
+      "similarity": 0.57337594
+    },
+    {
+      "aDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "aID": "1012FE61-DA7D-443C-89E6-1A991A3407E9",
+      "aLabel": "Routine labs",
+      "aLevel": "entity",
+      "bDocs": [
+        "vitacare_patient_experience_and_operations.pdf"
+      ],
+      "bID": "60B1BA4B-51F5-4A20-9234-D70CBEAEE1E4",
+      "bLabel": "External Partnerships",
+      "bLevel": "concept",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "keep",
+      "similarity": 0.5951234
+    },
+    {
+      "aDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "aID": "1012FE61-DA7D-443C-89E6-1A991A3407E9",
+      "aLabel": "Routine labs",
+      "aLevel": "entity",
+      "bDocs": [
+        "vitacare_compliance_quality_and_security.pdf"
+      ],
+      "bID": "B48966A1-517F-46DB-8905-4B31108D1548",
+      "bLabel": "Clinical Quality Program",
+      "bLevel": "concept",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "keep",
+      "similarity": 0.65824795
+    },
+    {
+      "aDocs": [
+        "vitacare_patient_experience_and_operations.pdf"
+      ],
+      "aID": "0C1A24EC-E953-4F76-8032-8BC10ED0FC83",
+      "aLabel": "Referral Management Process",
+      "aLevel": "concept",
+      "bDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "bID": "1012FE61-DA7D-443C-89E6-1A991A3407E9",
+      "bLabel": "Routine labs",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "keep",
+      "similarity": 0.56226736
+    },
+    {
+      "aDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "aID": "1012FE61-DA7D-443C-89E6-1A991A3407E9",
+      "aLabel": "Routine labs",
+      "aLevel": "entity",
+      "bDocs": [
+        "vitacare_patient_experience_and_operations.pdf"
+      ],
+      "bID": "76154826-8177-48F8-95B2-2366840F13BF",
+      "bLabel": "Referral Process",
+      "bLevel": "concept",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "keep",
+      "similarity": 0.5753407
+    },
+    {
+      "aDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "aID": "1012FE61-DA7D-443C-89E6-1A991A3407E9",
+      "aLabel": "Routine labs",
+      "aLevel": "entity",
+      "bDocs": [
+        "vitacare_patient_experience_and_operations.pdf"
+      ],
+      "bID": "76F9386C-4F22-4F80-B547-09135972DE23",
+      "bLabel": "Standard clinic hours: 7:30 AM - 7:00 PM Monday-Friday, 8:00 AM - 2:00 PM Saturday",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "keep",
+      "similarity": 0.70790696
+    },
+    {
+      "aDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "aID": "4923BA3F-51D2-4623-8728-3CCFCA98FF52",
+      "aLabel": "Chronic Condition Programs",
+      "aLevel": "entity",
+      "bDocs": [
+        "vitacare_patient_experience_and_operations.pdf"
+      ],
+      "bID": "A738C6F4-E2ED-4F51-A4DF-A48F582DA628",
+      "bLabel": "Health Coaching",
+      "bLevel": "concept",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "instance_of",
+      "similarity": 0.83643067,
+      "llmDirection": "ab"
+    },
+    {
+      "aDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "aID": "4923BA3F-51D2-4623-8728-3CCFCA98FF52",
+      "aLabel": "Chronic Condition Programs",
+      "aLevel": "entity",
+      "bDocs": [
+        "vitacare_patient_experience_and_operations.pdf"
+      ],
+      "bID": "B1C9360F-441C-4E75-8AAA-F89B7434304C",
+      "bLabel": "chronic conditions",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "instance_of",
+      "similarity": 0.72623765,
+      "llmDirection": "ab"
+    },
+    {
+      "aDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "aID": "2586BB83-EF40-4062-8C12-7B3816C4BEFE",
+      "aLabel": "Primary Care Service Model",
+      "aLevel": "concept",
+      "bDocs": [
+        "vitacare_patient_experience_and_operations.pdf"
+      ],
+      "bID": "89F468ED-F671-485E-BC1E-31599E8E9B41",
+      "bLabel": "98.9% on-time visit starts",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "attribute_of",
+      "similarity": 0.58995944,
+      "llmDirection": "ba"
+    },
+    {
+      "aDocs": [
+        "vitacare_patient_experience_and_operations.pdf"
+      ],
+      "aID": "0C1A24EC-E953-4F76-8032-8BC10ED0FC83",
+      "aLabel": "Referral Management Process",
+      "aLevel": "concept",
+      "bDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "bID": "2586BB83-EF40-4062-8C12-7B3816C4BEFE",
+      "bLabel": "Primary Care Service Model",
+      "bLevel": "concept",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "process_for",
+      "similarity": 0.7121145,
+      "llmDirection": "ab"
+    },
+    {
+      "aDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "aID": "2586BB83-EF40-4062-8C12-7B3816C4BEFE",
+      "aLabel": "Primary Care Service Model",
+      "aLevel": "concept",
+      "bDocs": [
+        "vitacare_patient_experience_and_operations.pdf"
+      ],
+      "bID": "76154826-8177-48F8-95B2-2366840F13BF",
+      "bLabel": "Referral Process",
+      "bLevel": "concept",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "process_for",
+      "similarity": 0.7567413,
+      "llmDirection": "ba"
+    },
+    {
+      "aDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "aID": "2586BB83-EF40-4062-8C12-7B3816C4BEFE",
+      "aLabel": "Primary Care Service Model",
+      "aLevel": "concept",
+      "bDocs": [
+        "vitacare_patient_experience_and_operations.pdf"
+      ],
+      "bID": "4B94A5E2-D88B-4E31-B51F-BBC7E2C2D85D",
+      "bLabel": "Primary care team follows up with the patient on next steps",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "process_for",
+      "similarity": 0.66301197,
+      "llmDirection": "ba"
+    },
+    {
+      "aDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "aID": "2586BB83-EF40-4062-8C12-7B3816C4BEFE",
+      "aLabel": "Primary Care Service Model",
+      "aLevel": "concept",
+      "bDocs": [
+        "vitacare_organization_and_people.pdf"
+      ],
+      "bID": "D2922E4D-ED7C-4E61-ABCD-2A62804D1FB3",
+      "bLabel": "Primary Care Staffing Ratio",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "attribute_of",
+      "similarity": 0.67635155,
+      "llmDirection": "ba"
+    },
+    {
+      "aDocs": [
+        "vitacare_organization_and_people.pdf"
+      ],
+      "aID": "186FA747-9234-498D-8937-84BB8D936E93",
+      "aLabel": "Hybrid Clinical/Telehealth Model",
+      "aLevel": "entity",
+      "bDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "bID": "2586BB83-EF40-4062-8C12-7B3816C4BEFE",
+      "bLabel": "Primary Care Service Model",
+      "bLevel": "concept",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "instance_of",
+      "similarity": 0.6044912,
+      "llmDirection": "ab"
+    },
+    {
+      "aDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "aID": "2586BB83-EF40-4062-8C12-7B3816C4BEFE",
+      "aLabel": "Primary Care Service Model",
+      "aLevel": "concept",
+      "bDocs": [
+        "vitacare_organization_and_people.pdf"
+      ],
+      "bID": "62B876D3-B4C1-4A2A-A4B8-3CF1899E7FC6",
+      "bLabel": "Depression Screening Rate",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "attribute_of",
+      "similarity": 0.561542,
+      "llmDirection": "ba"
+    },
+    {
+      "aDocs": [
+        "vitacare_patient_experience_and_operations.pdf"
+      ],
+      "aID": "60B1BA4B-51F5-4A20-9234-D70CBEAEE1E4",
+      "aLabel": "External Partnerships",
+      "aLevel": "concept",
+      "bDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "bID": "E6A71ED0-43B4-444E-B601-3B52722FA65B",
+      "bLabel": "Labcorp",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "llmVerdict": "instance_of",
+      "similarity": 0.74029976,
+      "llmDirection": "ba"
+    },
+    {
+      "aDocs": [
+        "vitacare_patient_experience_and_operations.pdf"
+      ],
+      "aID": "0C1A24EC-E953-4F76-8032-8BC10ED0FC83",
+      "aLabel": "Referral Management Process",
+      "aLevel": "concept",
+      "bDocs": [
+        "vitacare_clinical_services_and_pricing.pdf",
+        "vitacare_patient_experience_and_operations.pdf"
+      ],
+      "bID": "C744F4CB-2746-43D6-AE58-9D4FF57D233D",
+      "bLabel": "referral and prior authorization",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "finalReason": "llmAdjudicated",
+      "llmVerdict": "merge",
+      "similarity": 0.84334546
+    },
+    {
+      "aDocs": [
+        "vitacare_clinical_services_and_pricing.pdf",
+        "vitacare_patient_experience_and_operations.pdf"
+      ],
+      "aID": "043F9F94-6511-4CDB-9561-2E7D88741326",
+      "aLabel": "patient portal",
+      "aLevel": "entity",
+      "bDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "bID": "59B73250-E51C-45DA-A9AE-D16361B0AAC3",
+      "bLabel": "web portal",
+      "bLevel": "entity",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "finalReason": "llmAdjudicated",
+      "llmVerdict": "merge",
+      "similarity": 0.7724207
+    },
+    {
+      "aDocs": [
+        "vitacare_organization_and_people.pdf"
+      ],
+      "aID": "5F60E308-5C86-44D4-9812-E6E37D4459B3",
+      "aLabel": "Telehealth Platform Reach",
+      "aLevel": "entity",
+      "bDocs": [
+        "vitacare_clinical_services_and_pricing.pdf"
+      ],
+      "bID": "AEF7601E-54AC-4F9C-B478-EAD867EEAC77",
+      "bLabel": "Virtual Care Platform",
+      "bLevel": "concept",
+      "band": "adjudication",
+      "exactLabelMatch": false,
+      "finalReason": "llmAdjudicated",
+      "llmVerdict": "merge",
+      "similarity": 0.7559767
+    }
+  ],
+  "modelIdentifier": "bge-base-en-v1.5",
+  "pairsEvaluated": 16090,
+  "thresholds": {
+    "adjudicationBatchSize": 18,
+    "adjudicationFloor": 0.68,
+    "adjudicationFloorPerKind": {
+      "crossLevel": 0.55
+    },
+    "autoMerge": 0.9
+  },
+  "timestamp": "2026-06-04T15:01:08Z",
+  "vectorDimension": 768
+}

@@ -112,10 +112,10 @@ struct AppConstants {
     static let aiModelKey = "atlas.ai.model"
     /// UserDefaults key for Ollama base URL override
     static let ollamaBaseURLKey = "atlas.ollama.baseURL"
-    /// UserDefaults key for the Codex Agent sidecar base URL override
-    static let codexAgentSidecarURLKey = "atlas.codexAgentSidecar.baseURL"
     /// UserDefaults key for the Claude sidecar base URL override
     static let claudeSidecarURLKey = "atlas.claudeSidecar.baseURL"
+    /// UserDefaults key for the Codex Agent sidecar base URL override
+    static let codexAgentSidecarURLKey = "atlas.codexAgentSidecar.baseURL"
     /// UserDefaults key for max prior-doc lines included in SCE extraction prompts
     static let scePriorHeaderMaxLinesKey = "atlas.sce.priorHeaderMaxLines"
     /// UserDefaults key for the ETR embedding backend type (nil = ETR disabled)
@@ -126,6 +126,8 @@ struct AppConstants {
     static let aiEmbeddingGatewayBaseURLKey = "atlas.ai.embedding.gateway.baseURL"
     /// UserDefaults key for the LAN OpenAI-compatible embedding gateway API key placeholder
     static let aiEmbeddingGatewayAPIKeyKey = "atlas.ai.embedding.gateway.apiKey"
+    /// UserDefaults key for the Hybrid resolver threshold preset
+    static let aiResolverPresetKey = "atlas.ai.resolver.preset"
 }
 
 // MARK: - Notification Names

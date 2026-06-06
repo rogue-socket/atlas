@@ -221,6 +221,16 @@ The Settings UI gains a second selector — **Embedding Model** — separate fro
 - LLM adjudication accuracy on big batches (re-run a sample and check agreement).
 - Embedding model domain-fit (general-purpose models may struggle with domain vocabulary).
 
+### Approach 3: Hybrid (added 2026-05-22)
+
+Branch: `feature/hybrid-cross-doc`
+
+ETR's extract-then-resolve pipeline with SCE's typed-relation taxonomy folded into the adjudicator. Instead of merge/keep, the adjudicator returns one of `merge / instance_of / attribute_of / process_for / keep` — `merge` collapses nodes (the ETR path), the three typed verdicts become directed `EdgeType` edges, `keep` is a no-op. Motivated by a review finding that ETR is the stronger architecture but discards every "related but distinct" pair, while SCE's one keeper is its `match_kind` typed-relation taxonomy.
+
+Adds an embedding-free **lexical** candidate path (`EmbeddingResolver.resolveLexical` — cross-doc pairs by shared-label-token Jaccard) so the hybrid runs Claude-only with no embedding provider. Full design + verification: `audits/2026-05-22_hybrid-cross-doc.md`.
+
+Any A/B per the conditions below must now include the hybrid arm (3-way, not 2-way).
+
 ## Comparison Conditions (A/B test rubric)
 
 Pre-agreed *before* either approach is run.
