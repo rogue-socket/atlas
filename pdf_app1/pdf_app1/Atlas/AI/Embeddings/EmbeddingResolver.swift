@@ -912,13 +912,24 @@ extension EmbeddingResolver {
         "scheduling", "sourcing", "staffing", "vendor"
     ]
 
-    /// Significant tokens of a label: lowercased, split on non-alphanumerics,
-    /// simple English plurals folded, stopwords and tokens shorter than 3
-    /// characters dropped.
+    /// Significant tokens of a label: split on non-alphanumerics, lowercased,
+    /// simple English plurals folded, stopwords and short lowercase words
+    /// dropped. Explicit uppercase acronyms like `AI` and `HR` are retained.
     static func lexicalTokens(_ label: String) -> Set<String> {
-        let parts = label.lowercased().split { !$0.isLetter && !$0.isNumber }
-        return Set(parts.map { lexicalTokenKey(String($0)) }
-            .filter { $0.count >= 3 && !lexicalStopwords.contains($0) })
+        let parts = label.split { !$0.isLetter && !$0.isNumber }
+        return Set(parts.compactMap { part in
+            let raw = String(part)
+            let key = lexicalTokenKey(raw.lowercased())
+            guard !lexicalStopwords.contains(key) else { return nil }
+            if key.count >= 3 { return key }
+            if raw.count >= 2,
+               raw.count <= 5,
+               raw == raw.uppercased(),
+               raw.rangeOfCharacter(from: .letters) != nil {
+                return key
+            }
+            return nil
+        })
     }
 
     static func lexicalTokenKey(_ token: String) -> String {
