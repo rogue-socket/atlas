@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import UniformTypeIdentifiers
 
 class ExportManager {
 
@@ -13,6 +14,20 @@ class ExportManager {
         case obsidian
         case markdown
         case json
+
+        var fileExtension: String {
+            switch self {
+            case .obsidian, .markdown: return "md"
+            case .json: return "json"
+            }
+        }
+
+        var contentType: UTType {
+            switch self {
+            case .obsidian, .markdown: return .plainText
+            case .json: return .json
+            }
+        }
     }
 
     // MARK: - Export
@@ -34,9 +49,8 @@ class ExportManager {
 
         let fileName: String
         switch format {
-        case .obsidian: fileName = "\(projectName).md"
-        case .markdown: fileName = "\(projectName).md"
-        case .json: fileName = "\(projectName).json"
+        case .obsidian, .markdown, .json:
+            fileName = "\(projectName).\(format.fileExtension)"
         }
 
         let tempDir = FileManager.default.temporaryDirectory

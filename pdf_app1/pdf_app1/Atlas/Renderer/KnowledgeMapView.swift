@@ -8,12 +8,24 @@
 import SwiftUI
 import PDFKit
 import os.log
+import UniformTypeIdentifiers
 
 private let log = AtlasLogger.ui
 
 private struct LayoutKey: Equatable {
-    let nodeCount: Int
+    let nodeIDs: [String]
+    let edgeSignatures: [String]
     let zoomLevel: SemanticZoomLevel
+
+    var nodeCount: Int { nodeIDs.count }
+}
+
+struct MapLayoutComputationKey: Equatable {
+    let nodeIDs: [String]
+    let edgeSignatures: [String]
+    let zoomLevel: SemanticZoomLevel
+    let canvasBucket: CGSize
+    let expansionGeneration: Int
 }
 
 struct KnowledgeMapView: View {
@@ -25,12 +37,14 @@ struct KnowledgeMapView: View {
     @State private var interaction = MapInteraction()
     @State private var densityManager = DensityManager()
     @State private var hasComputedLayout = false
+    @State private var lastLayoutComputationKey: MapLayoutComputationKey?
     @Environment(AIServiceManager.self) private var aiService
     @State private var pipeline = ExtractionPipeline()
 
     // Extraction mode
     @AppStorage("atlas.extraction.mode") private var selectedModeRaw: String = ExtractionMode.fast.rawValue
     @State private var showModePicker = false
+    @State private var exportErrorMessage: String?
 
     private var selectedMode: ExtractionMode {
         ExtractionMode(rawValue: selectedModeRaw) ?? .fast
@@ -158,13 +172,14 @@ struct KnowledgeMapView: View {
                         .padding(8)
                 }
             }
-            // Single onChange keyed on (nodeCount, zoomLevel) so a simultaneous
-            // change of both — e.g. user taps zoom while extraction adds
-            // nodes — triggers one layout recompute, not two back-to-back.
+            // Single onChange keyed on graph shape + zoom so a simultaneous
+            // graph/zoom change triggers one layout recompute, not multiple
+            // back-to-back calls. The recompute path has its own canvas-aware
+            // cache key and skips unchanged layouts.
             // `fitToContent` only runs when zoom actually changed (matches
             // the prior split-handler behavior).
-            .onChange(of: LayoutKey(nodeCount: graph.nodeCount, zoomLevel: zoomLevel)) { oldKey, newKey in
-                log.info("[MapView] layout key changed: nodeCount=\(newKey.nodeCount), zoomLevel=\(String(describing: newKey.zoomLevel))")
+            .onChange(of: layoutKey(zoomLevel: zoomLevel)) { oldKey, newKey in
+                log.info("[MapView] layout key changed: nodeCount=\(newKey.nodeCount), edgeCount=\(newKey.edgeSignatures.count), zoomLevel=\(String(describing: newKey.zoomLevel))")
                 if newKey.nodeCount > 0 && !interaction.isDragging {
                     recomputeLayout(canvasSize: geometry.size)
                     if oldKey.zoomLevel != newKey.zoomLevel {
@@ -175,7 +190,7 @@ struct KnowledgeMapView: View {
                         )
                     }
                 }
-                if oldKey.nodeCount != newKey.nodeCount && !debouncedSearchQuery.isEmpty {
+                if oldKey.nodeIDs != newKey.nodeIDs && !debouncedSearchQuery.isEmpty {
                     rerunSearchFilter()
                 }
             }
@@ -201,6 +216,11 @@ struct KnowledgeMapView: View {
                     recomputeLayout(canvasSize: geometry.size)
                 }
             }
+            .alert("Export Failed", isPresented: exportErrorPresented) {
+                Button("OK", role: .cancel) { exportErrorMessage = nil }
+            } message: {
+                Text(exportErrorMessage ?? "")
+            }
         }
     }
 
@@ -220,15 +240,37 @@ struct KnowledgeMapView: View {
         return filtered
     }
 
+    private func layoutKey(zoomLevel: SemanticZoomLevel) -> LayoutKey {
+        LayoutKey(
+            nodeIDs: graph.allNodes.map { $0.id.uuidString }.sorted(),
+            edgeSignatures: graph.allEdges.map { Self.edgeSignature($0) }.sorted(),
+            zoomLevel: zoomLevel
+        )
+    }
+
     private func recomputeLayout(canvasSize: CGSize) {
+        let startedAt = Date()
         let nodes = visibleNodes
         let nodeIDs = Set(nodes.map(\.id))
         let edges = graph.allEdges.filter { nodeIDs.contains($0.sourceNodeID) && nodeIDs.contains($0.targetNodeID) }
+        let key = Self.layoutComputationKey(
+            nodeIDs: nodeIDs,
+            edges: edges,
+            zoomLevel: zoomLevel,
+            canvasSize: canvasSize,
+            expansionGeneration: graph.expansionGeneration
+        )
+        if hasComputedLayout && lastLayoutComputationKey == key {
+            log.debug("[MapView] recomputeLayout skipped unchanged key nodes=\(nodes.count) edges=\(edges.count) zoom=\(String(describing: self.zoomLevel)) bucket=\(Int(key.canvasBucket.width))x\(Int(key.canvasBucket.height))")
+            return
+        }
+
         // `validNodeIDs` is the FULL graph's node IDs so FDL doesn't evict
         // positions for off-tab nodes — tab switches restore the prior
         // layout instead of reshuffling from a fresh seed.
         let allIDs = Set(graph.allNodes.map(\.id))
         layout.computeLayout(nodes: nodes, edges: edges, canvasSize: canvasSize, validNodeIDs: allIDs)
+        lastLayoutComputationKey = key
 
         cachedFilteredGraph = graphForCurrentZoom
 
@@ -236,6 +278,42 @@ struct KnowledgeMapView: View {
             interaction.fitToContent(layout: layout, canvasSize: canvasSize, visibleIDs: nodeIDs)
             hasComputedLayout = true
         }
+        let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+        log.info("[MapView] recomputeLayout completed nodes=\(nodes.count) edges=\(edges.count) zoom=\(String(describing: self.zoomLevel)) bucket=\(Int(key.canvasBucket.width))x\(Int(key.canvasBucket.height)) iterations=\(self.layout.iteration) elapsed_ms=\(elapsedMS)")
+    }
+
+    static func layoutComputationKey(
+        nodeIDs: Set<UUID>,
+        edges: [GraphEdge],
+        zoomLevel: SemanticZoomLevel,
+        canvasSize: CGSize,
+        expansionGeneration: Int
+    ) -> MapLayoutComputationKey {
+        MapLayoutComputationKey(
+            nodeIDs: nodeIDs.map(\.uuidString).sorted(),
+            edgeSignatures: edges.map { Self.edgeSignature($0) }.sorted(),
+            zoomLevel: zoomLevel,
+            canvasBucket: canvasBucket(for: canvasSize),
+            expansionGeneration: expansionGeneration
+        )
+    }
+
+    static func edgeSignature(_ edge: GraphEdge) -> String {
+        [
+            edge.id.uuidString,
+            edge.sourceNodeID.uuidString,
+            edge.targetNodeID.uuidString,
+            edge.type.rawValue,
+            edge.label ?? ""
+        ].joined(separator: "|")
+    }
+
+    static func canvasBucket(for canvasSize: CGSize) -> CGSize {
+        let bucketSize: CGFloat = 64
+        return CGSize(
+            width: (canvasSize.width / bucketSize).rounded() * bucketSize,
+            height: (canvasSize.height / bucketSize).rounded() * bucketSize
+        )
     }
 
     // MARK: - Top Bar (search + zoom levels)
@@ -323,6 +401,17 @@ struct KnowledgeMapView: View {
             }) { Image(systemName: "arrow.up.left.and.arrow.down.right.circle") }
                 .help("Collapse All")
 
+            Divider().frame(width: 16)
+            Menu {
+                Button("Obsidian") { exportGraph(format: .obsidian) }
+                Button("Markdown") { exportGraph(format: .markdown) }
+                Button("JSON") { exportGraph(format: .json) }
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+            }
+            .menuStyle(.borderlessButton)
+            .help("Export Knowledge Map")
+
             if documentURL != nil && aiService.isConfigured {
                 Divider().frame(width: 16)
                 Button(action: { showModePicker.toggle() }) { Image(systemName: "brain") }
@@ -336,6 +425,36 @@ struct KnowledgeMapView: View {
         .buttonStyle(.borderless)
         .padding(4)
         .background(RoundedRectangle(cornerRadius: 6).fill(.ultraThinMaterial))
+    }
+
+    private var exportErrorPresented: Binding<Bool> {
+        Binding(
+            get: { exportErrorMessage != nil },
+            set: { if !$0 { exportErrorMessage = nil } }
+        )
+    }
+
+    private var exportProjectName: String {
+        let name = documentURL?.deletingPathExtension().lastPathComponent ?? "Atlas Export"
+        return name.isEmpty ? "Atlas Export" : name
+    }
+
+    private func exportGraph(format: ExportManager.ExportFormat) {
+        let content = ExportManager().export(graph: graph, format: format, projectName: exportProjectName)
+        let panel = NSSavePanel()
+        panel.title = "Export Knowledge Map"
+        panel.canCreateDirectories = true
+        panel.allowedContentTypes = [format.contentType]
+        panel.nameFieldStringValue = "\(exportProjectName).\(format.fileExtension)"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try content.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                log.error("[MapView] export failed: \(error.localizedDescription)")
+                exportErrorMessage = "Could not write \(url.lastPathComponent)."
+            }
+        }
     }
 
     // MARK: - Selected Node Detail Panel
@@ -402,6 +521,8 @@ struct KnowledgeMapView: View {
             // edges (those are implicit in the level-fold + cluster bbox).
             let allEdges = graph.edges(for: node.id)
             let relational = allEdges.filter { !$0.type.isContainment }
+            let outgoingRelational = relational.filter { $0.sourceNodeID == node.id }
+            let incomingRelational = relational.filter { $0.targetNodeID == node.id }
             let containment = allEdges.filter { $0.type.isContainment }
 
             if !relational.isEmpty {
@@ -409,21 +530,16 @@ struct KnowledgeMapView: View {
                 Text("Connections (\(relational.count))")
                     .font(.caption2)
                     .foregroundColor(.secondary)
-                ForEach(relational.prefix(5)) { edge in
-                    let otherID = edge.sourceNodeID == node.id ? edge.targetNodeID : edge.sourceNodeID
-                    if let other = graph.node(for: otherID) {
-                        HStack(spacing: 4) {
-                            Circle().fill(edge.type.color).frame(width: 5, height: 5)
-                            Text(edgeDisplayText(edge))
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                            Text(other.label)
-                                .font(.caption2)
-                                .lineLimit(1)
-                        }
-                    }
-                }
+                relationshipRows(
+                    title: "Outgoing",
+                    edges: outgoingRelational,
+                    isOutgoing: true
+                )
+                relationshipRows(
+                    title: "Incoming",
+                    edges: incomingRelational,
+                    isOutgoing: false
+                )
             }
 
             // Hierarchy — containment edges surface here, labeled by
@@ -457,6 +573,40 @@ struct KnowledgeMapView: View {
         .frame(maxWidth: 300)
         .background(RoundedRectangle(cornerRadius: 8).fill(.ultraThickMaterial))
         .shadow(color: .black.opacity(0.1), radius: 8, y: 4)
+    }
+
+    @ViewBuilder
+    private func relationshipRows(
+        title: String,
+        edges: [GraphEdge],
+        isOutgoing: Bool
+    ) -> some View {
+        if !edges.isEmpty {
+            Text("\(title) (\(edges.count))")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+
+            ForEach(edges.prefix(5)) { edge in
+                let otherID = isOutgoing ? edge.targetNodeID : edge.sourceNodeID
+                if let other = graph.node(for: otherID) {
+                    HStack(spacing: 4) {
+                        Image(systemName: isOutgoing ? "arrow.right" : "arrow.left")
+                            .font(.caption2)
+                            .foregroundColor(edge.type.color)
+                        Text(edgeDisplayText(edge))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                        Text(isOutgoing ? "to" : "from")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Text(other.label)
+                            .font(.caption2)
+                            .lineLimit(1)
+                    }
+                }
+            }
+        }
     }
 
     private func edgeDisplayText(_ edge: GraphEdge) -> String {

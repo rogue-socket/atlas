@@ -224,8 +224,8 @@ struct AISettingsView: View {
                 log.info("[Test] SUCCESS in \(elapsedStr): \(response.prefix(100))")
                 testStatus = .success("OK (\(elapsedStr)) — \(response.prefix(60))...")
             } catch let error as AIError {
-                log.error("[Test] FAILED: \(error.localizedDescription ?? "unknown")")
-                testStatus = .failure(error.localizedDescription ?? "Unknown AI error")
+                log.error("[Test] FAILED: \(error.localizedDescription)")
+                testStatus = .failure(error.localizedDescription)
             } catch {
                 log.error("[Test] FAILED: \(error.localizedDescription)")
                 testStatus = .failure(error.localizedDescription)

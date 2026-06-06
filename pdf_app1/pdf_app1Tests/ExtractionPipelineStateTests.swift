@@ -1,5 +1,6 @@
 import XCTest
 import PDFKit
+import AppKit
 @testable import pdf_app1
 
 /// Tests for `ExtractionPipeline`'s observable state surface that does NOT
@@ -9,6 +10,13 @@ import PDFKit
 ///   - `processPages` early-returns when no AI backend is configured
 ///   - `processFullDocument` guards against re-entry
 final class ExtractionPipelineStateTests: XCTestCase {
+
+    private func makePDFDocument(text: String) -> PDFDocument? {
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 540, height: 720))
+        textView.string = text
+        guard let pdfData = textView.dataWithPDF(inside: textView.bounds) as Data? else { return nil }
+        return PDFDocument(data: pdfData)
+    }
 
     // MARK: - progress
 
@@ -87,6 +95,39 @@ final class ExtractionPipelineStateTests: XCTestCase {
                 defaults: defaults
             ),
             90
+        )
+    }
+
+    func test_shouldFinalizeExtraction_allowsCompletedLoop() {
+        XCTAssertTrue(
+            ExtractionPipeline.shouldFinalizeExtraction(
+                batchLoopOutcome: .completed,
+                taskIsCancelled: false
+            )
+        )
+    }
+
+    func test_shouldFinalizeExtraction_blocksFailedLoop() {
+        XCTAssertFalse(
+            ExtractionPipeline.shouldFinalizeExtraction(
+                batchLoopOutcome: .failed,
+                taskIsCancelled: false
+            )
+        )
+    }
+
+    func test_shouldFinalizeExtraction_blocksCancellation() {
+        XCTAssertFalse(
+            ExtractionPipeline.shouldFinalizeExtraction(
+                batchLoopOutcome: .completed,
+                taskIsCancelled: true
+            )
+        )
+        XCTAssertFalse(
+            ExtractionPipeline.shouldFinalizeExtraction(
+                batchLoopOutcome: .cancelled,
+                taskIsCancelled: false
+            )
         )
     }
 
@@ -217,6 +258,44 @@ final class ExtractionPipelineStateTests: XCTestCase {
         XCTAssertEqual(candidates.map(\.label), ["Customer Operations", "Service SLA"])
         XCTAssertEqual(candidates.last?.parentLabel, "Customer Operations")
         XCTAssertEqual(candidates.last?.level, .entity)
+    }
+
+    // MARK: - source anchor bounds
+
+    func test_sourceAnchorBounds_pageSizedPreferredBoundsUseSelectionBounds() {
+        guard let document = makePDFDocument(text: "Meridian Biofab validates release criteria from pilot manufacturing notes."),
+              let page = document.page(at: 0) else {
+            XCTFail("Could not create PDFDocument")
+            return
+        }
+
+        let bounds = ExtractionPipeline.sourceAnchorBounds(
+            preferredBounds: page.bounds(for: .mediaBox),
+            snippet: "pilot manufacturing notes",
+            pageIndex: 0,
+            document: document
+        )
+
+        let pageBounds = page.bounds(for: .mediaBox)
+        XCTAssertFalse(bounds.isEmpty)
+        XCTAssertLessThan(bounds.width * bounds.height, pageBounds.width * pageBounds.height * 0.25)
+    }
+
+    func test_sourceAnchorBounds_pageSizedPreferredBoundsWithoutSelectionBecomesPageOnly() {
+        guard let document = makePDFDocument(text: "Meridian Biofab validates release criteria."),
+              let page = document.page(at: 0) else {
+            XCTFail("Could not create PDFDocument")
+            return
+        }
+
+        let bounds = ExtractionPipeline.sourceAnchorBounds(
+            preferredBounds: page.bounds(for: .mediaBox),
+            snippet: "not present on page",
+            pageIndex: 0,
+            document: document
+        )
+
+        XCTAssertEqual(bounds, .zero)
     }
 
     // MARK: - processPages early-return without backend

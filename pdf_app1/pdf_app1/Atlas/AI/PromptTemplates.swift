@@ -393,57 +393,6 @@ enum PromptTemplates {
         """
     }
 
-    // MARK: - Semantic Merge Proposal
-
-    static func semanticMergeProposal(
-        documentATitle: String,
-        documentAConcepts: [(label: String, summary: String?)],
-        documentBTitle: String,
-        documentBConcepts: [(label: String, summary: String?)]
-    ) -> String {
-        let formatConcepts: ([(label: String, summary: String?)]) -> String = { concepts in
-            concepts.map { c in
-                if let s = c.summary { return "- \(c.label): \(s)" }
-                return "- \(c.label)"
-            }.joined(separator: "\n")
-        }
-
-        return """
-        You are analyzing two documents to find overlapping concepts between them.
-
-        Document A: "\(documentATitle)"
-        Concepts:
-        \(formatConcepts(documentAConcepts))
-
-        Document B: "\(documentBTitle)"
-        Concepts:
-        \(formatConcepts(documentBConcepts))
-
-        Identify which concepts from Document A and Document B refer to the same or closely related topic, even if they use different terminology, abbreviations, or phrasings. Consider:
-        - Synonyms and alternative names (e.g., "Neural Networks" ↔ "Deep Learning Architectures")
-        - Abbreviations (e.g., "NN" ↔ "Neural Network")
-        - Specificity differences (e.g., "Optimization" ↔ "Gradient Descent" — partial overlap)
-        - Domain-equivalent terms (e.g., "Loss Function" ↔ "Cost Function")
-
-        Return ONLY a JSON array of matches:
-        [
-          {
-            "labelA": "concept label from Document A",
-            "labelB": "concept label from Document B",
-            "confidence": 0.85,
-            "reason": "Brief explanation of why these are the same/related",
-            "mergeType": "exactMatch|semanticEquivalent|partialOverlap"
-          }
-        ]
-
-        - exactMatch: clearly the same concept, just different wording
-        - semanticEquivalent: same underlying idea, different framing
-        - partialOverlap: one is a subset or special case of the other
-
-        Only propose matches you are confident about (confidence > 0.6). Return valid JSON only.
-        """
-    }
-
     // MARK: - Deep Mode Pass 1: Fact Extraction
 
     static func deepFactExtraction(text: String, documentTitle: String, pageRange: Range<Int>) -> String {

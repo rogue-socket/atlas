@@ -10,10 +10,17 @@ import Foundation
 import PDFKit
 import Observation
 import os.log
+import Darwin
 
 private let log = AtlasLogger.pipeline
 private let defaultSCEPriorDocsHeaderMaxLines = 120
 private let edgeProposalCandidateLimit = 120
+
+enum ExtractionBatchLoopOutcome: Equatable {
+    case completed
+    case cancelled
+    case failed
+}
 
 struct RelationshipEdgeInsertionResult: Equatable {
     var added = 0
@@ -25,6 +32,8 @@ struct RelationshipEdgeInsertionResult: Equatable {
 
 @Observable
 class ExtractionPipeline {
+    static var mirrorsSCETelemetryToStdout = false
+
     var isProcessing: Bool = false
     var currentPage: Int = 0
     var totalPages: Int = 0
@@ -47,6 +56,13 @@ class ExtractionPipeline {
             environment: ProcessInfo.processInfo.environment,
             defaults: .standard
         )
+    }
+
+    static func shouldFinalizeExtraction(
+        batchLoopOutcome: ExtractionBatchLoopOutcome,
+        taskIsCancelled: Bool
+    ) -> Bool {
+        batchLoopOutcome == .completed && !taskIsCancelled
     }
 
     static func scePriorDocsHeaderMaxLines(
@@ -77,6 +93,7 @@ class ExtractionPipeline {
 
     // MARK: - Progressive Extraction
 
+    @discardableResult
     func processPages(
         document: PDFDocument,
         documentURL: URL,
@@ -84,14 +101,14 @@ class ExtractionPipeline {
         graph: KnowledgeGraph,
         aiService: AIServiceManager,
         mode: ExtractionMode = .fast
-    ) async {
+    ) async -> Bool {
         log.info("=== Starting extraction for \(documentURL.lastPathComponent), pages \(pageRange.lowerBound+1)-\(pageRange.upperBound) ===")
 
         guard let backend = aiService.createBackend() else {
             log.error("No AI backend configured (type=\(aiService.selectedBackendType.rawValue), model=\(aiService.selectedModel))")
             statusMessage = "AI backend not configured"
             isProcessing = false
-            return
+            return false
         }
 
         log.info("Using backend: \(backend.displayName) / \(backend.modelIdentifier)")
@@ -104,7 +121,7 @@ class ExtractionPipeline {
             log.error("Backend preflight failed: \(error.localizedDescription)")
             statusMessage = (error as? AIError)?.errorDescription ?? error.localizedDescription
             isProcessing = false
-            return
+            return false
         }
 
         if mode == .deep {
@@ -134,18 +151,18 @@ class ExtractionPipeline {
             statusMessage = "Generating document summary..."
             await Self.appendDocumentSummary(graph: graph, documentURL: documentURL, backend: backend)
 
-            // L2: aggregate concept-level edges into chapter-level edges so
+            // L2: aggregate lower-level semantic edges into chapter-level edges so
             // the Chapter tab isn't a graveyard of isolated nodes.
             let synthesized = ChapterEdgeAggregation.synthesize(in: graph)
             if synthesized > 0 {
-                log.info("[Pipeline] Synthesized \(synthesized) chapter-level aggregated edge(s)")
+                log.info("[Pipeline] Synthesized \(synthesized) chapter-level rollup edge(s)")
             }
 
             statusMessage = deepPipeline.statusMessage
             isProcessing = false
             graph.documentProcessingState[documentURL] = .complete
             GraphStore.shared.scheduleSave(graph, for: documentURL)
-            return
+            return true
         }
 
         totalPages = pageRange.count
@@ -182,11 +199,13 @@ class ExtractionPipeline {
 
         var pageIndex = pageRange.lowerBound
         var batchNumber = 0
+        var batchLoopOutcome: ExtractionBatchLoopOutcome = .completed
         while pageIndex < pageRange.upperBound {
             // Check for cancellation before each batch
             if Task.isCancelled {
                 log.info("Extraction cancelled by user after \(batchNumber) batches")
                 statusMessage = "Cancelled — \(graph.nodeCount) concepts extracted"
+                batchLoopOutcome = .cancelled
                 break
             }
 
@@ -217,21 +236,28 @@ class ExtractionPipeline {
             } catch is CancellationError {
                 log.info("Extraction cancelled during batch \(batchNumber)")
                 statusMessage = "Cancelled — \(graph.nodeCount) concepts extracted"
+                batchLoopOutcome = .cancelled
                 break
             } catch {
                 log.error("Batch \(batchNumber) FAILED: \(error.localizedDescription)")
                 statusMessage = "Error: \(error.localizedDescription)"
+                batchLoopOutcome = .failed
                 break
             }
 
             pageIndex = batchEnd
         }
 
-        if Task.isCancelled {
+        if !Self.shouldFinalizeExtraction(batchLoopOutcome: batchLoopOutcome, taskIsCancelled: Task.isCancelled) {
             isProcessing = false
             graph.documentProcessingState[documentURL] = .unprocessed
-            log.info("=== Extraction cancelled for \(documentURL.lastPathComponent) ===")
-            return
+            switch batchLoopOutcome {
+            case .completed, .cancelled:
+                log.info("=== Extraction cancelled for \(documentURL.lastPathComponent) ===")
+            case .failed:
+                log.error("=== Extraction failed for \(documentURL.lastPathComponent); not saving partial graph ===")
+            }
+            return false
         }
 
         // Chapter extraction (PDF outline if present, else LLM).
@@ -253,24 +279,24 @@ class ExtractionPipeline {
         statusMessage = "Generating document summary..."
         await Self.appendDocumentSummary(graph: graph, documentURL: documentURL, backend: backend)
 
-        // L2: aggregate concept-level edges into chapter-level edges so
+        // L2: aggregate lower-level semantic edges into chapter-level edges so
         // the Chapter tab isn't a graveyard of isolated nodes.
         let synthesized = ChapterEdgeAggregation.synthesize(in: graph)
         if synthesized > 0 {
-            log.info("[Pipeline] Synthesized \(synthesized) chapter-level aggregated edge(s)")
+            log.info("[Pipeline] Synthesized \(synthesized) chapter-level rollup edge(s)")
         }
-
-        // Final save now that chapter / document / L2 enrichments are in the
-        // live graph. processBatch's per-batch save only captures concept +
-        // entity state (encoding happens synchronously at call time), so
-        // without this trailing call the per-doc file would never include
-        // chapters or the document-summary node.
-        GraphStore.shared.scheduleSave(graph, for: documentURL)
 
         isProcessing = false
         statusMessage = "Done — \(graph.nodeCount) concepts extracted"
         graph.documentProcessingState[documentURL] = .complete
+
+        // Final save now that chapter / document / L2 enrichments and the
+        // terminal processing state are in the live graph. Encoding happens
+        // synchronously at call time, so ordering here affects persisted state.
+        GraphStore.shared.scheduleSave(graph, for: documentURL)
+
         log.info("=== Extraction complete: \(graph.nodeCount) nodes, \(graph.edgeCount) edges ===")
+        return true
     }
 
     func processFullDocument(
@@ -696,7 +722,12 @@ class ExtractionPipeline {
         }
         log.info("[Step 5] Anchor resolution: \(anchored) anchored, \(rejected) rejected")
         if !priorDocsLabelMap.isEmpty {
-            log.info("[SCE] doc=\(documentURL.lastPathComponent, privacy: .public) pages=\(pageRange.lowerBound + 1)-\(pageRange.upperBound) match_summary: claims=\(scePriorMatchClaims) renames=\(scePriorMatchRenames) merges=\(scePriorMatchMerges) typed_edges=\(scePriorMatchTypedEdges) typed_rejected_direction=\(scePriorMatchTypedEdgesRejectedDirection)")
+            let summary = "[SCE] doc=\(documentURL.lastPathComponent) pages=\(pageRange.lowerBound + 1)-\(pageRange.upperBound) match_summary: claims=\(scePriorMatchClaims) renames=\(scePriorMatchRenames) merges=\(scePriorMatchMerges) typed_edges=\(scePriorMatchTypedEdges) typed_rejected_direction=\(scePriorMatchTypedEdgesRejectedDirection)"
+            log.info("\(summary, privacy: .public)")
+            if Self.mirrorsSCETelemetryToStdout {
+                print(summary)
+                fflush(stdout)
+            }
         }
 
         if !extraction.edges.isEmpty {
@@ -729,11 +760,10 @@ class ExtractionPipeline {
             log.info("[Step 6] Skipped edge proposal (only \(edgeCandidates.count) candidates)")
         }
 
-        // Step 7: Auto-save. `scheduleSave` scopes via `encodeSubgraph(for:)`
-        // so the per-doc file only contains this doc's anchored nodes
-        // regardless of how big the in-memory project graph is.
-        GraphStore.shared.scheduleSave(graph, for: documentURL)
-        log.info("[Step 7] Scheduled per-document auto-save")
+        // Do not save here. The outer pipeline saves only after all batches
+        // and chapter/document enrichment complete, so a later batch failure
+        // cannot overwrite a good persisted graph with a partial snapshot.
+        log.info("[Step 7] Deferred per-document save until extraction completes")
     }
 
     @discardableResult
@@ -862,7 +892,12 @@ class ExtractionPipeline {
                 return SourceAnchor(
                     documentURL: documentURL,
                     pageIndex: block.pageIndex,
-                    boundingBox: block.boundingBox,
+                    boundingBox: Self.sourceAnchorBounds(
+                        preferredBounds: block.boundingBox,
+                        snippet: textSpan,
+                        pageIndex: block.pageIndex,
+                        document: document
+                    ),
                     textSnippet: String(textSpan.prefix(200))
                 )
             }
@@ -875,7 +910,12 @@ class ExtractionPipeline {
                 return SourceAnchor(
                     documentURL: documentURL,
                     pageIndex: block.pageIndex,
-                    boundingBox: block.boundingBox,
+                    boundingBox: Self.sourceAnchorBounds(
+                        preferredBounds: block.boundingBox,
+                        snippet: prefix,
+                        pageIndex: block.pageIndex,
+                        document: document
+                    ),
                     textSnippet: String(textSpan.prefix(200))
                 )
             }
@@ -886,7 +926,8 @@ class ExtractionPipeline {
             guard let page = document.page(at: pageIndex),
                   let pageText = page.string else { continue }
             if pageText.lowercased().contains(prefix) {
-                let bounds = page.bounds(for: .mediaBox)
+                let bounds = HighlightSyncBridge.findPassageRects(snippet: prefix, on: page)?
+                    .reduce(CGRect.null) { $0.union($1) } ?? .zero
                 return SourceAnchor(
                     documentURL: documentURL,
                     pageIndex: pageIndex,
@@ -897,6 +938,21 @@ class ExtractionPipeline {
         }
 
         return nil
+    }
+
+    static func sourceAnchorBounds(
+        preferredBounds: CGRect,
+        snippet: String,
+        pageIndex: Int,
+        document: PDFDocument
+    ) -> CGRect {
+        guard let page = document.page(at: pageIndex) else { return .zero }
+        if HighlightSyncBridge.isValidPersistentAnchor(preferredBounds, on: page) {
+            return preferredBounds
+        }
+
+        return HighlightSyncBridge.findPassageRects(snippet: snippet, on: page)?
+            .reduce(CGRect.null) { $0.union($1) } ?? .zero
     }
 }
 

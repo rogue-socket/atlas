@@ -568,7 +568,9 @@ struct PDFViewerView: View {
         // synchronous return below, before the background write actually
         // runs, revoking scope mid-write.
         DispatchQueue.global(qos: .userInitiated).async {
+            let detachedAtlasAnnotations = HighlightSyncBridge.detachAtlasAnnotations(from: self.pdfDocument)
             let success = self.pdfDocument.write(to: url)
+            HighlightSyncBridge.restoreAtlasAnnotations(detachedAtlasAnnotations)
 
             DispatchQueue.main.async {
                 url.stopAccessingSecurityScopedResource()
@@ -671,7 +673,9 @@ struct PDFViewerView: View {
         panel.nameFieldStringValue = pdfURL?.lastPathComponent ?? "Document.pdf"
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
+            let detachedAtlasAnnotations = HighlightSyncBridge.detachAtlasAnnotations(from: pdfDocument)
             let success = pdfDocument.write(to: url)
+            HighlightSyncBridge.restoreAtlasAnnotations(detachedAtlasAnnotations)
             if success {
                 notificationManager.showSuccess("Saved to \(url.lastPathComponent)")
             } else {

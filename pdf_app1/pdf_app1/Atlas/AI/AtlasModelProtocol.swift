@@ -127,16 +127,6 @@ struct ChapterExtractionResponse: Codable {
     let chapters: [RawChapter]
 }
 
-// MARK: - Raw Merge Proposal (from AI)
-
-struct RawMergeProposal: Codable {
-    let labelA: String
-    let labelB: String
-    let confidence: Double
-    let reason: String
-    let mergeType: String? // "exactMatch", "semanticEquivalent", "partialOverlap"
-}
-
 // MARK: - Atlas Model Protocol
 
 protocol AtlasModel: Sendable {
@@ -162,10 +152,6 @@ protocol AtlasModel: Sendable {
     func proposeEdges(between concepts: [String], context: String) async throws -> [RawEdge]
     func summarizeConcept(_ label: String, sourceText: String) async throws -> String
     func answerQuestion(_ question: String, context: String) async throws -> AnswerWithCitations
-    func proposeMerges(
-        documentAConcepts: [(label: String, summary: String?)],
-        documentBConcepts: [(label: String, summary: String?)]
-    ) async throws -> [RawMergeProposal]
 
     func generateRawResponse(prompt: String) async throws -> String
 }
@@ -183,13 +169,6 @@ extension AtlasModel {
     }
 
     func preflight() async throws { }
-
-    func proposeMerges(
-        documentAConcepts: [(label: String, summary: String?)],
-        documentBConcepts: [(label: String, summary: String?)]
-    ) async throws -> [RawMergeProposal] {
-        return []
-    }
 
     func generateRawResponse(prompt: String) async throws -> String {
         throw AIError.modelUnavailable("Raw generation not supported by \(displayName)")

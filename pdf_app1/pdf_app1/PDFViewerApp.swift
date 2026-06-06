@@ -24,7 +24,7 @@ final class HeadlessAppDelegate: NSObject, NSApplicationDelegate {
 struct PDFViewerApp: App {
     @NSApplicationDelegateAdaptor(HeadlessAppDelegate.self) private var appDelegate
     @StateObject private var recentFilesManager: RecentFilesManager
-    @StateObject private var projectsManager = ProjectsManager()
+    @StateObject private var projectsManager: ProjectsManager
     @StateObject private var documentManager: DocumentManager
     @State private var knowledgeGraph = KnowledgeGraph()
     @State private var aiServiceManager = AIServiceManager()
@@ -32,17 +32,26 @@ struct PDFViewerApp: App {
     @State private var didSweepOrphans = false
     /// Non-nil when launched with `--headless-extract` — suppresses UI-driven
     /// startup (session restore, orphan sweep) so the runner owns the lifecycle.
-    private let headlessConfig = HeadlessRunnerConfig.parse(from: CommandLine.arguments)
+    private let headlessConfig: HeadlessRunnerConfig?
 
     init() {
+        let config = HeadlessRunnerConfig.parse(from: CommandLine.arguments)
+        headlessConfig = config
+        let graphDirectoryOverride = config?.graphsOutputDirectory ?? Self.argumentURL(after: "--graphs-output")
+        let projectStorageOverride = config?.projectStorageURL ?? Self.argumentURL(after: "--project-storage")
+        if let graphDirectoryOverride {
+            GraphStore.shared.useGraphsDirectory(graphDirectoryOverride)
+        }
+
         let recent = RecentFilesManager()
+        let projects = ProjectsManager(storageURL: projectStorageOverride ?? ProjectsManager.makeStorageURL())
         _recentFilesManager = StateObject(wrappedValue: recent)
+        _projectsManager = StateObject(wrappedValue: projects)
         _documentManager = StateObject(wrappedValue: DocumentManager(recentFilesManager: recent))
 
         // Capture init-time references so AppDelegate can drive the headless runner
         // independent of view lifecycle.
-        if let config = headlessConfig {
-            let projects = projectsManager
+        if let config {
             let ai = aiServiceManager
             let graph = knowledgeGraph
             HeadlessAppDelegate.inject = { _ in
@@ -56,6 +65,15 @@ struct PDFViewerApp: App {
                 }
             }
         }
+    }
+
+    private static func argumentURL(after flag: String) -> URL? {
+        guard let index = CommandLine.arguments.firstIndex(of: flag),
+              CommandLine.arguments.indices.contains(index + 1) else {
+            return nil
+        }
+        let path = (CommandLine.arguments[index + 1] as NSString).expandingTildeInPath
+        return URL(fileURLWithPath: path)
     }
 
     var body: some Scene {

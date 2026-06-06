@@ -71,23 +71,6 @@ extension LLMBackend {
         return try LLMResponseParser.parseAnswerResponse(response)
     }
 
-    func proposeMerges(
-        documentAConcepts: [(label: String, summary: String?)],
-        documentBConcepts: [(label: String, summary: String?)]
-    ) async throws -> [RawMergeProposal] {
-        log.info("[\(self.logTag)] proposeMerges: \(documentAConcepts.count) vs \(documentBConcepts.count) concepts")
-        let prompt = PromptTemplates.semanticMergeProposal(
-            documentATitle: "Document A",
-            documentAConcepts: documentAConcepts,
-            documentBTitle: "Document B",
-            documentBConcepts: documentBConcepts
-        )
-        let response = try await transport(prompt: prompt)
-        let merges = LLMResponseParser.parseMergesResponse(response)
-        log.info("[\(self.logTag)] proposeMerges: \(merges.count) merge proposals")
-        return merges
-    }
-
     func generateRawResponse(prompt: String) async throws -> String {
         try await transport(prompt: prompt)
     }
@@ -125,11 +108,5 @@ enum LLMResponseParser {
         } catch {
             throw AIError.decodingError(error.localizedDescription)
         }
-    }
-
-    static func parseMergesResponse(_ text: String) -> [RawMergeProposal] {
-        let cleaned = JSONRepair.cleanAndRepair(text)
-        guard let data = cleaned.data(using: .utf8) else { return [] }
-        return (try? JSONDecoder().decode([RawMergeProposal].self, from: data)) ?? []
     }
 }

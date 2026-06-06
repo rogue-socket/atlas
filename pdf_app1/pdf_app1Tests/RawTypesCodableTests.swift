@@ -8,7 +8,6 @@ import XCTest
 ///   - ExtractionResponse / ChapterExtractionResponse
 ///   - RawFact / RawFactExtractionResponse
 ///   - DeepConceptCluster / DeepEntityCluster / DeepClusterResponse
-///   - RawMergeProposal
 ///   - AnswerWithCitations
 ///   - AIBackendType convenience
 final class RawTypesCodableTests: XCTestCase {
@@ -146,18 +145,6 @@ final class RawTypesCodableTests: XCTestCase {
         XCTAssertEqual(r.concepts.count, 1)
         XCTAssertEqual(r.concepts.first?.entities?.count, 1)
         XCTAssertEqual(r.concepts.first?.entities?.first?.parentLabel, "X")
-    }
-
-    // MARK: - RawMergeProposal
-
-    func test_rawMergeProposal_decode() throws {
-        let json = """
-        {"labelA":"A","labelB":"B","confidence":0.8,"reason":"sim","mergeType":"exactMatch"}
-        """.data(using: .utf8)!
-        let p = try JSONDecoder().decode(RawMergeProposal.self, from: json)
-        XCTAssertEqual(p.labelA, "A")
-        XCTAssertEqual(p.confidence, 0.8)
-        XCTAssertEqual(p.mergeType, "exactMatch")
     }
 
     // MARK: - AnswerWithCitations

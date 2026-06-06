@@ -106,9 +106,6 @@ class MapInteraction {
     // MARK: - Hit Testing
 
     func hitTest(location: CGPoint, layout: ForceDirectedLayout, graph: KnowledgeGraph) -> UUID? {
-        let nodeWidth = AppConstants.mapNodeWidth * viewScale
-        let nodeHeight = AppConstants.mapNodeHeight * viewScale
-
         // Transform the click location to graph space
         let graphLocation = CGPoint(
             x: (location.x - viewOffset.x) / viewScale,

@@ -55,6 +55,41 @@ final class HeadlessRunnerConfigTests: XCTestCase {
         XCTAssertEqual(cfg?.docOrder, "reverse")
     }
 
+    func test_parse_acceptsGraphsOutputDirectory() {
+        let cfg = HeadlessRunnerConfig.parse(from: [
+            "--headless-extract", "--project", "P", "--graphs-output", "/tmp/atlas-run/graphs-result"
+        ])
+        XCTAssertEqual(cfg?.graphsOutputDirectory?.path, "/tmp/atlas-run/graphs-result")
+    }
+
+    func test_parse_graphsOutputWithoutValue_isIgnored() {
+        let cfg = HeadlessRunnerConfig.parse(from: [
+            "--headless-extract", "--project", "P", "--graphs-output"
+        ])
+        XCTAssertNil(cfg?.graphsOutputDirectory)
+    }
+
+    func test_parse_acceptsProjectStoragePath() {
+        let cfg = HeadlessRunnerConfig.parse(from: [
+            "--headless-extract", "--project", "P", "--project-storage", "/tmp/atlas-run/projects.json"
+        ])
+        XCTAssertEqual(cfg?.projectStorageURL?.path, "/tmp/atlas-run/projects.json")
+    }
+
+    func test_parse_acceptsPositiveDocLimit() {
+        let cfg = HeadlessRunnerConfig.parse(from: [
+            "--headless-extract", "--project", "P", "--doc-limit", "2"
+        ])
+        XCTAssertEqual(cfg?.docLimit, 2)
+    }
+
+    func test_parse_ignoresNonPositiveDocLimit() {
+        let cfg = HeadlessRunnerConfig.parse(from: [
+            "--headless-extract", "--project", "P", "--doc-limit", "0"
+        ])
+        XCTAssertNil(cfg?.docLimit)
+    }
+
     func test_orderedFiles_reverseFlipsAlphaOrder() {
         let files = [
             ProjectFile(displayName: "b.pdf", bookmarkData: Data(), lastKnownPath: "/b.pdf"),

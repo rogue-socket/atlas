@@ -15,8 +15,8 @@ final class GraphStoreTests: XCTestCase {
     }
 
     // Force the debounced save to complete synchronously before we assert.
-    private func flushAndYield() async throws {
-        GraphStore.shared.flushPendingSave()
+    private func flushAndYield(_ store: GraphStore = .shared) async throws {
+        store.flushPendingSave()
         // Yield so any straggler dispatch is also drained.
         try await Task.sleep(nanoseconds: 100_000_000)
     }
@@ -133,5 +133,24 @@ final class GraphStoreTests: XCTestCase {
 
     func test_flushPendingSave_withNothingPendingIsNoOp() {
         GraphStore.shared.flushPendingSave()  // must not crash
+    }
+
+    // MARK: - Custom graph directory
+
+    func test_customGraphsDirectory_writesOutsideSharedStore() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("atlas-graphstore-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = GraphStore(graphsDirectory: directory)
+        let url = uniqueURL()
+        let graph = KnowledgeGraph()
+        graph.addNode(ConceptNode(label: "Disposable", sourceAnchors: [anchor(url)], level: .concept))
+
+        store.scheduleSave(graph, for: url)
+        try await flushAndYield(store)
+
+        XCTAssertTrue(store.hasGraph(for: url))
+        XCTAssertFalse(GraphStore.shared.hasGraph(for: url))
     }
 }

@@ -13,162 +13,6 @@ import PDFKit
 import UniformTypeIdentifiers
 import os.log
 
-// MARK: - Vertical Tab Bar View
-struct DocumentVerticalTabBar: View {
-    @Binding var documents: [PDFDocumentItem]
-    @Binding var selectedDocumentID: UUID?
-    @ObservedObject var documentManager: DocumentManager
-    @EnvironmentObject var projectsManager: ProjectsManager
-    
-    var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack {
-                Text("Open Documents")
-                    .font(.headline)
-                Spacer()
-                
-                // New tab button
-                Button(action: {
-                    NotificationCenter.default.post(
-                        name: .openNewDocument,
-                        object: nil
-                    )
-                }) {
-                    Image(systemName: "plus")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.borderless)
-                .frame(width: 20, height: 20)
-                .help("New Document (⌘T)")
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-            
-            Divider()
-            
-            // Vertical tabs list
-            ScrollView {
-                LazyVStack(spacing: 2) {
-                    ForEach(documents, id: \.id) { document in
-                        DocumentVerticalTabItem(
-                            document: document,
-                            isSelected: document.id == selectedDocumentID,
-                            projectName: document.projectID != nil ? 
-                                projectsManager.projects.first { $0.id == document.projectID }?.name : nil,
-                            onClose: { documentManager.closeDocument(document) },
-                            onSelect: { documentManager.selectDocument(id: document.id) }
-                        )
-                    }
-                }
-                .padding(.horizontal, 4)
-            }
-        }
-        .frame(minWidth: 200, maxWidth: 250)
-    }
-}
-
-// MARK: - Vertical Tab Item
-struct DocumentVerticalTabItem: View {
-    let document: PDFDocumentItem
-    let isSelected: Bool
-    let projectName: String?
-    let onClose: () -> Void
-    let onSelect: () -> Void
-    
-    var body: some View {
-        HStack(spacing: 8) {
-            // File icon
-            Image(systemName: "doc.fill")
-                .font(.system(size: 14))
-                .foregroundColor(isSelected ? .accentColor : .blue)
-                .frame(width: 16)
-            
-            // Document info
-            VStack(alignment: .leading, spacing: 2) {
-                Text(document.title)
-                    .font(.system(size: 13, weight: isSelected ? .medium : .regular))
-                    .foregroundColor(isSelected ? .primary : .secondary)
-                    .lineLimit(1)
-                
-                if let projectName = projectName {
-                    Text(projectName)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                }
-            }
-            
-            Spacer()
-            
-            // Close button
-            if isSelected {
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.borderless)
-                .frame(width: 16, height: 16)
-                .help("Close Tab (⌘W)")
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 1)
-        )
-        .onHover { isHovered in
-            if isHovered {
-                NSCursor.pointingHand.set()
-            } else {
-                NSCursor.arrow.set()
-            }
-        }
-        .onTapGesture {
-            onSelect()
-        }
-        .contextMenu {
-            if let projectName = projectName {
-                Text("Project: \(projectName)")
-                    .foregroundColor(.secondary)
-                Divider()
-            }
-            
-            Button("Show in Finder") {
-                NSWorkspace.shared.selectFile(document.url.path, inFileViewerRootedAtPath: "")
-            }
-            
-            Button("Close Tab") {
-                onClose()
-            }
-            .keyboardShortcut("w", modifiers: [.command])
-            
-            Divider()
-            
-            Button("Close Other Tabs") {
-                NotificationCenter.default.post(
-                    name: .closeOtherTabs,
-                    object: document
-                )
-            }
-            
-            Button("Open in New Window") {
-                NotificationCenter.default.post(
-                    name: .openDocumentInNewWindow,
-                    object: document
-                )
-            }
-        }
-    }
-}
-
 // MARK: - Comparison View
 struct DocumentComparisonView: View {
     let leftDocument: PDFDocumentItem?
@@ -253,13 +97,17 @@ struct DocumentPanel: View {
     }
 }
 
+private struct PersistentHighlightGraphKey: Equatable {
+    let nodeCount: Int
+    let edgeCount: Int
+}
+
 // MARK: - Main Multi-Document View
 struct MultiDocumentView: View {
     @EnvironmentObject var documentManager: DocumentManager
     @EnvironmentObject var recentFilesManager: RecentFilesManager
     @StateObject private var alertManager = AlertManager()
     @StateObject private var notificationManager = NotificationManager()
-    @StateObject private var loadingManager = LoadingStateManager()
     @EnvironmentObject var projectsManager: ProjectsManager
     
     @Environment(KnowledgeGraph.self) var knowledgeGraph
@@ -351,7 +199,6 @@ struct MultiDocumentView: View {
         }
         .environmentObject(alertManager)
         .environmentObject(notificationManager)
-        .environmentObject(loadingManager)
         .onReceive(NotificationCenter.default.publisher(for: .openNewDocument)) { _ in
             // Trigger file picker
             let panel = NSOpenPanel()
@@ -394,16 +241,12 @@ struct MultiDocumentView: View {
         )
         .onChange(of: documentManager.selectedDocumentID) { _, _ in
             if let doc = documentManager.selectedDocument {
-                syncManager.setDocumentURL(doc.url)
-                syncManager.setGraph(knowledgeGraph)
-                loadGraphIfNeeded(for: doc.url)
+                prepareSelectedDocument(doc)
             }
         }
         .onAppear {
             if let doc = documentManager.selectedDocument {
-                syncManager.setDocumentURL(doc.url)
-                syncManager.setGraph(knowledgeGraph)
-                loadGraphIfNeeded(for: doc.url)
+                prepareSelectedDocument(doc)
             }
         }
     }
@@ -1131,14 +974,9 @@ struct MultiDocumentView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .onChange(of: knowledgeGraph.nodeCount) { _, newCount in
-                        // Refresh persistent highlights when graph changes
-                        if newCount > 0, let doc = documentManager.selectedDocument {
-                            highlightBridge.refreshHighlights(
-                                document: doc.document,
-                                graph: knowledgeGraph,
-                                documentURL: doc.url
-                            )
+                    .onChange(of: PersistentHighlightGraphKey(nodeCount: knowledgeGraph.nodeCount, edgeCount: knowledgeGraph.edgeCount)) { _, newKey in
+                        if newKey.nodeCount > 0 {
+                            refreshPersistentHighlightsForOpenDocuments(reason: "graph-change")
                         }
                     }
                 } else {
@@ -1499,6 +1337,41 @@ struct MultiDocumentView: View {
 
     // MARK: - Graph Persistence
 
+    private func prepareSelectedDocument(_ document: PDFDocumentItem) {
+        syncManager.setDocumentURL(document.url)
+        syncManager.setGraph(knowledgeGraph)
+        loadGraphIfNeeded(for: document.url)
+    }
+
+    private func refreshPersistentHighlights(for documentURL: URL, reason: String) {
+        guard let document = documentManager.documents.first(where: { $0.url == documentURL }) else {
+            AtlasLogger.graph.info("[MultiDocView] refreshHighlights(\(reason)): \(documentURL.lastPathComponent) is not open")
+            return
+        }
+        refreshPersistentHighlights(for: document, reason: reason)
+    }
+
+    @discardableResult
+    private func refreshPersistentHighlights(
+        for document: PDFDocumentItem,
+        reason: String
+    ) -> PersistentHighlightRefreshResult {
+        let result = highlightBridge.applyPersistentHighlights(
+            document: document.document,
+            graph: knowledgeGraph,
+            documentURL: document.url
+        )
+        let liveAnnotations = result.annotationsByNode.values.reduce(0) { $0 + $1.count }
+        AtlasLogger.graph.info("[MultiDocView] refreshHighlights(\(reason)): \(document.url.lastPathComponent) nodes=\(result.nodesInDocument) anchors=\(result.anchorsSeen) skipped=\(result.anchorsSkipped) added=\(result.annotationsAdded) removed=\(result.annotationsRemoved) live=\(liveAnnotations)")
+        return result
+    }
+
+    private func refreshPersistentHighlightsForOpenDocuments(reason: String) {
+        for document in documentManager.documents {
+            refreshPersistentHighlights(for: document, reason: reason)
+        }
+    }
+
     /// Load the persisted graph for `documentURL` and merge it into the
     /// in-memory project graph (preserving nodes loaded for other open
     /// tabs). Uses `mergeSubgraph` to defensively scope each per-doc file
@@ -1510,19 +1383,23 @@ struct MultiDocumentView: View {
         }
         if alreadyHasNodes {
             AtlasLogger.graph.info("[MultiDocView] loadGraphIfNeeded: \(documentURL.lastPathComponent) already in-memory (\(knowledgeGraph.nodeCount) nodes), no-op")
+            refreshPersistentHighlights(for: documentURL, reason: "selected-tab-already-loaded")
             return
         }
 
         guard let payload = GraphStore.shared.loadPayload(for: documentURL) else {
             AtlasLogger.graph.info("[MultiDocView] loadGraphIfNeeded: no saved graph for \(documentURL.lastPathComponent) — leaving in-memory graph unchanged")
+            refreshPersistentHighlights(for: documentURL, reason: "selected-tab-no-graph")
             return
         }
 
         do {
             let merged = try knowledgeGraph.mergeSubgraph(from: payload, scopedTo: documentURL)
             AtlasLogger.graph.info("[MultiDocView] loadGraphIfNeeded: merged \(merged.nodeCount) nodes / \(merged.edgeCount) edges for \(documentURL.lastPathComponent) → \(knowledgeGraph.nodeCount) nodes, \(knowledgeGraph.edgeCount) edges total")
+            refreshPersistentHighlights(for: documentURL, reason: "selected-tab-graph-loaded")
         } catch {
             AtlasLogger.graph.error("[MultiDocView] loadGraphIfNeeded: decode failed for \(documentURL.lastPathComponent): \(error)")
+            refreshPersistentHighlights(for: documentURL, reason: "selected-tab-graph-load-failed")
         }
     }
 

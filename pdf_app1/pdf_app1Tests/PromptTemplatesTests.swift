@@ -6,7 +6,6 @@ import XCTest
 ///   - conceptExtraction: outline hints, existing-list rendering, page
 ///     numbers are 1-based, prior-docs block absence/presence
 ///   - edgeProposal: edge-types list and JSON instruction
-///   - semanticMergeProposal: structures the A/B concept lists correctly
 ///   - deepFactExtraction / deepClustering / deepCrossReference: instruction
 ///     content and embedded JSON-schema shape
 ///   - chapterExtraction: page-marker explanation included
@@ -119,25 +118,6 @@ final class PromptTemplatesTests: XCTestCase {
         XCTAssertTrue(p.contains("Response target. Second line."))
         XCTAssertTrue(p.contains("endpoints MUST be copied exactly"))
         XCTAssertTrue(p.contains("linkingPhrase"))
-    }
-
-    // MARK: - semanticMergeProposal
-
-    func test_semanticMergeProposal_renderingFormatsBothDocsAndMergeTypes() {
-        let p = PromptTemplates.semanticMergeProposal(
-            documentATitle: "A.pdf",
-            documentAConcepts: [(label: "Optimization", summary: "math")],
-            documentBTitle: "B.pdf",
-            documentBConcepts: [(label: "Gradient Descent", summary: nil)]
-        )
-        XCTAssertTrue(p.contains("A.pdf"))
-        XCTAssertTrue(p.contains("B.pdf"))
-        XCTAssertTrue(p.contains("Optimization: math"))
-        XCTAssertTrue(p.contains("- Gradient Descent"))
-        XCTAssertFalse(p.contains("Gradient Descent: nil"), "nil summary must render as label only")
-        for label in ["exactMatch", "semanticEquivalent", "partialOverlap"] {
-            XCTAssertTrue(p.contains(label))
-        }
     }
 
     // MARK: - deepFactExtraction

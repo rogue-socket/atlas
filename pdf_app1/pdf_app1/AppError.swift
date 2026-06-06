@@ -287,23 +287,6 @@ struct NotificationItem: Identifiable {
     let duration: Double
 }
 
-// MARK: - Loading State Manager
-
-class LoadingStateManager: ObservableObject {
-    @Published var isLoading: Bool = false
-    @Published var loadingMessage: String = "Loading..."
-    
-    func startLoading(_ message: String = "Loading...") {
-        loadingMessage = message
-        isLoading = true
-    }
-    
-    func stopLoading() {
-        isLoading = false
-        loadingMessage = "Loading..."
-    }
-}
-
 // MARK: - Toast Notification View
 
 struct ToastNotificationView: View {
@@ -387,35 +370,3 @@ struct ToastNotificationView: View {
         }
     }
 }
-
-// MARK: - Loading Overlay View
-
-struct LoadingOverlay: View {
-    let message: String
-    let isLoading: Bool
-    
-    var body: some View {
-        if isLoading {
-            ZStack {
-                Color.black.opacity(0.3)
-                    .ignoresSafeArea()
-                
-                VStack(spacing: 16) {
-                    ProgressView()
-                        .scaleEffect(1.5)
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    Text(message)
-                        .foregroundColor(.white)
-                        .font(.headline)
-                }
-                .padding(24)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color(NSColor.controlBackgroundColor))
-                        .shadow(radius: 10)
-                )
-            }
-        }
-    }
-}
-

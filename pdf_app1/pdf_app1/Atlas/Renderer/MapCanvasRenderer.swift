@@ -81,9 +81,7 @@ struct MapCanvasRenderer: View {
 
             // Curved edge
             var path = Path()
-            let dx = tgt.x - src.x
-            let dy = tgt.y - src.y
-            let ctrl = CGPoint(x: (src.x + tgt.x) / 2 - dy * 0.08, y: (src.y + tgt.y) / 2 + dx * 0.08)
+            let ctrl = Self.edgeControlPoint(from: src, to: tgt)
             path.move(to: src)
             path.addQuadCurve(to: tgt, control: ctrl)
 
@@ -107,14 +105,56 @@ struct MapCanvasRenderer: View {
 
             let shouldDrawLabel = viewScale >= 0.85 || edge.sourceNodeID == selectedNodeID || edge.targetNodeID == selectedNodeID
             if shouldDrawLabel {
-                drawEdgeLabel(edge, at: ctrl, context: context, viewScale: viewScale)
+                drawEdgeLabel(
+                    edge,
+                    at: Self.edgeLabelPoint(from: src, control: ctrl, to: tgt, viewScale: viewScale),
+                    directionAngle: Self.edgeTangentAngle(control: ctrl, target: tgt),
+                    context: context,
+                    viewScale: viewScale
+                )
             }
         }
+    }
+
+    static func edgeControlPoint(from source: CGPoint, to target: CGPoint) -> CGPoint {
+        let dx = target.x - source.x
+        let dy = target.y - source.y
+        return CGPoint(
+            x: (source.x + target.x) / 2 - dy * 0.08,
+            y: (source.y + target.y) / 2 + dx * 0.08
+        )
+    }
+
+    static func quadraticPoint(from source: CGPoint, control: CGPoint, to target: CGPoint, t: CGFloat) -> CGPoint {
+        let inverseT = 1 - t
+        return CGPoint(
+            x: inverseT * inverseT * source.x + 2 * inverseT * t * control.x + t * t * target.x,
+            y: inverseT * inverseT * source.y + 2 * inverseT * t * control.y + t * t * target.y
+        )
+    }
+
+    static func edgeLabelPoint(from source: CGPoint, control: CGPoint, to target: CGPoint, viewScale: CGFloat) -> CGPoint {
+        let midpoint = quadraticPoint(from: source, control: control, to: target, t: 0.5)
+        let chordMidpoint = CGPoint(x: (source.x + target.x) / 2, y: (source.y + target.y) / 2)
+        let bow = CGPoint(x: midpoint.x - chordMidpoint.x, y: midpoint.y - chordMidpoint.y)
+        let length = hypot(bow.x, bow.y)
+        guard length > 0 else { return midpoint }
+
+        let offset = max(4, 4 * viewScale)
+        return CGPoint(
+            x: midpoint.x + bow.x / length * offset,
+            y: midpoint.y + bow.y / length * offset
+        )
+    }
+
+    static func edgeTangentAngle(control: CGPoint, target: CGPoint) -> CGFloat {
+        atan2(target.y - control.y, target.x - control.x)
     }
 
     private func drawEdgeLabel(
         _ edge: GraphEdge,
         at point: CGPoint,
+        directionAngle: CGFloat,
         context: GraphicsContext,
         viewScale: CGFloat
     ) {
@@ -134,6 +174,21 @@ struct MapCanvasRenderer: View {
             .font(.system(size: fontSize, weight: .medium))
             .foregroundColor(edge.type.color)
         context.draw(context.resolve(label), at: CGPoint(x: rect.midX, y: rect.midY), anchor: .center)
+
+        let markerLength = max(7, 7 * viewScale)
+        let markerPoint = CGPoint(x: rect.maxX + 4 * viewScale, y: rect.midY)
+        var marker = Path()
+        marker.move(to: markerPoint)
+        marker.addLine(to: CGPoint(
+            x: markerPoint.x - markerLength * cos(directionAngle - .pi / 6),
+            y: markerPoint.y - markerLength * sin(directionAngle - .pi / 6)
+        ))
+        marker.move(to: markerPoint)
+        marker.addLine(to: CGPoint(
+            x: markerPoint.x - markerLength * cos(directionAngle + .pi / 6),
+            y: markerPoint.y - markerLength * sin(directionAngle + .pi / 6)
+        ))
+        context.stroke(marker, with: .color(edge.type.color.opacity(0.7)), lineWidth: 1)
     }
 
     private func edgeDisplayText(_ edge: GraphEdge) -> String {

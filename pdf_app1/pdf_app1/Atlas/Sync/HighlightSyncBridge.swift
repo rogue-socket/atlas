@@ -10,6 +10,21 @@ import Foundation
 import PDFKit
 import AppKit
 
+struct PersistentHighlightRefreshResult {
+    let documentURL: URL
+    let nodesInDocument: Int
+    let anchorsSeen: Int
+    let anchorsSkipped: Int
+    let annotationsAdded: Int
+    let annotationsRemoved: Int
+    let annotationsByNode: [UUID: [PDFAnnotation]]
+}
+
+struct DetachedAtlasAnnotation {
+    let page: PDFPage
+    let annotation: PDFAnnotation
+}
+
 // `nonisolated` to opt out of the project-wide MainActor default
 // (SWIFT_DEFAULT_ACTOR_ISOLATION). Methods that genuinely need MainActor
 // (e.g. applyPersistentHighlights) are annotated explicitly. See
@@ -61,10 +76,12 @@ nonisolated class HighlightSyncBridge {
         document: PDFDocument,
         graph: KnowledgeGraph,
         documentURL: URL
-    ) -> [UUID: [PDFAnnotation]] {
+    ) -> PersistentHighlightRefreshResult {
         // Build desired set + per-key color
         var desiredKeys: Set<AnchorKey> = []
         var desiredColors: [AnchorKey: NSColor] = [:]
+        var anchorsSeen = 0
+        var anchorsSkipped = 0
 
         let nodesInDoc = graph.allNodes.filter { node in
             node.sourceAnchors.contains { $0.documentURL == documentURL }
@@ -74,12 +91,24 @@ nonisolated class HighlightSyncBridge {
             let colorIndex = node.highlightColorIndex ?? 0
             let color = SourceHighlightPalette.color(for: colorIndex).withAlphaComponent(0.25)
             for anchor in node.sourceAnchors where anchor.documentURL == documentURL {
-                guard anchor.pageIndex < document.pageCount else { continue }
+                anchorsSeen += 1
+                guard anchor.pageIndex < document.pageCount,
+                      let page = document.page(at: anchor.pageIndex),
+                      Self.isValidPersistentAnchor(anchor.boundingBox, on: page) else {
+                    anchorsSkipped += 1
+                    continue
+                }
                 let key = AnchorKey(documentURL: documentURL, nodeID: node.id, pageIndex: anchor.pageIndex, bounds: anchor.boundingBox)
                 desiredKeys.insert(key)
                 desiredColors[key] = color
             }
         }
+
+        var annotationsRemoved = reconcileExistingAtlasAnnotations(
+            in: document,
+            documentURL: documentURL,
+            desiredKeys: desiredKeys
+        )
 
         // Drop tracked entries for this URL whose annotation is no longer
         // attached to the passed-in document instance — i.e. the prior
@@ -101,6 +130,8 @@ nonisolated class HighlightSyncBridge {
         let toRemove = existingKeys.subtracting(desiredKeys)
         let toAdd = desiredKeys.subtracting(existingKeys)
         let kept = existingKeys.intersection(desiredKeys)
+        annotationsRemoved += toRemove.count
+        var annotationsAdded = 0
 
         // Apply removals
         for key in toRemove {
@@ -119,6 +150,7 @@ nonisolated class HighlightSyncBridge {
             annotation.contents = "\(Self.atlasContentsPrefix)\(key.nodeID.uuidString)"
             page.addAnnotation(annotation)
             activeAnnotationMap[key] = annotation
+            annotationsAdded += 1
         }
 
         // Update color on kept keys if it drifted (e.g., cross-doc merge
@@ -138,7 +170,62 @@ nonisolated class HighlightSyncBridge {
                 result[key.nodeID, default: []].append(annotation)
             }
         }
-        return result
+        return PersistentHighlightRefreshResult(
+            documentURL: documentURL,
+            nodesInDocument: nodesInDoc.count,
+            anchorsSeen: anchorsSeen,
+            anchorsSkipped: anchorsSkipped,
+            annotationsAdded: annotationsAdded,
+            annotationsRemoved: annotationsRemoved,
+            annotationsByNode: result
+        )
+    }
+
+    @MainActor
+    private func reconcileExistingAtlasAnnotations(
+        in document: PDFDocument,
+        documentURL: URL,
+        desiredKeys: Set<AnchorKey>
+    ) -> Int {
+        var removed = 0
+
+        for pageIndex in 0..<document.pageCount {
+            guard let page = document.page(at: pageIndex) else { continue }
+            let atlasAnnotations = page.annotations.filter {
+                $0.contents?.hasPrefix(Self.atlasContentsPrefix) == true
+            }
+
+            for annotation in atlasAnnotations {
+                guard Self.isValidPersistentAnchor(annotation.bounds, on: page),
+                      let nodeID = Self.nodeID(from: annotation) else {
+                    page.removeAnnotation(annotation)
+                    removed += 1
+                    continue
+                }
+
+                let key = AnchorKey(
+                    documentURL: documentURL,
+                    nodeID: nodeID,
+                    pageIndex: pageIndex,
+                    bounds: annotation.bounds
+                )
+                guard desiredKeys.contains(key) else {
+                    page.removeAnnotation(annotation)
+                    removed += 1
+                    activeAnnotationMap.removeValue(forKey: key)
+                    continue
+                }
+
+                if let tracked = activeAnnotationMap[key], tracked !== annotation {
+                    page.removeAnnotation(annotation)
+                    removed += 1
+                } else {
+                    activeAnnotationMap[key] = annotation
+                }
+            }
+        }
+
+        return removed
     }
 
     /// Remove all Atlas-managed highlights from a document
@@ -162,6 +249,27 @@ nonisolated class HighlightSyncBridge {
                     page.removeAnnotation(annotation)
                 }
             }
+        }
+    }
+
+    static func detachAtlasAnnotations(from document: PDFDocument) -> [DetachedAtlasAnnotation] {
+        var detached: [DetachedAtlasAnnotation] = []
+        for pageIndex in 0..<document.pageCount {
+            guard let page = document.page(at: pageIndex) else { continue }
+            let annotations = page.annotations.filter {
+                $0.contents?.hasPrefix(Self.atlasContentsPrefix) == true
+            }
+            for annotation in annotations {
+                page.removeAnnotation(annotation)
+                detached.append(DetachedAtlasAnnotation(page: page, annotation: annotation))
+            }
+        }
+        return detached
+    }
+
+    static func restoreAtlasAnnotations(_ detached: [DetachedAtlasAnnotation]) {
+        for item in detached {
+            item.page.addAnnotation(item.annotation)
         }
     }
 
@@ -207,6 +315,28 @@ nonisolated class HighlightSyncBridge {
         }
 
         return rects.isEmpty ? nil : rects
+    }
+
+    static func isValidPersistentAnchor(_ bounds: CGRect, on page: PDFPage) -> Bool {
+        guard bounds.origin.x.isFinite, bounds.origin.y.isFinite,
+              bounds.width.isFinite, bounds.height.isFinite,
+              bounds.width > 0, bounds.height > 0 else {
+            return false
+        }
+
+        let pageBounds = page.bounds(for: .mediaBox)
+        guard bounds.intersects(pageBounds),
+              pageBounds.width > 0, pageBounds.height > 0 else {
+            return false
+        }
+
+        let pageArea = pageBounds.width * pageBounds.height
+        let anchorArea = bounds.intersection(pageBounds).width * bounds.intersection(pageBounds).height
+        let coversAlmostEntirePage = anchorArea / pageArea > 0.85
+        let hasPageSizedDimensions = bounds.width >= pageBounds.width * 0.98 &&
+            bounds.height >= pageBounds.height * 0.98
+
+        return !coversAlmostEntirePage && !hasPageSizedDimensions
     }
 
     private static func whitespaceFlexibleMatch(snippet: String, in pageText: String) -> NSRange? {

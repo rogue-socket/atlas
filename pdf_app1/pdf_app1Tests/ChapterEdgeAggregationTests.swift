@@ -1,9 +1,9 @@
 import XCTest
 @testable import pdf_app1
 
-/// Tests for L2 — `ChapterEdgeAggregation` projects concept-level
-/// relational edges onto chapter-level edges so the Chapter tab can
-/// show inter-chapter relationships.
+/// Tests for L2 — `ChapterEdgeAggregation` projects lower-level
+/// relational edges onto chapter/document rollups so high-level tabs can
+/// show relationships.
 final class ChapterEdgeAggregationTests: XCTestCase {
 
     private func build(_ graph: KnowledgeGraph,
@@ -15,6 +15,24 @@ final class ChapterEdgeAggregationTests: XCTestCase {
         graph.addNode(co)
         graph.addEdge(GraphEdge(sourceNodeID: ch.id, targetNodeID: co.id, type: .containsConcept))
         return (ch, co)
+    }
+
+    private func build(_ graph: KnowledgeGraph,
+                       document: String,
+                       chapter: String,
+                       concept: String) -> (document: ConceptNode, chapter: ConceptNode, concept: ConceptNode) {
+        let doc = ConceptNode(label: document, level: .document)
+        let built = build(graph, chapter: chapter, concept: concept)
+        graph.addNode(doc)
+        graph.addEdge(GraphEdge(sourceNodeID: doc.id, targetNodeID: built.chapter.id, type: .containsChapter))
+        return (doc, built.chapter, built.concept)
+    }
+
+    private func addEntity(_ label: String, to concept: ConceptNode, in graph: KnowledgeGraph) -> ConceptNode {
+        let entity = ConceptNode(label: label, level: .entity)
+        graph.addNode(entity)
+        graph.addEdge(GraphEdge(sourceNodeID: concept.id, targetNodeID: entity.id, type: .containsEntity))
+        return entity
     }
 
     func test_synthesize_emitsChapterEdgeForCrossChapterConceptEdge() {
@@ -31,7 +49,206 @@ final class ChapterEdgeAggregationTests: XCTestCase {
         }
         XCTAssertEqual(chapterEdges.count, 1)
         XCTAssertEqual(chapterEdges.first?.type, .dependsOn)
-        XCTAssertEqual(chapterEdges.first?.label, "aggregated")
+        XCTAssertEqual(chapterEdges.first?.label, "rolls up: depends on")
+    }
+
+    func test_synthesize_usesChildEdgeLabelForSingleRollup() {
+        let g = KnowledgeGraph()
+        let a = build(g, chapter: "Ch A", concept: "Concept A1")
+        let b = build(g, chapter: "Ch B", concept: "Concept B1")
+        g.addEdge(GraphEdge(
+            sourceNodeID: a.concept.id,
+            targetNodeID: b.concept.id,
+            type: .dependsOn,
+            label: "manufacturing dependency"
+        ))
+
+        let added = ChapterEdgeAggregation.synthesize(in: g)
+        XCTAssertEqual(added, 1)
+
+        let chapterEdge = g.allEdges.first {
+            $0.sourceNodeID == a.chapter.id && $0.targetNodeID == b.chapter.id && $0.type == .dependsOn
+        }
+        XCTAssertEqual(chapterEdge?.label, "rolls up: manufacturing dependency")
+    }
+
+    func test_synthesize_summarizesMultipleChildEdgesForSameChapterPair() {
+        let g = KnowledgeGraph()
+        let a1 = build(g, chapter: "Ch A", concept: "Concept A1")
+        let b1 = build(g, chapter: "Ch B", concept: "Concept B1")
+        let a2 = ConceptNode(label: "Concept A2", level: .concept)
+        let b2 = ConceptNode(label: "Concept B2", level: .concept)
+        g.addNode(a2)
+        g.addNode(b2)
+        g.addEdge(GraphEdge(sourceNodeID: a1.chapter.id, targetNodeID: a2.id, type: .containsConcept))
+        g.addEdge(GraphEdge(sourceNodeID: b1.chapter.id, targetNodeID: b2.id, type: .containsConcept))
+        g.addEdge(GraphEdge(sourceNodeID: a1.concept.id, targetNodeID: b1.concept.id, type: .dependsOn))
+        g.addEdge(GraphEdge(sourceNodeID: a2.id, targetNodeID: b2.id, type: .dependsOn))
+
+        let added = ChapterEdgeAggregation.synthesize(in: g)
+        XCTAssertEqual(added, 1)
+
+        let chapterEdge = g.allEdges.first {
+            $0.sourceNodeID == a1.chapter.id && $0.targetNodeID == b1.chapter.id && $0.type == .dependsOn
+        }
+        XCTAssertEqual(chapterEdge?.label, "aggregates 2: depends on")
+    }
+
+    func test_synthesize_emitsDocumentEdgeForCrossDocumentConceptEdge() {
+        let g = KnowledgeGraph()
+        let a = build(g, document: "Doc A", chapter: "Ch A", concept: "Concept A")
+        let b = build(g, document: "Doc B", chapter: "Ch B", concept: "Concept B")
+        g.addEdge(GraphEdge(sourceNodeID: a.concept.id, targetNodeID: b.concept.id, type: .dependsOn))
+
+        let added = ChapterEdgeAggregation.synthesize(in: g)
+        XCTAssertEqual(added, 2)
+
+        let documentEdge = g.allEdges.first {
+            $0.sourceNodeID == a.document.id && $0.targetNodeID == b.document.id && $0.type == .dependsOn
+        }
+        XCTAssertEqual(documentEdge?.label, "rolls up: depends on")
+    }
+
+    func test_synthesize_skipsDocumentEdgeWithinSameDocument() {
+        let g = KnowledgeGraph()
+        let doc = ConceptNode(label: "Doc A", level: .document)
+        let a = build(g, chapter: "Ch A", concept: "Concept A")
+        let b = build(g, chapter: "Ch B", concept: "Concept B")
+        g.addNode(doc)
+        g.addEdge(GraphEdge(sourceNodeID: doc.id, targetNodeID: a.chapter.id, type: .containsChapter))
+        g.addEdge(GraphEdge(sourceNodeID: doc.id, targetNodeID: b.chapter.id, type: .containsChapter))
+        g.addEdge(GraphEdge(sourceNodeID: a.concept.id, targetNodeID: b.concept.id, type: .dependsOn))
+
+        let added = ChapterEdgeAggregation.synthesize(in: g)
+        XCTAssertEqual(added, 1)
+
+        let documentEdges = g.allEdges.filter {
+            $0.sourceNodeID == doc.id && $0.targetNodeID == doc.id && $0.type == .dependsOn
+        }
+        XCTAssertTrue(documentEdges.isEmpty)
+    }
+
+    func test_synthesize_refreshesExistingDocumentRollupLabel() {
+        let g = KnowledgeGraph()
+        let a = build(g, document: "Doc A", chapter: "Ch A", concept: "Concept A")
+        let b = build(g, document: "Doc B", chapter: "Ch B", concept: "Concept B")
+        g.addEdge(GraphEdge(
+            sourceNodeID: a.concept.id,
+            targetNodeID: b.concept.id,
+            type: .dependsOn,
+            label: "manufacturing dependency"
+        ))
+        g.addEdge(GraphEdge(
+            sourceNodeID: a.chapter.id,
+            targetNodeID: b.chapter.id,
+            type: .dependsOn,
+            confidence: 0.7,
+            label: "aggregated"
+        ))
+        g.addEdge(GraphEdge(
+            sourceNodeID: a.document.id,
+            targetNodeID: b.document.id,
+            type: .dependsOn,
+            confidence: 0.7,
+            label: "aggregated"
+        ))
+
+        let added = ChapterEdgeAggregation.synthesize(in: g)
+        XCTAssertEqual(added, 0)
+
+        let documentEdge = g.allEdges.first {
+            $0.sourceNodeID == a.document.id && $0.targetNodeID == b.document.id && $0.type == .dependsOn
+        }
+        XCTAssertEqual(documentEdge?.label, "rolls up: manufacturing dependency")
+    }
+
+    func test_synthesize_rollsUpEntityToEntityEdgesThroughParentConcepts() {
+        let g = KnowledgeGraph()
+        let a = build(g, chapter: "Ch A", concept: "Concept A")
+        let b = build(g, chapter: "Ch B", concept: "Concept B")
+        let entityA = addEntity("Entity A", to: a.concept, in: g)
+        let entityB = addEntity("Entity B", to: b.concept, in: g)
+        g.addEdge(GraphEdge(
+            sourceNodeID: entityA.id,
+            targetNodeID: entityB.id,
+            type: .processFor,
+            label: "manufacturing process"
+        ))
+
+        let added = ChapterEdgeAggregation.synthesize(in: g)
+        XCTAssertEqual(added, 1)
+
+        let chapterEdge = g.allEdges.first {
+            $0.sourceNodeID == a.chapter.id && $0.targetNodeID == b.chapter.id && $0.type == .processFor
+        }
+        XCTAssertEqual(chapterEdge?.label, "rolls up: manufacturing process")
+    }
+
+    func test_synthesize_rollsUpConceptToEntityEdgesThroughParentConcepts() {
+        let g = KnowledgeGraph()
+        let a = build(g, chapter: "Ch A", concept: "Concept A")
+        let b = build(g, chapter: "Ch B", concept: "Concept B")
+        let entityB = addEntity("Entity B", to: b.concept, in: g)
+        g.addEdge(GraphEdge(sourceNodeID: a.concept.id, targetNodeID: entityB.id, type: .dependsOn))
+
+        let added = ChapterEdgeAggregation.synthesize(in: g)
+        XCTAssertEqual(added, 1)
+
+        let chapterEdge = g.allEdges.first {
+            $0.sourceNodeID == a.chapter.id && $0.targetNodeID == b.chapter.id && $0.type == .dependsOn
+        }
+        XCTAssertEqual(chapterEdge?.label, "rolls up: depends on")
+    }
+
+    func test_synthesize_refreshesExistingRollupLabelWhenChildEdgeCountChanges() {
+        let g = KnowledgeGraph()
+        let a1 = build(g, chapter: "Ch A", concept: "Concept A1")
+        let b1 = build(g, chapter: "Ch B", concept: "Concept B1")
+        let a2 = ConceptNode(label: "Concept A2", level: .concept)
+        let b2 = ConceptNode(label: "Concept B2", level: .concept)
+        g.addNode(a2)
+        g.addNode(b2)
+        g.addEdge(GraphEdge(sourceNodeID: a1.chapter.id, targetNodeID: a2.id, type: .containsConcept))
+        g.addEdge(GraphEdge(sourceNodeID: b1.chapter.id, targetNodeID: b2.id, type: .containsConcept))
+        g.addEdge(GraphEdge(sourceNodeID: a1.concept.id, targetNodeID: b1.concept.id, type: .dependsOn))
+        g.addEdge(GraphEdge(sourceNodeID: a2.id, targetNodeID: b2.id, type: .dependsOn))
+        g.addEdge(GraphEdge(
+            sourceNodeID: a1.chapter.id,
+            targetNodeID: b1.chapter.id,
+            type: .dependsOn,
+            confidence: 0.7,
+            label: "rolls up: depends on"
+        ))
+
+        let added = ChapterEdgeAggregation.synthesize(in: g)
+        XCTAssertEqual(added, 0)
+
+        let chapterEdge = g.allEdges.first {
+            $0.sourceNodeID == a1.chapter.id && $0.targetNodeID == b1.chapter.id && $0.type == .dependsOn
+        }
+        XCTAssertEqual(chapterEdge?.label, "aggregates 2: depends on")
+    }
+
+    func test_synthesize_refreshesExistingGenericAggregatedLabel() {
+        let g = KnowledgeGraph()
+        let a = build(g, chapter: "Ch A", concept: "Concept A1")
+        let b = build(g, chapter: "Ch B", concept: "Concept B1")
+        g.addEdge(GraphEdge(sourceNodeID: a.concept.id, targetNodeID: b.concept.id, type: .dependsOn))
+        g.addEdge(GraphEdge(
+            sourceNodeID: a.chapter.id,
+            targetNodeID: b.chapter.id,
+            type: .dependsOn,
+            confidence: 0.7,
+            label: "aggregated"
+        ))
+
+        let added = ChapterEdgeAggregation.synthesize(in: g)
+        XCTAssertEqual(added, 0)
+
+        let chapterEdge = g.allEdges.first {
+            $0.sourceNodeID == a.chapter.id && $0.targetNodeID == b.chapter.id && $0.type == .dependsOn
+        }
+        XCTAssertEqual(chapterEdge?.label, "rolls up: depends on")
     }
 
     func test_synthesize_skipsConceptEdgesWithinSameChapter() {

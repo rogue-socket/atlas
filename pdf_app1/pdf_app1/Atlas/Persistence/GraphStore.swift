@@ -16,14 +16,30 @@ class GraphStore {
 
     private let fileManager = FileManager.default
     private let saveDebouncer = Debouncer(delay: 1.0, queue: .global(qos: .utility))
+    private var graphsDirectoryOverride: URL?
 
     private var graphsDirectory: URL {
+        if let graphsDirectoryOverride {
+            return graphsDirectoryOverride
+        }
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return appSupport.appendingPathComponent("Atlas/graphs", isDirectory: true)
     }
 
-    init() {
-        try? fileManager.createDirectory(at: graphsDirectory, withIntermediateDirectories: true)
+    init(graphsDirectory: URL? = nil) {
+        self.graphsDirectoryOverride = graphsDirectory
+        try? fileManager.createDirectory(at: self.graphsDirectory, withIntermediateDirectories: true)
+    }
+
+    func useGraphsDirectory(_ directory: URL) {
+        flushPendingSave()
+        graphsDirectoryOverride = directory
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            log.info("[GraphStore] Using graph directory override: \(directory.path, privacy: .public)")
+        } catch {
+            log.error("[GraphStore] Failed to create graph directory override \(directory.path, privacy: .public): \(error)")
+        }
     }
 
     // MARK: - File Path Helpers
