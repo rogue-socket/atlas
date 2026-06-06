@@ -67,6 +67,11 @@ class AIServiceManager {
             let baseURL = UserDefaults.standard.string(forKey: AppConstants.ollamaBaseURLKey) ?? "http://localhost:11434"
             log.info("[AIService] Using Ollama at \(baseURL)")
             return OpenAIBackend(apiKey: "", model: selectedModel, baseURL: baseURL + "/v1", displayName: "Ollama")
+        case .claudeSubscription:
+            let baseURL = UserDefaults.standard.string(forKey: AppConstants.claudeSidecarURLKey)
+                ?? AIBackendType.claudeSubscription.defaultBaseURL
+            log.info("[AIService] Using Claude sidecar at \(baseURL)")
+            return ClaudeSidecarBackend(baseURL: baseURL, model: selectedModel)
         case .codexAgent:
             let baseURL = UserDefaults.standard.string(forKey: AppConstants.codexAgentSidecarURLKey)
                 ?? AIBackendType.codexAgent.defaultBaseURL
@@ -120,7 +125,7 @@ class AIServiceManager {
                 vectorDimension: OpenAIEmbeddingModelCatalog.vectorDimension(for: model),
                 baseURL: embeddingGatewayBaseURL
             )
-        case .claude, .codexAgent:
+        case .claude, .claudeSubscription, .codexAgent:
             // These chat backends have no embedding API; ETR must use a
             // different vendor for vectors.
             log.warning("[AIService] \(type.rawValue) has no embedding API — ETR unavailable with this selection")
@@ -312,7 +317,7 @@ class AIServiceManager {
     }
 
     private func updateConfiguredState() {
-        if selectedBackendType == .ollama || selectedBackendType == .codexAgent {
+        if !selectedBackendType.requiresAPIKey {
             isConfigured = true
         } else {
             isConfigured = getAPIKey(for: selectedBackendType) != nil

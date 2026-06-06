@@ -18,6 +18,7 @@ struct AISettingsView: View {
     @State private var ollamaBaseURL: String = "http://localhost:11434"
     @State private var embeddingGatewayURL: String = OpenAIEmbeddingModelCatalog.defaultBaseURL
     @State private var embeddingGatewayAPIKey: String = OpenAIEmbeddingModelCatalog.defaultAPIKey
+    @State private var claudeSidecarURL: String = "http://127.0.0.1:8765"
     @State private var testStatus: TestStatus = .idle
 
     enum TestStatus: Equatable {
@@ -141,6 +142,21 @@ struct AISettingsView: View {
                 }
             }
 
+            // Claude subscription (sidecar) settings
+            if serviceManager.selectedBackendType == .claudeSubscription {
+                Section("Claude Subscription") {
+                    TextField("Sidecar URL", text: $claudeSidecarURL)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            UserDefaults.standard.set(claudeSidecarURL, forKey: AppConstants.claudeSidecarURLKey)
+                        }
+
+                    Text("Runs Claude via your subscription. Start the sidecar first: node atlas/claude-sidecar/server.mjs — extraction fails if it isn't running.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
             // Test Connection
             Section("Test Connection") {
                 HStack {
@@ -204,6 +220,7 @@ struct AISettingsView: View {
             ollamaBaseURL = UserDefaults.standard.string(forKey: AppConstants.ollamaBaseURLKey) ?? "http://localhost:11434"
             embeddingGatewayURL = UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingGatewayBaseURLKey) ?? OpenAIEmbeddingModelCatalog.defaultBaseURL
             embeddingGatewayAPIKey = UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingGatewayAPIKeyKey) ?? OpenAIEmbeddingModelCatalog.defaultAPIKey
+            claudeSidecarURL = UserDefaults.standard.string(forKey: AppConstants.claudeSidecarURLKey) ?? "http://127.0.0.1:8765"
         }
     }
 

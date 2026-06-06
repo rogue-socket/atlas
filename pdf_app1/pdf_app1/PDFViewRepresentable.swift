@@ -50,26 +50,32 @@ struct PDFViewRepresentable: NSViewRepresentable {
         pdfView.pageBreakMargins = NSEdgeInsets(top: 10, left: 0, bottom: 10, right: 0)
         pdfView.backgroundColor = NSColor.controlBackgroundColor
 
-        // Fit entire page on initial load
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            guard let page = pdfView.document?.page(at: 0) else {
-                pdfView.autoScales = true
-                return
-            }
-            let pageRect = page.bounds(for: .mediaBox)
-            let viewSize = pdfView.bounds.size
-            guard pageRect.width > 0, pageRect.height > 0,
-                  viewSize.width > 40, viewSize.height > 40 else {
-                pdfView.autoScales = true
-                return
-            }
-            let scaleX = (viewSize.width - 20) / pageRect.width
-            let scaleY = (viewSize.height - 20) / pageRect.height
-            pdfView.scaleFactor = min(scaleX, scaleY)
-        }
+        // Fit entire page on initial load. The previous version waited a
+        // fixed 150ms hoping SwiftUI had assigned a real frame by then —
+        // wrong on a slow machine (fit runs against zero bounds, falls back
+        // to autoScales), wrong on a fast machine (visible jump from the
+        // intermediate state). Observe `frameDidChangeNotification` instead,
+        // attempt the fit on each frame change, and detach the observer the
+        // first time it succeeds so subsequent user resizes don't yank zoom.
+        pdfView.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.attemptInitialFit(_:)),
+            name: NSView.frameDidChangeNotification,
+            object: pdfView
+        )
+        // Bounds may already be valid by the time we get here (re-entered
+        // makeNSView, e.g. tab restore). Try once synchronously — the
+        // notification path covers everything else.
+        context.coordinator.attemptInitialFit(nil)
 
          pdfView.onMouseUp = { [weak coordinator = context.coordinator] in
              coordinator?.handleSelectionCompleted()
+         }
+
+         pdfView.onMouseDown = { [weak coordinator = context.coordinator, weak pdfView] event in
+             guard let pdfView else { return }
+             coordinator?.pendingDownLocation = pdfView.convert(event.locationInWindow, from: nil)
          }
 
          pdfView.menuProvider = { [weak coordinator = context.coordinator] event in
@@ -89,9 +95,12 @@ struct PDFViewRepresentable: NSViewRepresentable {
             object: pdfView
         )
         
-        context.coordinator.clickGesture.isEnabled = [.text, .stickyNote].contains(annotationMode)
+        context.coordinator.clickGesture.isEnabled = [.text, .stickyNote, .select].contains(annotationMode)
         context.coordinator.panGesture.isEnabled = [.select, .highlightArea, .ink, .rectangle, .circle, .line, .arrow].contains(annotationMode)
-        
+        context.coordinator.installKeyMonitor()
+        context.coordinator.installMouseMonitor()
+        context.coordinator.selectionOverlay.attach(to: pdfView)
+
         return pdfView
     }
     
@@ -118,8 +127,15 @@ struct PDFViewRepresentable: NSViewRepresentable {
 
         if previousMode != annotationMode {
             // Update gesture recognizer state only when mode changes
-            context.coordinator.clickGesture.isEnabled = [.text, .stickyNote].contains(annotationMode)
+            context.coordinator.clickGesture.isEnabled = [.text, .stickyNote, .select].contains(annotationMode)
             context.coordinator.panGesture.isEnabled = [.select, .highlightArea, .ink, .rectangle, .circle, .line, .arrow].contains(annotationMode)
+
+            // Selection chrome only belongs to .select; drop it when leaving.
+            if previousMode == .select && annotationMode != .select {
+                context.coordinator.setSelection(nil, page: nil)
+                // Hand cursor management back to PDFView's own cursor rects.
+                nsView.window?.enableCursorRects()
+            }
 
             // Clear selection when leaving text-selection modes
             if ![AnnotationMode.highlightText, .underline, .strikethrough].contains(annotationMode) {
@@ -172,6 +188,10 @@ struct PDFViewRepresentable: NSViewRepresentable {
         
         let clickGesture: NSClickGestureRecognizer
         let panGesture: NSPanGestureRecognizer
+        let selectionOverlay = SelectionChromeOverlay()
+        private var keyMonitor: Any?
+        private var mouseMonitor: Any?
+        private var initialFitCompleted = false
         
         init(
             pdfView: HighlightingPDFView,
@@ -207,10 +227,151 @@ struct PDFViewRepresentable: NSViewRepresentable {
         
         deinit {
             NotificationCenter.default.removeObserver(self, name: .PDFViewPageChanged, object: pdfView)
+            NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: pdfView)
             pdfView.onMouseUp = nil
+            pdfView.onMouseDown = nil
             pdfView.menuProvider = nil
             pdfView.removeGestureRecognizer(clickGesture)
             pdfView.removeGestureRecognizer(panGesture)
+            if let monitor = keyMonitor {
+                NSEvent.removeMonitor(monitor)
+                keyMonitor = nil
+            }
+            if let monitor = mouseMonitor {
+                NSEvent.removeMonitor(monitor)
+                mouseMonitor = nil
+            }
+            selectionOverlay.removeFromSuperview()
+        }
+
+        /// One-shot fit-to-page driven by `NSView.frameDidChangeNotification`.
+        /// Fires on every frame change until the view has real bounds AND the
+        /// document has a page 0; on success, sets `scaleFactor` and detaches
+        /// the observer so user-driven resizes don't yank the zoom. If the
+        /// document has no pages, falls back to `autoScales = true` and stops
+        /// trying (matches the old code's degenerate-document fallback).
+        @objc func attemptInitialFit(_ notification: Notification?) {
+            guard !initialFitCompleted else { return }
+            guard let page = pdfView.document?.page(at: 0) else {
+                pdfView.autoScales = true
+                initialFitCompleted = true
+                NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: pdfView)
+                return
+            }
+            let pageRect = page.bounds(for: .mediaBox)
+            let viewSize = pdfView.bounds.size
+            guard pageRect.width > 0, pageRect.height > 0,
+                  viewSize.width > 40, viewSize.height > 40 else {
+                return  // Not ready yet — wait for next frame change.
+            }
+            let scaleX = (viewSize.width - 20) / pageRect.width
+            let scaleY = (viewSize.height - 20) / pageRect.height
+            pdfView.scaleFactor = min(scaleX, scaleY)
+            initialFitCompleted = true
+            NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: pdfView)
+        }
+
+        /// Catches Delete / Forward-Delete on the most recent select-mode hit
+        /// annotation (`hitAnnotation` is set by select-pan `.began` and by
+        /// right-click context menu). Returns nil to consume the event when a
+        /// delete is performed; otherwise passes through.
+        /// Tracks the active annotation across hit-tests from click, pan,
+        /// context menu, and mode transitions. Mirrors `hitAnnotation` /
+        /// `hitAnnotationPage` into the chrome overlay so a click without a
+        /// drag still produces a visible selection.
+        func setSelection(_ annotation: PDFAnnotation?, page: PDFPage?) {
+            hitAnnotation = annotation
+            hitAnnotationPage = page
+            selectionOverlay.update(annotation: annotation, page: page)
+        }
+
+        /// Local NSEvent monitor for `.mouseMoved` — same shape as the keyboard
+        /// monitor above. Only fires when our pdfView's window is keyed,
+        /// `.select` is active, and the cursor is inside the pdfView frame.
+        /// Sets `openHand` over body / `resize*` over corner-edge handles.
+        func installMouseMonitor() {
+            guard mouseMonitor == nil else { return }
+            // mouseMoved events only dispatch when the window opts in.
+            // PDFKit may have already enabled it for text selection, but
+            // be explicit. Window is typically nil during makeNSView, so
+            // defer to next runloop.
+            DispatchQueue.main.async { [weak self] in
+                self?.pdfView.window?.acceptsMouseMovedEvents = true
+            }
+            mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
+                self?.handleMouseMoved(event)
+                return event
+            }
+        }
+
+        private func handleMouseMoved(_ event: NSEvent) {
+            guard annotationMode == .select else { return }
+            guard let window = pdfView.window, event.window === window else { return }
+            let locInView = pdfView.convert(event.locationInWindow, from: nil)
+            guard pdfView.bounds.contains(locInView) else {
+                // Off the pdfView — let other views manage the cursor again.
+                window.enableCursorRects()
+                return
+            }
+            // Suppress PDFView's text-selection I-beam cursor rect so the
+            // select-mode cursor wins; re-enabled once the pointer leaves
+            // the pdfView (here) or select mode (updateNSView).
+            window.disableCursorRects()
+            let cursor = selectModeCursor(at: locInView)
+            // Defer the set one runloop tick so it lands after any per-event
+            // cursor handling PDFView still does directly.
+            DispatchQueue.main.async { cursor.set() }
+        }
+
+        /// Cursor for `.select` mode at a pdfView-space point: a resize cursor
+        /// over a corner/edge handle of the annotation under the pointer,
+        /// `openHand` over its body or empty space.
+        private func selectModeCursor(at locInView: CGPoint) -> NSCursor {
+            guard let page = pdfView.page(for: locInView, nearest: false) else { return .openHand }
+            let pagePoint = pdfView.convert(locInView, to: page)
+            guard let annotation = page.annotation(at: pagePoint) else { return .openHand }
+            let handle = AnnotationGeometry.handle(
+                at: pagePoint, rect: annotation.bounds, handleSize: resizeHandleHitSize) ?? .body
+            switch handle {
+            case .body: return .openHand
+            case .left, .right: return .resizeLeftRight
+            case .top, .bottom: return .resizeUpDown
+            case .topLeft, .topRight, .bottomLeft, .bottomRight: return .crosshair
+            }
+        }
+
+        func installKeyMonitor() {
+            guard keyMonitor == nil else { return }
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self else { return event }
+                // Only fire when our PDFView is in the key window's responder
+                // path — otherwise text fields, search bars, etc. swallow
+                // their own deletes first via the responder chain (this
+                // monitor only intercepts events the chain hasn't handled).
+                guard self.annotationMode == .select else { return event }
+                guard let window = self.pdfView.window, window.isKeyWindow else { return event }
+                // 51 = delete/backspace, 117 = forward delete (fn-delete).
+                guard event.keyCode == 51 || event.keyCode == 117 else { return event }
+                // Pass through when the user is editing text. Walk up from
+                // firstResponder; only intercept when pdfView (or a descendant)
+                // owns focus. Without this, deletes in the search bar / note
+                // editor / project rename would silently nuke the most-recent
+                // hit annotation instead.
+                var responder: NSResponder? = window.firstResponder
+                while let r = responder {
+                    if r === self.pdfView { break }
+                    responder = r.nextResponder
+                }
+                guard responder != nil else { return event }
+                guard let annotation = self.hitAnnotation, let page = self.hitAnnotationPage else {
+                    return event
+                }
+                page.removeAnnotation(annotation)
+                self.undoRedoManager.addOperation(.remove(annotation: annotation, page: page))
+                self.setSelection(nil, page: nil)
+                self.onAnnotationsChanged()
+                return nil
+            }
         }
 
         func contextMenu(for event: NSEvent) -> NSMenu? {
@@ -302,16 +463,25 @@ struct PDFViewRepresentable: NSViewRepresentable {
             guard let annotation = hitAnnotation, let page = hitAnnotationPage else { return }
             page.removeAnnotation(annotation)
             undoRedoManager.addOperation(.remove(annotation: annotation, page: page))
-            hitAnnotation = nil
-            hitAnnotationPage = nil
+            setSelection(nil, page: nil)
             onAnnotationsChanged()
         }
         
         @objc func handleClick(_ gesture: NSClickGestureRecognizer) {
-            guard [.text, .stickyNote].contains(annotationMode) else { return }
+            guard [.text, .stickyNote, .select].contains(annotationMode) else { return }
             guard pdfView.document != nil else { return }
 
             let location = gesture.location(in: pdfView)
+
+            if annotationMode == .select {
+                guard let page = pdfView.page(for: location, nearest: false) else {
+                    setSelection(nil, page: nil); return
+                }
+                let pagePoint = pdfView.convert(location, to: page)
+                let annotation = page.annotation(at: pagePoint)
+                setSelection(annotation, page: annotation == nil ? nil : page)
+                return
+            }
 
             if annotationMode == .stickyNote {
                 // Create sticky note at click position
@@ -422,49 +592,104 @@ struct PDFViewRepresentable: NSViewRepresentable {
             }
         }
 
-        // MARK: - Select / Move Drag
+        // MARK: - Select / Move / Resize Drag
         private var dragAnnotation: PDFAnnotation?
         private var dragPage: PDFPage?
         private var dragOriginalBounds: CGRect = .zero
         private var dragStartPagePoint: CGPoint = .zero
+        private var dragHandle: AnnotationGeometry.DragHandle = .body
+        /// pdfView-space mouse-down point, captured before the pan recognizer's
+        /// threshold consumes the first few points — used by select-pan `.began`
+        /// for a reliable handle hit-test.
+        var pendingDownLocation: CGPoint?
+
+        /// In page-space units. ~12pt at 100% zoom; resize-corner forgiveness.
+        private let resizeHandleHitSize: CGFloat = 12
+        /// Minimum bounds size on resize (page-space).
+        private let annotationMinSize = CGSize(width: 8, height: 8)
+
+        private func resizeCursor(for handle: AnnotationGeometry.DragHandle) -> NSCursor {
+            switch handle {
+            case .body: return .closedHand
+            case .left, .right: return .resizeLeftRight
+            case .top, .bottom: return .resizeUpDown
+            case .topLeft, .topRight, .bottomLeft, .bottomRight: return .crosshair
+            }
+        }
 
         private func handleSelectPan(_ gesture: NSPanGestureRecognizer, location: CGPoint) {
             switch gesture.state {
             case .began:
-                guard let page = pdfView.page(for: location, nearest: false) else { return }
-                let pagePoint = pdfView.convert(location, to: page)
-                guard let annotation = page.annotation(at: pagePoint) else { return }
+                // The gesture's .began location is already past the recognition
+                // threshold — often off the handle, or off the annotation
+                // entirely when a corner is dragged outward. Use the true
+                // mouse-down point (captured by pdfView before the threshold)
+                // so the handle hit-test is reliable.
+                let downLocation = pendingDownLocation ?? location
+                guard let page = pdfView.page(for: downLocation, nearest: false) else { return }
+                let pagePoint = pdfView.convert(downLocation, to: page)
+                // Prefer the already-selected annotation when the press lands on
+                // it or one of its handles: handles extend ~12pt beyond the
+                // annotation bounds, so page.annotation(at:) alone misses
+                // outer-handle presses.
+                let annotation: PDFAnnotation
+                if let selected = hitAnnotation, hitAnnotationPage === page,
+                   selected.bounds.contains(pagePoint)
+                       || AnnotationGeometry.handle(at: pagePoint, rect: selected.bounds,
+                                                    handleSize: resizeHandleHitSize) != nil {
+                    annotation = selected
+                } else if let hit = page.annotation(at: pagePoint) {
+                    annotation = hit
+                } else {
+                    return
+                }
                 dragAnnotation = annotation
                 dragPage = page
                 dragOriginalBounds = annotation.bounds
                 dragStartPagePoint = pagePoint
-                NSCursor.closedHand.set()
+                dragHandle = AnnotationGeometry.handle(
+                    at: pagePoint, rect: annotation.bounds, handleSize: resizeHandleHitSize
+                ) ?? .body
+                // Track as the active annotation so keyboard delete and the
+                // context-menu actions both target the most-recent select.
+                setSelection(annotation, page: page)
+                resizeCursor(for: dragHandle).set()
 
             case .changed:
                 guard let annotation = dragAnnotation, let page = dragPage else { return }
                 let pagePoint = pdfView.convert(location, to: page)
                 let delta = CGVector(dx: pagePoint.x - dragStartPagePoint.x,
                                      dy: pagePoint.y - dragStartPagePoint.y)
-                let newBounds = AnnotationGeometry.translated(
-                    rect: dragOriginalBounds, by: delta,
-                    in: page.bounds(for: .mediaBox))
+                let pageBounds = page.bounds(for: .mediaBox)
+                let newBounds: CGRect
+                if dragHandle == .body {
+                    newBounds = AnnotationGeometry.translated(
+                        rect: dragOriginalBounds, by: delta, in: pageBounds)
+                } else {
+                    newBounds = AnnotationGeometry.resized(
+                        rect: dragOriginalBounds, handle: dragHandle, by: delta,
+                        in: pageBounds, minSize: annotationMinSize)
+                }
                 annotation.bounds = newBounds
                 pdfView.setNeedsDisplay(pdfView.bounds)
+                selectionOverlay.needsDisplay = true
 
             case .ended, .cancelled:
                 NSCursor.openHand.set()
-                defer {
-                    dragAnnotation = nil
-                    dragPage = nil
-                    dragOriginalBounds = .zero
-                    dragStartPagePoint = .zero
-                }
-                guard let annotation = dragAnnotation, let page = dragPage else { return }
+                let endedAnnotation = dragAnnotation
+                let endedPage = dragPage
+                let endedOriginal = dragOriginalBounds
+                dragAnnotation = nil
+                dragPage = nil
+                dragOriginalBounds = .zero
+                dragStartPagePoint = .zero
+                dragHandle = .body
+                guard let annotation = endedAnnotation, let page = endedPage else { return }
                 let newBounds = annotation.bounds
-                guard newBounds != dragOriginalBounds else { return }
+                guard newBounds != endedOriginal else { return }
                 undoRedoManager.addOperation(.modify(
                     annotation: annotation,
-                    oldBounds: dragOriginalBounds,
+                    oldBounds: endedOriginal,
                     newBounds: newBounds,
                     page: page))
                 onAnnotationsChanged()
@@ -603,6 +828,84 @@ struct PDFViewRepresentable: NSViewRepresentable {
                 }
             }
             return true
+        }
+    }
+}
+
+/// Transparent NSView pinned to the pdfView frame that draws selection chrome
+/// (1pt outline + 8 filled handles) for the currently-selected annotation in
+/// `.select` mode. Click-through via `hitTest` returning nil so the underlying
+/// gesture recognizers continue to receive events. Invalidates on scale,
+/// page-change, and clip-view bounds-change (scroll) — annotation bounds get
+/// re-queried in `draw(_:)` so live drag updates are free as long as the
+/// caller marks `needsDisplay`.
+final class SelectionChromeOverlay: NSView {
+    weak var pdfView: PDFView?
+    private(set) var selectedAnnotation: PDFAnnotation?
+    private(set) var selectedPage: PDFPage?
+
+    /// Visual size of the handle squares in pdfView (point) coordinates.
+    var handleSize: CGFloat = 8
+
+    override var isFlipped: Bool { pdfView?.isFlipped ?? false }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func update(annotation: PDFAnnotation?, page: PDFPage?) {
+        selectedAnnotation = annotation
+        selectedPage = page
+        needsDisplay = true
+    }
+
+    func attach(to pdfView: PDFView) {
+        self.pdfView = pdfView
+        self.autoresizingMask = [.width, .height]
+        self.frame = pdfView.bounds
+        pdfView.addSubview(self)
+
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(invalidate),
+                       name: .PDFViewPageChanged, object: pdfView)
+        nc.addObserver(self, selector: #selector(invalidate),
+                       name: .PDFViewScaleChanged, object: pdfView)
+        nc.addObserver(self, selector: #selector(invalidate),
+                       name: .PDFViewVisiblePagesChanged, object: pdfView)
+        if let clipView = pdfView.documentView?.enclosingScrollView?.contentView {
+            clipView.postsBoundsChangedNotifications = true
+            nc.addObserver(self, selector: #selector(invalidate),
+                           name: NSView.boundsDidChangeNotification, object: clipView)
+        }
+    }
+
+    @objc private func invalidate() { needsDisplay = true }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let pdfView, let annotation = selectedAnnotation, let page = selectedPage else { return }
+        let r = pdfView.convert(annotation.bounds, from: page)
+        guard r.width > 0, r.height > 0, let ctx = NSGraphicsContext.current?.cgContext else { return }
+
+        ctx.setStrokeColor(NSColor.controlAccentColor.cgColor)
+        ctx.setLineWidth(1)
+        ctx.stroke(r.insetBy(dx: 0.5, dy: 0.5))
+
+        let cx = r.midX, cy = r.midY
+        let centers: [CGPoint] = [
+            CGPoint(x: r.minX, y: r.minY), CGPoint(x: cx, y: r.minY), CGPoint(x: r.maxX, y: r.minY),
+            CGPoint(x: r.maxX, y: cy),                                CGPoint(x: r.maxX, y: r.maxY),
+            CGPoint(x: cx, y: r.maxY),     CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.minX, y: cy)
+        ]
+        let fill = NSColor.controlAccentColor.cgColor
+        let stroke = NSColor.white.cgColor
+        let half = handleSize / 2
+        for c in centers {
+            let h = CGRect(x: c.x - half, y: c.y - half, width: handleSize, height: handleSize)
+            ctx.setFillColor(fill)
+            ctx.fill(h)
+            ctx.setStrokeColor(stroke)
+            ctx.setLineWidth(1)
+            ctx.stroke(h)
         }
     }
 }

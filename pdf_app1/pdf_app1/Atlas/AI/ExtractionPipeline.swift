@@ -61,6 +61,17 @@ class ExtractionPipeline {
 
         log.info("Using backend: \(backend.displayName) / \(backend.modelIdentifier)")
 
+        // Fail fast if the backend is unreachable (e.g. the Claude sidecar
+        // isn't running) — otherwise every batch fails silently in turn.
+        do {
+            try await backend.preflight()
+        } catch {
+            log.error("Backend preflight failed: \(error.localizedDescription)")
+            statusMessage = (error as? AIError)?.errorDescription ?? error.localizedDescription
+            isProcessing = false
+            return
+        }
+
         if mode == .deep {
             statusMessage = "Deep extraction: extracting text..."
             log.info("Using Deep mode (3-pass pipeline)")
