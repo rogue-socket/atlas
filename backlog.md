@@ -38,10 +38,10 @@ Living TODO list. Status tags: `[active]`, `[next]`, `[blocked: <reason>]`, no t
 
 - 2026-06-07 — **Dormant merge/correlation stack removed.** Removed the disconnected `GraphMergeEngine`, `MergeProposalView`, `ProjectCorrelationSidebar`, their merge/correlation tests, and the AI-only support surface that existed solely for that workflow (`RawMergeProposal`, `AtlasModel.proposeMerges`, `LLMBackend.proposeMerges`, `LLMResponseParser.parseMergesResponse`, `PromptTemplates.semanticMergeProposal`). This keeps the active cross-document direction centered on SCE/ETR/Hybrid graph extraction rather than an unmounted manual merge flow. Verification: `RawTypesCodableTests` + `PromptTemplatesTests` `23 tests, 0 failures`; full XCTest `407 tests, 0 failures`; Debug build passed.
 
+- 2026-06-07 — **Stale standalone Swift scripts retired.** Removed `pdf_app1/scripts/CollapsibleMapTests.swift` and `pdf_app1/scripts/RunNovakTests.swift`. The former no longer compiled against the current four-level graph model; the latter only tested mirrored standalone copies of older Novak/raw parsing types. Current target-compiled XCTest coverage already covers graph containment/expansion behavior, retired `subtopicOf` lossy decode, and raw extraction Codable/linking-phrase behavior.
+
 ## Active / Next
 
 - [next] **Decide whether to clean/regenerate the contaminated Meridian sponsor sample PDF fixture.** The code now rejects stale/page-sized Atlas source highlights and avoids persisting generated `atlas:` annotations on save, but `sample_pdfs/files/meridian_biofab/meridian_biofab_sponsor_programs_customers_and_finance.pdf` still contains historical baked-in `atlas:` annotations unless we intentionally clean or regenerate it.
 
 ## Deferred Cleanup
-
-- [next] **Retire or refresh stale standalone Swift scripts.** `pdf_app1/scripts/CollapsibleMapTests.swift` fails as a standalone script and references stale model concepts such as `subtopicOf`; it is not target-compiled. `pdf_app1/scripts/RunNovakTests.swift` still runs, but duplicates historical Novak/subtopic test logic outside XCTest. Decide whether to delete both, port any still-useful assertions into XCTest, or leave them explicitly documented as archival scripts.
