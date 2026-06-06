@@ -98,6 +98,16 @@ LIMITS="24 60 120" ./docs/evals/run-hybrid-live-baselines.sh
 
 `LIMITS` entries must be positive integers.
 
+To validate the live-output parser without launching the app or making Codex
+calls:
+
+```bash
+HYBRID_LIVE_SELF_TEST=1 ./docs/evals/run-hybrid-live-baselines.sh
+```
+
+The self-test covers valid zero-row output plus relation and merge count
+mismatch failures.
+
 Expected output includes one `HYBRID_RESOLVE_SUMMARY` per corpus/limit and
 may include `HYBRID_RELATION` or `HYBRID_MERGE` rows depending on the
 adjudicator verdicts. The script exits nonzero if a run emits
