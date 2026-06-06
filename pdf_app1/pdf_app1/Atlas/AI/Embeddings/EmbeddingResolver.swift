@@ -773,12 +773,12 @@ extension EmbeddingResolver {
         "their", "our", "via", "per",
     ]
 
-    private static let processCueTokens: Set<String> = [
+    private static let processCueTokens: Set<String> = Set([
         "authorization", "coordination", "curation", "follow", "follows",
         "governance", "management", "managing", "matching", "onboarding",
         "operations", "procurement", "process", "replenishment", "reporting",
         "scheduling", "sourcing", "staffing", "vendor"
-    ]
+    ].map(lexicalTokenKey))
 
     /// Significant tokens of a label: split on non-alphanumerics, lowercased,
     /// simple English plurals folded, stopwords and short lowercase words

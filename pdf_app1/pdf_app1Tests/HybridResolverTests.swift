@@ -53,9 +53,9 @@ final class HybridResolverTests: XCTestCase {
                      pageIndex: page, boundingBox: .zero, textSnippet: snippet)
     }
 
-    private func node(_ label: String, level: NodeLevel = .concept,
+    private func node(_ label: String, id: UUID = UUID(), level: NodeLevel = .concept,
                       doc: String, modified: Date = Date()) -> ConceptNode {
-        ConceptNode(label: label, type: .concept, summary: nil,
+        ConceptNode(id: id, label: label, type: .concept, summary: nil,
                     sourceAnchors: [anchor(doc)], level: level, lastModified: modified)
     }
 
@@ -404,6 +404,27 @@ final class HybridResolverTests: XCTestCase {
 
         XCTAssertEqual(plan.decisions.count, 0)
         XCTAssertEqual(plan.relations.count, 0)
+    }
+
+    func test_resolveLexical_keepsLowSimilarityProcessForWithNormalizedProcessCue() async throws {
+        let graph = KnowledgeGraph()
+        let process = node("Customer Operations",
+                           id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+                           doc: "/a.pdf")
+        let model = node("Customer Service Model",
+                         id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+                         doc: "/b.pdf")
+        graph.addNode(process)
+        graph.addNode(model)
+        let llm = FixedLLMBackend(response: #"[{"pair": 1, "verdict": "process_for", "direction": "ab"}]"#)
+
+        let plan = try await EmbeddingResolver.resolveLexical(graph: graph, llmBackend: llm)
+
+        XCTAssertEqual(plan.decisions.count, 0)
+        XCTAssertEqual(plan.relations.count, 1)
+        XCTAssertEqual(plan.relations.first?.sourceID, process.id)
+        XCTAssertEqual(plan.relations.first?.targetID, model.id)
+        XCTAssertEqual(plan.relations.first?.edgeType, .processFor)
     }
 
     func test_resolveLexical_keepsProcessForWithStrongSimilarity() async throws {
