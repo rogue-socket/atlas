@@ -98,7 +98,8 @@ LIMITS="24 60 120" ./docs/evals/run-hybrid-live-baselines.sh
 
 `LIMITS` entries must be positive integers.
 
-Expected output includes `HYBRID_RELATION`, `HYBRID_MERGE`, and one
-`HYBRID_RESOLVE_SUMMARY` per corpus/limit. The script exits nonzero if a run
-emits `HYBRID_*ERROR`, does not emit exactly one summary, or reports the wrong
+Expected output includes one `HYBRID_RESOLVE_SUMMARY` per corpus/limit and
+may include `HYBRID_RELATION` or `HYBRID_MERGE` rows depending on the
+adjudicator verdicts. The script exits nonzero if a run emits
+`HYBRID_*ERROR`, does not emit exactly one summary, or reports the wrong
 `candidateLimit`.
