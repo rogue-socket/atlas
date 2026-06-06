@@ -29,6 +29,14 @@ struct HeadlessRunnerConfig {
     /// When set, ignore extraction/ETR entirely: load the graph JSON at this
     /// path and score it against the vitacare quality rubric (see `RubricScorer`).
     let scoreRubricPath: String?
+    /// When set, write the post-run project-wide graph (KnowledgeGraph JSON) here
+    /// after ETR completes. Used by threshold-sweep scripts with `--score-rubric`.
+    let exportGraphPath: String?
+    /// When set, create or update the named project from every `.pdf` in this
+    /// directory (sorted by filename) before extraction/ETR runs.
+    let bootstrapPDFDirectory: String?
+    /// ETR adjudication prompt revision: `v2`, `v3`, or `v4` (default).
+    let etrPromptVersion: String?
 
     /// Parse `--headless-extract --project <name> [--mode fast|deep] [--etr]
     /// [--auto-merge N] [--adj-floor N] [--adj-batch N]
@@ -50,6 +58,9 @@ struct HeadlessRunnerConfig {
         var runETR = false
         var etrOnly = false
         var scoreRubricPath: String?
+        var exportGraphPath: String?
+        var bootstrapPDFDirectory: String?
+        var etrPromptVersion: String?
         var autoMerge: Float?
         var adjFloor: Float?
         var adjBatch: Int?
@@ -73,6 +84,15 @@ struct HeadlessRunnerConfig {
             }
             if a == "--score-rubric", i + 1 < args.count {
                 scoreRubricPath = args[i + 1]; i += 2; continue
+            }
+            if a == "--export-graph", i + 1 < args.count {
+                exportGraphPath = args[i + 1]; i += 2; continue
+            }
+            if a == "--bootstrap-pdf-dir", i + 1 < args.count {
+                bootstrapPDFDirectory = args[i + 1]; i += 2; continue
+            }
+            if a == "--etr-prompt", i + 1 < args.count {
+                etrPromptVersion = args[i + 1]; i += 2; continue
             }
             if a == "--auto-merge", i + 1 < args.count {
                 autoMerge = Float(args[i + 1]); i += 2; continue
@@ -121,7 +141,60 @@ struct HeadlessRunnerConfig {
         return HeadlessRunnerConfig(projectName: name, mode: mode,
                                     runETR: runETR, etrOnly: etrOnly,
                                     etrThresholds: thresholds,
-                                    scoreRubricPath: scoreRubricPath)
+                                    scoreRubricPath: scoreRubricPath,
+                                    exportGraphPath: exportGraphPath,
+                                    bootstrapPDFDirectory: bootstrapPDFDirectory,
+                                    etrPromptVersion: etrPromptVersion)
+    }
+
+    /// Write `graph` as raw `KnowledgeGraph` JSON for `--score-rubric` / audits.
+    static func exportGraph(_ graph: KnowledgeGraph, to path: String) throws {
+        let url = URL(fileURLWithPath: path)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try graph.encode()
+        try data.write(to: url, options: .atomic)
+    }
+
+    /// Create or update `projectName` with security-scoped bookmarks for every
+    /// `.pdf` in `pdfDirectory` (sorted by filename).
+    @MainActor
+    static func ensureProject(named projectName: String,
+                              pdfDirectory: String,
+                              projectsManager: ProjectsManager,
+                              log: Logger) -> Bool {
+        let dirURL = URL(fileURLWithPath: pdfDirectory, isDirectory: true)
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: dirURL.path, isDirectory: &isDir), isDir.boolValue else {
+            log.error("[Headless] bootstrap-pdf-dir not found: \(pdfDirectory, privacy: .public)")
+            return false
+        }
+        var pdfs = ((try? FileManager.default.contentsOfDirectory(
+            at: dirURL, includingPropertiesForKeys: nil
+        )) ?? [])
+            .filter { $0.pathExtension.lowercased() == "pdf" }
+        if projectName == "vitacare" {
+            pdfs = pdfs.filter { $0.lastPathComponent.hasPrefix("vitacare_") }
+        }
+        pdfs.sort { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        guard !pdfs.isEmpty else {
+            log.error("[Headless] bootstrap-pdf-dir has no PDFs: \(pdfDirectory, privacy: .public)")
+            return false
+        }
+        if let existing = projectsManager.projects.first(where: { $0.name == projectName }) {
+            let known = Set(existing.files.map(\.lastKnownPath))
+            let missing = pdfs.filter { !known.contains($0.path) }
+            if !missing.isEmpty {
+                projectsManager.addFiles(to: existing.id, urls: missing)
+                log.info("[Headless] bootstrap: added \(missing.count) PDF(s) to project \(projectName, privacy: .public)")
+            }
+            return true
+        }
+        projectsManager.createProject(name: projectName, urls: pdfs)
+        log.info("[Headless] bootstrap: created project \(projectName, privacy: .public) with \(pdfs.count) PDF(s)")
+        return true
     }
 
     /// Map a `--<prefix>-{cc|ee|cl}` suffix to its `PairKind`. Returns nil
@@ -167,6 +240,14 @@ final class HeadlessRunner {
             try? await Task.sleep(for: .milliseconds(100))
         }
         log.info("[Headless] projects loaded: \(projectsManager.projects.count) project(s)")
+
+        if let pdfDir = config.bootstrapPDFDirectory {
+            guard HeadlessRunnerConfig.ensureProject(named: config.projectName, pdfDirectory: pdfDir,
+                                                     projectsManager: projectsManager, log: log) else {
+                exit(2)
+            }
+            try? await Task.sleep(for: .milliseconds(800))
+        }
 
         guard let project = projectsManager.projects.first(where: { $0.name == config.projectName }) else {
             let names = projectsManager.projects.map { $0.name }.joined(separator: ", ")
@@ -218,6 +299,15 @@ final class HeadlessRunner {
             await runETR(config: config, aiService: aiService, graph: graph, projectID: project.id)
             for url in projectURLs { GraphStore.shared.scheduleSave(graph, for: url) }
             GraphStore.shared.flushPendingSave()
+            if let exportPath = config.exportGraphPath {
+                do {
+                    try HeadlessRunnerConfig.exportGraph(graph, to: exportPath)
+                    log.info("[Headless] exported merged graph → \(exportPath, privacy: .public)")
+                } catch {
+                    log.error("[Headless] export-graph failed: \(error.localizedDescription, privacy: .public)")
+                    exit(5)
+                }
+            }
             let total = Date().timeIntervalSince(runStart)
             log.info("[Headless] --etr-only done in \(String(format: "%.1f", total))s — exiting")
             try? await Task.sleep(for: .milliseconds(500))
@@ -276,6 +366,15 @@ final class HeadlessRunner {
             // Re-save after ETR mutates the graph.
             for url in projectURLs { GraphStore.shared.scheduleSave(graph, for: url) }
             GraphStore.shared.flushPendingSave()
+            if let exportPath = config.exportGraphPath {
+                do {
+                    try HeadlessRunnerConfig.exportGraph(graph, to: exportPath)
+                    log.info("[Headless] exported merged graph → \(exportPath, privacy: .public)")
+                } catch {
+                    log.error("[Headless] export-graph failed: \(error.localizedDescription, privacy: .public)")
+                    exit(5)
+                }
+            }
         }
 
         let total = Date().timeIntervalSince(runStart)
@@ -297,12 +396,22 @@ final class HeadlessRunner {
             log.error("[Headless] --etr: no embedding backend configured; skipping ETR")
             return
         }
+        if aiService.selectedEmbeddingBackendType == .embeddingGateway {
+            log.info("[Headless] ETR embedding gateway: \(aiService.embeddingGatewayBaseURL, privacy: .public)")
+        }
         let llmBackend = aiService.createBackend()
         if llmBackend == nil {
             log.warning("[Headless] --etr: no LLM backend; adjudication band will be dropped")
         }
 
         let thresholds = config.etrThresholds ?? .default
+        let priorPrompt = PromptTemplates.adjudicationPromptVersion
+        if let v = config.etrPromptVersion {
+            PromptTemplates.adjudicationPromptVersion = v
+            log.info("[Headless] ETR adjudication prompt: \(v, privacy: .public)")
+        }
+        defer { PromptTemplates.adjudicationPromptVersion = priorPrompt }
+
         let etrStart = Date()
         log.info("[Headless] ETR start: embed=\(embeddingBackend.modelIdentifier, privacy: .public) dim=\(embeddingBackend.vectorDimension) pre-graph=\(graph.nodeCount)n/\(graph.edgeCount)e")
 

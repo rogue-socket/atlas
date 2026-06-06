@@ -67,6 +67,15 @@ class AIServiceManager {
             let baseURL = UserDefaults.standard.string(forKey: AppConstants.ollamaBaseURLKey) ?? "http://localhost:11434"
             log.info("[AIService] Using Ollama at \(baseURL)")
             return OpenAIBackend(apiKey: "", model: selectedModel, baseURL: baseURL + "/v1", displayName: "Ollama")
+        case .codexAgent:
+            let baseURL = UserDefaults.standard.string(forKey: AppConstants.codexAgentSidecarURLKey)
+                ?? AIBackendType.codexAgent.defaultBaseURL
+            let envModel = ProcessInfo.processInfo.environment["ATLAS_CODEX_AGENT_MODEL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let envReasoningEffort = ProcessInfo.processInfo.environment["ATLAS_CODEX_AGENT_REASONING_EFFORT"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let model = (envModel?.isEmpty == false) ? envModel! : selectedModel
+            let reasoningEffort = (envReasoningEffort?.isEmpty == false) ? envReasoningEffort : nil
+            log.info("[AIService] Using Codex Agent sidecar at \(baseURL) model=\(model) reasoningEffort=\(reasoningEffort ?? "<default>")")
+            return CodexAgentBackend(baseURL: baseURL, model: model, reasoningEffort: reasoningEffort)
         case .embeddingGateway:
             log.warning("[AIService] LAN Embedding Gateway is embedding-only")
             return nil
@@ -111,10 +120,10 @@ class AIServiceManager {
                 vectorDimension: OpenAIEmbeddingModelCatalog.vectorDimension(for: model),
                 baseURL: embeddingGatewayBaseURL
             )
-        case .claude:
-            // Claude has no embedding API as of 2026-05; ETR must use a
-            // different vendor when the chat backend is Claude.
-            log.warning("[AIService] Claude has no embedding API — ETR unavailable with this selection")
+        case .claude, .codexAgent:
+            // These chat backends have no embedding API; ETR must use a
+            // different vendor for vectors.
+            log.warning("[AIService] \(type.rawValue) has no embedding API — ETR unavailable with this selection")
             return nil
         case .openai, .ollama:
             // Deferred until ETR proves end-to-end with Gemini (per SCE-style
@@ -125,7 +134,12 @@ class AIServiceManager {
     }
 
     var embeddingGatewayBaseURL: String {
-        UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingGatewayBaseURLKey)
+        if let override = ProcessInfo.processInfo.environment["ATLAS_EMBEDDING_GATEWAY_BASE_URL"],
+           !override.isEmpty,
+           OpenAIEmbeddingModelCatalog.isValidBaseURL(override) {
+            return override
+        }
+        return UserDefaults.standard.string(forKey: AppConstants.aiEmbeddingGatewayBaseURLKey)
             ?? OpenAIEmbeddingModelCatalog.defaultBaseURL
     }
 
@@ -298,7 +312,7 @@ class AIServiceManager {
     }
 
     private func updateConfiguredState() {
-        if selectedBackendType == .ollama {
+        if selectedBackendType == .ollama || selectedBackendType == .codexAgent {
             isConfigured = true
         } else {
             isConfigured = getAPIKey(for: selectedBackendType) != nil

@@ -265,6 +265,104 @@ enum EmbeddingResolver {
     static func isExactLabelMatch(_ a: ConceptNode, _ b: ConceptNode) -> Bool {
         a.label.lowercased() == b.label.lowercased()
     }
+
+    // MARK: - Structural candidate boosts (ETR session 3)
+
+    /// Max total boost added to cosine similarity before classification.
+    static let structuralBoostCap: Float = 0.08
+
+    /// Non-embedding signals that lift borderline cross-doc pairs into the
+    /// adjudication band without changing embedding vectors. Capped so boosts
+    /// cannot force auto-merge on their own.
+    static func structuralBoost(a: ConceptNode, b: ConceptNode, graph: KnowledgeGraph) -> Float {
+        var boost: Float = 0
+        if hasAcronymOrTokenOverlap(a, b) { boost += 0.03 }
+        if sharesChapterContext(a, b, graph: graph) { boost += 0.04 }
+        if sharesNeighborLabel(a, b, graph: graph) { boost += 0.03 }
+        return min(boost, structuralBoostCap)
+    }
+
+    /// Uppercase initials of whitespace-separated words (e.g. "Lab Result
+    /// Communication" → "LRC") or a significant shared token between labels.
+    static func hasAcronymOrTokenOverlap(_ a: ConceptNode, _ b: ConceptNode) -> Bool {
+        let la = a.label.lowercased()
+        let lb = b.label.lowercased()
+        let acA = acronym(from: a.label)
+        let acB = acronym(from: b.label)
+        if acA.count >= 2, lb.contains(acA.lowercased()) { return true }
+        if acB.count >= 2, la.contains(acB.lowercased()) { return true }
+        let tokensA = significantLabelTokens(la)
+        let tokensB = significantLabelTokens(lb)
+        return !tokensA.isDisjoint(with: tokensB)
+    }
+
+    static func acronym(from label: String) -> String {
+        label.split(whereSeparator: { $0.isWhitespace || $0 == "-" || $0 == "/" })
+            .compactMap { word -> String? in
+                guard let c = word.first, c.isLetter else { return nil }
+                return String(c)
+            }
+            .joined()
+    }
+
+    private static let labelStopwords: Set<String> = [
+        "a", "an", "the", "and", "or", "of", "for", "to", "in", "on", "at", "by", "with"
+    ]
+
+    static func significantLabelTokens(_ loweredLabel: String) -> Set<String> {
+        Set(
+            loweredLabel.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+                .map(String.init)
+                .filter { $0.count >= 3 && !labelStopwords.contains($0) }
+        )
+    }
+
+    /// Both nodes sit under the same chapter node (including via concept parent).
+    static func sharesChapterContext(_ a: ConceptNode, _ b: ConceptNode,
+                                     graph: KnowledgeGraph) -> Bool {
+        let ca = chapterAncestorIDs(of: a, graph: graph)
+        let cb = chapterAncestorIDs(of: b, graph: graph)
+        return !ca.isDisjoint(with: cb)
+    }
+
+    static func chapterAncestorIDs(of node: ConceptNode, graph: KnowledgeGraph) -> Set<UUID> {
+        switch node.level {
+        case .chapter:
+            return [node.id]
+        case .concept:
+            return Set(graph.parents(of: node.id, edgeType: .containsConcept).map(\.id))
+        case .entity:
+            let concepts = graph.parents(of: node.id, edgeType: .containsEntity)
+            var chapters = Set<UUID>()
+            for concept in concepts {
+                chapters.formUnion(chapterAncestorIDs(of: concept, graph: graph))
+            }
+            return chapters
+        case .document:
+            return []
+        }
+    }
+
+    /// Non-containment neighbors share a label (e.g. sibling entities under
+    /// related concepts that mention the same vendor or role).
+    static func sharesNeighborLabel(_ a: ConceptNode, _ b: ConceptNode,
+                                    graph: KnowledgeGraph) -> Bool {
+        func semanticNeighborLabels(_ nodeID: UUID) -> Set<String> {
+            Set(
+                graph.edges(for: nodeID)
+                    .filter { !$0.type.isContainment }
+                    .compactMap { edge -> ConceptNode? in
+                        let neighborID = edge.sourceNodeID == nodeID ? edge.targetNodeID : edge.sourceNodeID
+                        return graph.node(for: neighborID)
+                    }
+                    .filter { $0.level == .concept || $0.level == .entity }
+                    .map { $0.label.lowercased() }
+            )
+        }
+        let na = semanticNeighborLabels(a.id)
+        let nb = semanticNeighborLabels(b.id)
+        return !na.isDisjoint(with: nb)
+    }
 }
 
 // MARK: - Async orchestrator
@@ -360,11 +458,23 @@ extension EmbeddingResolver {
         // adjudication. Rejects (sim < floor) skipped — adding them would
         // bloat the file from ~100 entries to tens of thousands.
         var auditEntries: [ResolverAuditEntry] = []
+        var structuralBoostCount = 0
+        var structuralBandLiftCount = 0
 
         for (aID, bID) in pairs {
             guard let va = resolved[aID], let vb = resolved[bID],
                   let a = nodesByID[aID], let b = nodesByID[bID] else { continue }
-            let sim = EmbeddingMath.cosineSimilarity(va, vb)
+            let cosine = EmbeddingMath.cosineSimilarity(va, vb)
+            let boost = structuralBoost(a: a, b: b, graph: graph)
+            let sim = min(cosine + boost, 1.0)
+            let kind = pairKind(a, b)
+            if boost > 0 {
+                structuralBoostCount += 1
+                if classify(similarity: cosine, pairKind: kind, thresholds: thresholds) == .reject,
+                   classify(similarity: sim, pairKind: kind, thresholds: thresholds) != .reject {
+                    structuralBandLiftCount += 1
+                }
+            }
 
             if isExactLabelMatch(a, b) {
                 autoMerges.append(MergeDecision(aID: aID, bID: bID, similarity: sim, reason: .exactLabel))
@@ -377,7 +487,6 @@ extension EmbeddingResolver {
                 }
                 continue
             }
-            let kind = pairKind(a, b)
             switch classify(similarity: sim, pairKind: kind, thresholds: thresholds) {
             case .autoMerge:
                 autoMerges.append(MergeDecision(aID: aID, bID: bID, similarity: sim, reason: .highSimilarity))
@@ -394,6 +503,9 @@ extension EmbeddingResolver {
             case .reject:
                 continue
             }
+        }
+        if structuralBoostCount > 0 {
+            log.info("[ETR] structural_boost: pairs=\(structuralBoostCount) band_lift=\(structuralBandLiftCount)")
         }
         log.info("[ETR] auto-merges: \(autoMerges.count); adjudication candidates: \(adjudicationCandidates.count)")
 
@@ -436,24 +548,40 @@ extension EmbeddingResolver {
                     continue
                 }
                 let prompt = PromptTemplates.mergeAdjudication(pairs: pairsForPrompt)
-                let raw = try await generateWithRetry(llm: llm, prompt: prompt)
-                let decisions = try PromptTemplates.parseMergeAdjudicationResponse(raw, expectedCount: pairsForPrompt.count)
-                for (cand, merge) in zip(batch, decisions) {
-                    if merge {
-                        adjudicated.append(MergeDecision(aID: cand.aID, bID: cand.bID,
-                                                         similarity: cand.similarity, reason: .llmAdjudicated))
+                do {
+                    let raw = try await generateWithRetry(llm: llm, prompt: prompt)
+                    let decisions = try PromptTemplates.parseMergeAdjudicationResponse(raw, expectedCount: pairsForPrompt.count)
+                    for (cand, merge) in zip(batch, decisions) {
+                        if merge {
+                            adjudicated.append(MergeDecision(aID: cand.aID, bID: cand.bID,
+                                                             similarity: cand.similarity, reason: .llmAdjudicated))
+                        }
+                        if auditOutputDir != nil,
+                           let a = nodesByID[cand.aID], let b = nodesByID[cand.bID] {
+                            auditEntries.append(makeAuditEntry(
+                                a: a, b: b, sim: cand.similarity,
+                                band: "adjudication",
+                                exactLabel: false,
+                                llmVerdict: merge ? "approved" : "rejected",
+                                finalReason: merge ? MergeReason.llmAdjudicated.rawValue : nil))
+                        }
                     }
-                    if auditOutputDir != nil,
-                       let a = nodesByID[cand.aID], let b = nodesByID[cand.bID] {
-                        auditEntries.append(makeAuditEntry(
-                            a: a, b: b, sim: cand.similarity,
-                            band: "adjudication",
-                            exactLabel: false,
-                            llmVerdict: merge ? "approved" : "rejected",
-                            finalReason: merge ? MergeReason.llmAdjudicated.rawValue : nil))
+                    log.info("[ETR] adjudication batch [\(batchStart)..<\(batchStart + batch.count)]: \(decisions.filter { $0 }.count)/\(decisions.count) approved")
+                } catch {
+                    log.error("[ETR] adjudication batch [\(batchStart)..<\(batchStart + batch.count)] failed: \(error.localizedDescription, privacy: .public); keeping deterministic merge decisions")
+                    if auditOutputDir != nil {
+                        for cand in batch {
+                            if let a = nodesByID[cand.aID], let b = nodesByID[cand.bID] {
+                                auditEntries.append(makeAuditEntry(
+                                    a: a, b: b, sim: cand.similarity,
+                                    band: "adjudication",
+                                    exactLabel: false,
+                                    llmVerdict: "error",
+                                    finalReason: nil))
+                            }
+                        }
                     }
                 }
-                log.info("[ETR] adjudication batch [\(batchStart)..<\(batchStart + batch.count)]: \(decisions.filter { $0 }.count)/\(decisions.count) approved")
             }
         }
 
@@ -557,8 +685,9 @@ extension EmbeddingResolver {
     /// "network connection was lost" mid-batch.
     ///
     /// Policy: 3 attempts total, exponential backoff (1s → 3s). Logical
-    /// errors (`AIError.decodingError`, `AIError.invalidResponse`) bypass
-    /// retry — those don't get better on retry. Everything else retries.
+    /// errors (`AIError.decodingError`, `AIError.invalidResponse`) and
+    /// client/quota HTTP errors bypass retry — those don't get better on
+    /// retry. Network errors and 5xx retry.
     /// `maxAttempts` is exposed for tests.
     static func generateWithRetry(
         llm: any AtlasModel,
@@ -573,6 +702,9 @@ extension EmbeddingResolver {
                 switch error {
                 case .decodingError, .invalidResponse:
                     throw error  // logical; retry won't help
+                case .httpError(let statusCode, _):
+                    if statusCode < 500 { throw error }
+                    lastError = error
                 default:
                     lastError = error
                 }

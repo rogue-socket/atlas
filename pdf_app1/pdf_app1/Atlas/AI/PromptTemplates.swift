@@ -406,8 +406,17 @@ enum PromptTemplates {
     /// recovered 1 of 6 target merges and worsened worst-case trap count
     /// (`audits/2026-05-18_v5-prompt-experiment.md`). All versions share
     /// the pair-format helper and the final JSON-array instruction wrapper.
+    /// Headless override via `--etr-prompt v2|v3|v4` or env `ATLAS_ETR_ADJUDICATION_PROMPT`.
+    static var adjudicationPromptVersion: String?
+
     static func mergeAdjudication(pairs: [(a: ConceptNode, b: ConceptNode)]) -> String {
-        return mergeAdjudicationV4(pairs: pairs)
+        let version = adjudicationPromptVersion
+            ?? ProcessInfo.processInfo.environment["ATLAS_ETR_ADJUDICATION_PROMPT"]
+        switch version?.lowercased() {
+        case "v2": return mergeAdjudicationV2(pairs: pairs)
+        case "v3": return mergeAdjudicationV3(pairs: pairs)
+        default: return mergeAdjudicationV4(pairs: pairs)
+        }
     }
 
     /// Pair formatter shared by every prompt revision.

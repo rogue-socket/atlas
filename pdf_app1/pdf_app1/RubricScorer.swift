@@ -161,6 +161,7 @@ enum RubricScorer {
         log.info("[Rubric] precision = TP/(TP+FP) = \(String(format: "%.3f", precision), privacy: .public)")
         log.info("[Rubric] recall    = TP/(TP+FN) = \(String(format: "%.3f", recall), privacy: .public)")
         log.info("[Rubric] precision/recall are over located pairs only; MISSING (\(missing)) excluded")
+        print("RUBRIC_SCORECARD TP=\(tp) FP=\(fp) FN=\(fn) TN=\(tn) MISSING=\(missing) TOTAL=\(pairs.count) precision=\(String(format: "%.3f", precision)) recall=\(String(format: "%.3f", recall))")
         exit(0)
     }
 

@@ -103,17 +103,17 @@ class DocumentManager: ObservableObject {
     
     // MARK: - Document Management
     @discardableResult
-    func openDocument(_ url: URL, projectID: UUID? = nil) -> OpenResult {
-        guard canAddDocument else {
-            log.warning("[DocManager] openDocument rejected: too many tabs (\(self.documents.count)/\(self.maxOpenDocuments))")
-            return .tooManyTabs
-        }
-
+    func openDocument(_ url: URL, projectID: UUID? = nil, securityScopedAccessStarted: Bool = false) -> OpenResult {
         // Check if already open
         if documents.contains(where: { $0.url == url }) {
             log.info("[DocManager] openDocument: already open, selecting \(url.lastPathComponent)")
             selectDocument(url: url)
             return .alreadyOpen
+        }
+
+        guard canAddDocument else {
+            log.warning("[DocManager] openDocument rejected: too many tabs (\(self.documents.count)/\(self.maxOpenDocuments))")
+            return .tooManyTabs
         }
 
         guard FileManager.default.isReadableFile(atPath: url.path) else {
@@ -125,7 +125,8 @@ class DocumentManager: ObservableObject {
             return .invalidPDF
         }
 
-        let pdfDoc = PDFDocumentItem(url: url, document: document, projectID: projectID)
+        let pdfDoc = PDFDocumentItem(url: url, document: document, projectID: projectID,
+                                     needsScopeRelease: securityScopedAccessStarted)
         documents.append(pdfDoc)
         selectedDocumentID = pdfDoc.id
         recentFilesManager.addRecentFile(url)

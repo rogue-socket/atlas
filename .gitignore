@@ -6,6 +6,7 @@ DerivedData/
 *.dSYM.zip
 *.dSYM
 build/
+runs/
 
 # macOS
 .DS_Store

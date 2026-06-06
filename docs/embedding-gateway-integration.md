@@ -4,7 +4,14 @@ Atlas supports the LAN OpenAI-compatible embedding gateway as an ETR embedding b
 
 ## Gateway
 
-- Base URL: `http://192.168.1.14:8200/v1`
+- Host: `lv` (LAN machine; service `embedding-gateway.service`)
+- Base URL: `http://192.168.1.14:8200/v1` (default in app; override if your route differs)
+- Env override (headless/scripts): `ATLAS_EMBEDDING_GATEWAY_BASE_URL`
+- Connectivity helper (probes LAN, else `ssh -L 18200:127.0.0.1:8200 lv`):
+
+```sh
+eval "$(./scripts/ensure_embedding_gateway.sh)"
+```
 - Endpoint: `POST /embeddings`
 - API key: `none` by default
 - Default model: `bge-base-en-v1.5`
@@ -47,6 +54,25 @@ defaults write rogues.pdf-app1 atlas.ai.embedding.model all-minilm-l6-v2
 ```
 
 ## Evaluation
+
+Run ETR on an already-extracted project (fast threshold loop; embedding cache warms across runs):
+
+```sh
+cd pdf_app1
+xcodebuild -project pdf_app1.xcodeproj -scheme pdf_app1 -configuration Debug -derivedDataPath build build
+./build/Build/Products/Debug/pdf_app1.app/Contents/MacOS/pdf_app1 --headless-extract --project vitacare --etr-only \
+  --export-graph /tmp/vitacare-post-etr.json
+./build/Build/Products/Debug/pdf_app1.app/Contents/MacOS/pdf_app1 --headless-extract --score-rubric /tmp/vitacare-post-etr.json
+```
+
+Batch sweep (several `--adj-floor` values + rubric scorecards):
+
+```sh
+cd atlas-etr-cross-doc && chmod +x scripts/etr_threshold_sweep.sh
+ATLAS_EMBEDDING_GATEWAY_BASE_URL=http://192.168.1.14:8200/v1 ./scripts/etr_threshold_sweep.sh
+```
+
+Holdout (`pp1`): only after tuning on vitacare — `ETR_PROJECT=pp1 ./scripts/etr_threshold_sweep.sh` with a single chosen threshold; do not grid-search on holdout.
 
 Run the same extracted project through ETR with at least two models, preserving logs separately.
 

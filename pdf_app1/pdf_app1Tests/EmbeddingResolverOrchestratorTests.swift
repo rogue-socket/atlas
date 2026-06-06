@@ -182,6 +182,37 @@ final class EmbeddingResolverOrchestratorTests: XCTestCase {
         XCTAssertTrue(plan.decisions.isEmpty)
     }
 
+    func test_resolve_adjudicationFailure_keepsDeterministicMerges() async throws {
+        let projectID = UUID()
+        defer { wipeCacheFile(for: projectID) }
+        let g = KnowledgeGraph()
+        let exactA = ConceptNode(label: "Helena Vargas", type: .person, summary: nil,
+                                 sourceAnchors: [anchor("/A.pdf")], level: .entity)
+        let exactB = ConceptNode(label: "helena vargas", type: .person, summary: nil,
+                                 sourceAnchors: [anchor("/B.pdf")], level: .entity)
+        let needsLLMA = ConceptNode(label: "Telehealth", type: .concept, summary: nil,
+                                    sourceAnchors: [anchor("/A.pdf")], level: .concept)
+        let needsLLMB = ConceptNode(label: "Virtual Care", type: .concept, summary: nil,
+                                    sourceAnchors: [anchor("/B.pdf")], level: .concept)
+        [exactA, exactB, needsLLMA, needsLLMB].forEach { g.addNode($0) }
+
+        let backend = FakeEmbeddingBackend(dim: 3) { text in
+            if text.contains("Telehealth") { return [1, 0, 0] }
+            if text.contains("Virtual Care") { return [0.87, sqrt(1 - 0.87 * 0.87), 0] }
+            return [0, 0, 1]
+        }
+        let llm = FlakyLLMBackend(failureCount: 1,
+                                  errorToThrow: AIError.decodingError("invalid adjudication JSON"))
+
+        let plan = try await EmbeddingResolver.resolve(graph: g, projectID: projectID,
+                                                       embeddingBackend: backend,
+                                                       llmBackend: llm)
+
+        XCTAssertEqual(plan.decisions.count, 1)
+        XCTAssertEqual(plan.decisions.first?.reason, .exactLabel)
+        XCTAssertEqual(llm.callCount, 1)
+    }
+
     // MARK: - generateWithRetry
 
     /// Throws AIError.networkError on the first `failureCount` calls, then
@@ -252,6 +283,26 @@ final class EmbeddingResolverOrchestratorTests: XCTestCase {
             XCTFail("Wrong error type: \(error)")
         }
         XCTAssertEqual(llm.callCount, 1, "decodingError should NOT trigger retry")
+    }
+
+    func test_generateWithRetry_doesNotRetryOnHTTP429() async {
+        let llm = FlakyLLMBackend(
+            failureCount: 5,
+            errorToThrow: AIError.httpError(statusCode: 429, message: "quota exhausted")
+        )
+        do {
+            _ = try await EmbeddingResolver.generateWithRetry(llm: llm, prompt: "x", maxAttempts: 3)
+            XCTFail("Expected throw")
+        } catch let error as AIError {
+            if case .httpError(let code, _) = error {
+                XCTAssertEqual(code, 429)
+            } else {
+                XCTFail("Wrong error: \(error)")
+            }
+        } catch {
+            XCTFail("Wrong error type: \(error)")
+        }
+        XCTAssertEqual(llm.callCount, 1, "HTTP 429 should not trigger retry")
     }
 
     // MARK: - Audit trail

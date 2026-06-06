@@ -112,6 +112,8 @@ struct AppConstants {
     static let aiModelKey = "atlas.ai.model"
     /// UserDefaults key for Ollama base URL override
     static let ollamaBaseURLKey = "atlas.ollama.baseURL"
+    /// UserDefaults key for the Codex Agent sidecar base URL override
+    static let codexAgentSidecarURLKey = "atlas.codexAgentSidecar.baseURL"
     /// UserDefaults key for the ETR embedding backend type (nil = ETR disabled)
     static let aiEmbeddingBackendTypeKey = "atlas.ai.embedding.backendType"
     /// UserDefaults key for the ETR embedding model identifier
@@ -126,6 +128,8 @@ struct AppConstants {
 
 extension Notification.Name {
     static let openNewDocument = Notification.Name("OpenNewDocument")
+    /// Finder / `open -a pdf_app1 file.pdf` handoff — URLs are security-scoped.
+    static let openDocumentsFromURLs = Notification.Name("OpenDocumentsFromURLs")
     static let openDocumentInNewWindow = Notification.Name("OpenDocumentInNewWindow")
     static let navigateToPage = Notification.Name("NavigateToPage")
     static let closeCurrentTab = Notification.Name("CloseCurrentTab")

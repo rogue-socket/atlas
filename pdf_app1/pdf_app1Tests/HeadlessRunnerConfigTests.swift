@@ -164,4 +164,13 @@ final class HeadlessRunnerConfigTests: XCTestCase {
         XCTAssertEqual(t?.adjudicationFloorPerKind[.conceptConcept], 0.90,
                        "per-kind override is layered on top")
     }
+
+    func test_parse_exportGraphPath() {
+        let c = HeadlessRunnerConfig.parse(from: [
+            "--headless-extract", "--project", "vitacare", "--etr-only",
+            "--export-graph", "/tmp/vitacare-post-etr.json"
+        ])
+        XCTAssertEqual(c?.exportGraphPath, "/tmp/vitacare-post-etr.json")
+        XCTAssertTrue(c?.etrOnly == true)
+    }
 }

@@ -28,6 +28,15 @@ final class HeadlessAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.inject?(NSApplication.shared)
     }
+
+    /// Finder double-click or `open -a pdf_app1 file.pdf` — grants per-file access
+    /// (Atlas does not use a blanket Documents-folder entitlement).
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard HeadlessRunnerConfig.parse(from: CommandLine.arguments) == nil else { return }
+        let pdfs = urls.filter { $0.pathExtension.lowercased() == "pdf" }
+        guard !pdfs.isEmpty else { return }
+        NotificationCenter.default.post(name: .openDocumentsFromURLs, object: pdfs)
+    }
 }
 
 @main
