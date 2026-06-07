@@ -44,8 +44,8 @@ Living TODO list. Status tags: `[active]`, `[next]`, `[blocked: <reason>]`, no t
 
 - 2026-06-07 — **Map renderer perf cleanup continued.** Completed GitHub issues #28 and #27 on `feature/sce-cross-doc`: `MapCanvasRenderer` now skips group-background work when there are no concept/entity groups, consumes a `RenderCache` for sorted nodes, semantic edges, entity counts, and child-node membership, and `KnowledgeMapView` refreshes that cache alongside the existing layout recompute path. Also removed stale `ScrollTracker` and the unreachable `SidebarPanel.projectCorrelations` branch. Verification: `MapInteractionTests` `13 tests, 0 failures`; `AppConstantsTests` `11 tests, 0 failures`; Debug builds passed; pushed through `451c44b`.
 
-## Active / Next
+- 2026-06-07 — **ForceDirectedLayout convergence/perf cleanup complete (#29).** Layout now preserves existing node positions across recomputes, uses an adaptive iteration budget with 10-stable-iteration convergence, caches group centers with membership-aware invalidation, and exits node/cluster overlap resolution when movement stabilizes. Verification: `ForceDirectedLayoutTests` + `ClusterOverlapTests` `6 tests, 0 failures`; full XCTest `413 tests, 0 failures`; `git diff --check` clean.
 
-- [next] **ForceDirectedLayout: convergence early-exit, position preservation, and cached group centers (#29).** Implement position preservation for existing nodes, adaptive/convergent iteration exits for layout and overlap resolution, and cached group centers keyed by group IDs. Acceptance from the issue: zoom switches should not visibly reshuffle preserved nodes; small graphs should finish layout in well under 100ms; converged graphs should stop before the old fixed 500-iteration budget.
+## Active / Next
 
 ## Deferred Cleanup

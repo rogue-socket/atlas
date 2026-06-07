@@ -39,8 +39,11 @@ class ForceDirectedLayout {
     private let parentAttractionConstant: Double = 0.006 // entities pulled toward parent concept (3x group)
     private let dampingFactor: Double = 0.8
     private let minMovement: Double = 0.3
+    private let convergenceStableIterations: Int = 10
     private let maxIterations: Int
     private let nodeSpacing: Double = 180 // minimum pixel distance between node centers
+    private var groupCenterCacheKey: GroupCenterCacheKey?
+    private var cachedGroupCenters: [String: CGPoint] = [:]
 
     init(maxIterations: Int = AppConstants.layoutMaxIterations) {
         self.maxIterations = maxIterations
@@ -103,19 +106,11 @@ class ForceDirectedLayout {
         }
 
         let groups = Dictionary(grouping: nodes, by: { groupKey(for: $0) })
-        let groupNames = groups.keys.sorted()
-        var groupCenters: [String: CGPoint] = [:]
-        // Group centers fall on the band of the first member node (used by
-        // group attraction during FDL iteration so members are pulled to a
-        // representative point within their band).
-        for (gk, members) in groups {
-            guard let first = members.first else { continue }
-            let bandY = LevelBandSeeder.bandY(for: first.level, canvasHeight: virtualSize.height)
-            let xs = members.compactMap { seedPositions[$0.id]?.x }
-            let centerX = xs.isEmpty ? virtualSize.width / 2 : xs.reduce(0, +) / Double(xs.count)
-            groupCenters[gk] = CGPoint(x: centerX, y: bandY)
-        }
-        _ = groupNames  // retained for ordering parity; group centers above are keyed by groupKey
+        let groupCenters = groupCenters(
+            for: groups,
+            seedPositions: seedPositions,
+            virtualSize: virtualSize
+        )
 
         // Initialize positions (only for newly-seen nodes — existing entries
         // are kept untouched so tab switches don't move them).
@@ -153,13 +148,27 @@ class ForceDirectedLayout {
         isConverged = false
         iteration = 0
         let k = max(nodeSpacing, sqrt(virtualSize.width * virtualSize.height / Double(nodes.count)))
+        let iterationBudget = adaptiveIterationBudget(nodeCount: nodes.count)
+        var stableIterations = 0
 
-        for _ in 0..<maxIterations {
+        for _ in 0..<iterationBudget {
             iteration += 1
-            let totalMovement = runIteration(nodes: nodes, edges: edges, k: k, virtualSize: virtualSize, groupCenters: groupCenters)
+            let totalMovement = runIteration(
+                nodes: nodes,
+                edges: edges,
+                k: k,
+                virtualSize: virtualSize,
+                groupCenters: groupCenters,
+                iterationBudget: iterationBudget
+            )
             if totalMovement < minMovement * Double(nodes.count) {
-                isConverged = true
-                break
+                stableIterations += 1
+                if stableIterations >= convergenceStableIterations {
+                    isConverged = true
+                    break
+                }
+            } else {
+                stableIterations = 0
             }
         }
 
@@ -171,14 +180,63 @@ class ForceDirectedLayout {
         resolveClusterOverlaps(nodes: nodes)
     }
 
+    private struct GroupCenterCacheKey: Equatable {
+        let groupSignatures: [String]
+        let virtualWidth: Int
+        let virtualHeight: Int
+    }
+
+    private func adaptiveIterationBudget(nodeCount: Int) -> Int {
+        guard maxIterations > 0 else { return 0 }
+        let scaledBudget = Int(ceil(log2(Double(max(nodeCount, 1) + 1)) * 18.0)) + convergenceStableIterations
+        return min(maxIterations, max(convergenceStableIterations, scaledBudget))
+    }
+
+    private func groupCenters(
+        for groups: [String: [ConceptNode]],
+        seedPositions: [UUID: CGPoint],
+        virtualSize: CGSize
+    ) -> [String: CGPoint] {
+        let groupSignatures = groups.map { groupID, members in
+            let memberIDs = members.map { $0.id.uuidString }.sorted().joined(separator: ",")
+            return "\(groupID):\(memberIDs)"
+        }.sorted()
+        let cacheKey = GroupCenterCacheKey(
+            groupSignatures: groupSignatures,
+            virtualWidth: Int(virtualSize.width.rounded()),
+            virtualHeight: Int(virtualSize.height.rounded())
+        )
+        if groupCenterCacheKey == cacheKey {
+            return cachedGroupCenters
+        }
+
+        var groupCenters: [String: CGPoint] = [:]
+        // Group centers fall on the band of the first member node (used by
+        // group attraction during FDL iteration so members are pulled to a
+        // representative point within their band).
+        for (groupID, members) in groups {
+            guard let first = members.first else { continue }
+            let bandY = LevelBandSeeder.bandY(for: first.level, canvasHeight: virtualSize.height)
+            let xs = members.compactMap { seedPositions[$0.id]?.x }
+            let centerX = xs.isEmpty ? virtualSize.width / 2 : xs.reduce(0, +) / Double(xs.count)
+            groupCenters[groupID] = CGPoint(x: centerX, y: bandY)
+        }
+
+        groupCenterCacheKey = cacheKey
+        cachedGroupCenters = groupCenters
+        return groupCenters
+    }
+
     private func runIteration(
         nodes: [ConceptNode],
         edges: [GraphEdge],
         k: Double,
         virtualSize: CGSize,
-        groupCenters: [String: CGPoint]
+        groupCenters: [String: CGPoint],
+        iterationBudget: Int
     ) -> Double {
-        let temperature = Double(maxIterations - iteration) / Double(maxIterations) * k * 2
+        let remainingIterations = max(iterationBudget - iteration, 0)
+        let temperature = Double(remainingIterations) / Double(max(iterationBudget, 1)) * k * 2
 
         var forces: [UUID: (dx: Double, dy: Double)] = [:]
         for node in nodes { forces[node.id] = (0, 0) }
@@ -337,19 +395,23 @@ class ForceDirectedLayout {
             return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
         }
 
-        func shiftCluster(_ conceptID: UUID, by delta: CGPoint) {
+        func shiftCluster(_ conceptID: UUID, by delta: CGPoint) -> Double {
+            var movement: Double = 0
             for id in memberIDs(of: conceptID) {
                 guard var pos = positions[id], !pos.isFixed else { continue }
                 pos.x += delta.x
                 pos.y += delta.y
+                movement += abs(delta.x) + abs(delta.y)
                 positions[id] = pos
             }
+            return movement
         }
 
         let conceptIDs = conceptNodes.map(\.id)
 
         for _ in 0..<30 {
             var anyOverlap = false
+            var totalMovement: Double = 0
 
             // Recompute bboxes each iteration since clusters shift
             var bboxes: [UUID: CGRect] = [:]
@@ -388,8 +450,8 @@ class ForceDirectedLayout {
                     let pushA = CGPoint(x: dx * pushAmount, y: dy * pushAmount)
                     let pushB = CGPoint(x: -dx * pushAmount, y: -dy * pushAmount)
 
-                    shiftCluster(idA, by: pushA)
-                    shiftCluster(idB, by: pushB)
+                    totalMovement += shiftCluster(idA, by: pushA)
+                    totalMovement += shiftCluster(idB, by: pushB)
 
                     // Refresh affected bboxes so subsequent comparisons in
                     // this iteration use up-to-date positions.
@@ -398,7 +460,7 @@ class ForceDirectedLayout {
                 }
             }
 
-            if !anyOverlap { break }
+            if !anyOverlap || totalMovement < minMovement { break }
         }
     }
 
@@ -407,6 +469,7 @@ class ForceDirectedLayout {
         let minDist = nodeSpacing * 0.8
         for _ in 0..<20 {
             var anyOverlap = false
+            var totalMovement: Double = 0
             for i in 0..<nodes.count {
                 for j in (i + 1)..<nodes.count {
                     guard var posA = positions[nodes[i].id], var posB = positions[nodes[j].id] else { continue }
@@ -418,12 +481,22 @@ class ForceDirectedLayout {
                         let push = (minDist - dist) / 2
                         let nx = dx / dist
                         let ny = dy / dist
-                        if !posA.isFixed { posA.x += nx * push; posA.y += ny * push; positions[nodes[i].id] = posA }
-                        if !posB.isFixed { posB.x -= nx * push; posB.y -= ny * push; positions[nodes[j].id] = posB }
+                        if !posA.isFixed {
+                            posA.x += nx * push
+                            posA.y += ny * push
+                            totalMovement += push * 2
+                            positions[nodes[i].id] = posA
+                        }
+                        if !posB.isFixed {
+                            posB.x -= nx * push
+                            posB.y -= ny * push
+                            totalMovement += push * 2
+                            positions[nodes[j].id] = posB
+                        }
                     }
                 }
             }
-            if !anyOverlap { break }
+            if !anyOverlap || totalMovement < minMovement { break }
         }
     }
 
