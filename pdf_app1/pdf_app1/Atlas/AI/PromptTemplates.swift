@@ -534,7 +534,7 @@ enum PromptTemplates {
         return """
         You are creating a guided learning tour for a concept map from "\(documentTitle)".
 
-        Choose an ordered path of up to \(maxStops) stops. Start with the most foundational document or chapter node when available, then walk through the major themes in a pedagogically sensible order. Include contextual transition narration so the student understands why the next stop follows from the previous one.
+        Choose an ordered path of up to \(maxStops) stops. Start with the most foundational document or chapter node when available, then walk through the major themes in a pedagogically sensible order. Include a short introduction explaining what the tour covers and why it matters, plus contextual transition narration so the student understands why each stop follows from the previous one.
 
         Candidate nodes:
         \(nodeList)
@@ -544,6 +544,7 @@ enum PromptTemplates {
 
         Return ONLY valid JSON in this exact shape:
         {
+          "introduction": "2 sentences introducing the document's learning arc and how to use the tour",
           "stops": [
             {
               "nodeID": "copy one candidate id exactly",
@@ -555,6 +556,7 @@ enum PromptTemplates {
         Requirements:
         - Use only nodeID values from the candidate list.
         - Do not repeat nodes.
+        - Introduction should be student-facing and specific to the document.
         - Narration should be student-facing and specific to the labels.
         - Include transition language such as "Now that you understand..." when moving between themes.
         - Return JSON only, no markdown.

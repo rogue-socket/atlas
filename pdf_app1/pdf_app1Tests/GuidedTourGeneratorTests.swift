@@ -43,6 +43,7 @@ final class GuidedTourGeneratorTests: XCTestCase {
         let backend = MockGuidedTourBackend()
         backend.rawResponse = """
         {
+          "introduction": "This tour explains the document arc before moving into foundations.",
           "stops": [
             {"nodeID": "\(document.id.uuidString)", "narration": "Start with the document overview."},
             {"nodeID": "\(UUID().uuidString)", "narration": "Unknown node should be ignored."},
@@ -55,6 +56,7 @@ final class GuidedTourGeneratorTests: XCTestCase {
         let tour = await GuidedTourGenerator.generate(graph: graph, documentURL: docURL, backend: backend)
 
         XCTAssertEqual(tour?.generatedByModel, "mock-tour")
+        XCTAssertEqual(tour?.introduction, "This tour explains the document arc before moving into foundations.")
         XCTAssertEqual(tour?.stops.map(\.nodeID), [document.id, chapter.id])
         XCTAssertEqual(tour?.stops.first?.title, "Tour Document")
         XCTAssertEqual(backend.prompts.count, 1)
@@ -69,6 +71,7 @@ final class GuidedTourGeneratorTests: XCTestCase {
         let tour = await GuidedTourGenerator.generate(graph: graph, documentURL: docURL, backend: backend, maxStops: 2)
 
         XCTAssertEqual(tour?.generatedByModel, "mock-tour-fallback")
+        XCTAssertTrue(tour?.introduction.contains("tour.pdf") == true)
         XCTAssertEqual(tour?.stops.map(\.nodeID), [document.id, chapter.id])
         XCTAssertTrue(tour?.stops.last?.narration.contains("Now that") == true)
     }

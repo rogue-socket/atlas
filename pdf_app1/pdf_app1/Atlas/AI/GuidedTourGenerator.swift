@@ -12,6 +12,7 @@ private let tourLog = AtlasLogger.pipeline
 
 enum GuidedTourGenerator {
     private struct TourResponse: Decodable {
+        let introduction: String?
         let stops: [TourStopResponse]
     }
 
@@ -55,8 +56,10 @@ enum GuidedTourGenerator {
             guard !stops.isEmpty else {
                 return fallbackTour(candidates: candidates, documentURL: documentURL, backend: backend, maxStops: maxStops)
             }
+            let introduction = parsed.introduction?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return GuidedTour(
                 documentURL: documentURL,
+                introduction: introduction.isEmpty ? defaultIntroduction(documentTitle: documentURL.lastPathComponent) : introduction,
                 stops: Array(stops.prefix(maxStops)),
                 generatedByModel: backend.modelIdentifier
             )
@@ -105,9 +108,14 @@ enum GuidedTourGenerator {
         }
         return GuidedTour(
             documentURL: documentURL,
+            introduction: defaultIntroduction(documentTitle: documentURL.lastPathComponent),
             stops: stops,
             generatedByModel: "\(backend.modelIdentifier)-fallback"
         )
+    }
+
+    private static func defaultIntroduction(documentTitle: String) -> String {
+        "This tour introduces the main ideas in \(documentTitle) and lets you choose between the recommended learning path and related side topics."
     }
 }
 

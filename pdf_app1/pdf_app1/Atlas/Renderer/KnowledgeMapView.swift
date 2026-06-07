@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AppKit
 import PDFKit
 import os.log
 import UniformTypeIdentifiers
@@ -18,6 +19,20 @@ private struct LayoutKey: Equatable {
     let zoomLevel: SemanticZoomLevel
 
     var nodeCount: Int { nodeSignatures.count }
+}
+
+private struct GuidedTourFocus: Equatable {
+    let nodeID: UUID
+    let title: String
+    let narration: String
+    let linearIndex: Int?
+}
+
+private struct GuidedTourChoice: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let destination: GuidedTourFocus
 }
 
 struct MapLayoutComputationKey: Equatable {
@@ -65,7 +80,12 @@ struct KnowledgeMapView: View {
 
     @State private var cachedRenderCache: MapCanvasRenderer.RenderCache = .empty
     @State private var isTourVisible = false
+    @State private var isTourIntroVisible = false
     @State private var tourStopIndex = 0
+    @State private var tourFocus: GuidedTourFocus?
+    @State private var tourBackStack: [GuidedTourFocus] = []
+    @State private var speechSynthesizer = NSSpeechSynthesizer()
+    @AppStorage("atlas.guidedTour.voice.enabled") private var isTourVoiceEnabled = true
 
     // Callback to navigate PDF (set by parent). Source document URL is
     // first so the parent can route to the right tab when the clicked
@@ -94,16 +114,19 @@ struct KnowledgeMapView: View {
         graph.guidedTour(for: documentURL)
     }
 
-    private var activeTourStop: GuidedTourStop? {
+    private var activeTourFocus: GuidedTourFocus? {
+        if let tourFocus {
+            return tourFocus
+        }
         guard let tour = activeTour,
               tour.stops.indices.contains(tourStopIndex) else { return nil }
-        return tour.stops[tourStopIndex]
+        return Self.focus(for: tour.stops[tourStopIndex], index: tourStopIndex)
     }
 
     private var highlightedNodeIDs: Set<UUID> {
         var ids = filteredNodeIDs
-        if isTourVisible, let stop = activeTourStop {
-            ids.insert(stop.nodeID)
+        if isTourVisible, !isTourIntroVisible, let focus = activeTourFocus {
+            ids.insert(focus.nodeID)
         }
         return ids
     }
@@ -178,9 +201,14 @@ struct KnowledgeMapView: View {
                 if pipeline.isProcessing {
                     processingIndicator
                         .padding(8)
-                } else if isTourVisible, let tour = activeTour, let stop = activeTourStop {
-                    guidedTourOverlay(tour: tour, stop: stop, canvasSize: geometry.size)
-                        .padding(8)
+                } else if isTourVisible, let tour = activeTour {
+                    if isTourIntroVisible {
+                        guidedTourIntroOverlay(tour: tour, canvasSize: geometry.size)
+                            .padding(8)
+                    } else if let focus = activeTourFocus {
+                        guidedTourOverlay(tour: tour, focus: focus, canvasSize: geometry.size)
+                            .padding(8)
+                    }
                 } else if pipeline.scannedPDFDetected && graph.nodeCount == 0 {
                     scannedPDFBanner
                         .padding(8)
@@ -188,7 +216,9 @@ struct KnowledgeMapView: View {
             }
             // Bottom-left: selected node detail
             .overlay(alignment: .bottomLeading) {
-                if let nodeID = interaction.selectedNodeID, let node = graph.node(for: nodeID) {
+                if !isTourVisible,
+                   let nodeID = interaction.selectedNodeID,
+                   let node = graph.node(for: nodeID) {
                     selectedNodeDetail(node)
                         .padding(8)
                 }
@@ -239,8 +269,14 @@ struct KnowledgeMapView: View {
             }
             .onChange(of: activeTour?.id) { _, newID in
                 if newID == nil {
-                    isTourVisible = false
-                    tourStopIndex = 0
+                    finishTour()
+                }
+            }
+            .onChange(of: isTourVoiceEnabled) { _, enabled in
+                if enabled {
+                    speakCurrentTourText()
+                } else {
+                    stopTourSpeech()
                 }
             }
             .alert("Export Failed", isPresented: exportErrorPresented) {
@@ -840,13 +876,30 @@ struct KnowledgeMapView: View {
 
     private func startTour(canvasSize: CGSize) {
         guard let tour = activeTour, !tour.stops.isEmpty else { return }
+        stopTourSpeech()
         tourStopIndex = 0
+        tourFocus = nil
+        tourBackStack = []
+        isTourIntroVisible = true
         isTourVisible = true
-        applyTourStop(tour.stops[0], canvasSize: canvasSize)
+        interaction.selectedNodeID = nil
+        speakTourText(tourIntroduction(tour))
     }
 
-    private func applyTourStop(_ stop: GuidedTourStop, canvasSize: CGSize) {
-        guard let node = graph.node(for: stop.nodeID) else { return }
+    private func beginTourStops(tour: GuidedTour, canvasSize: CGSize) {
+        guard let firstStop = tour.stops.first else { return }
+        let focus = Self.focus(for: firstStop, index: 0)
+        tourBackStack = []
+        applyTourFocus(focus, canvasSize: canvasSize)
+    }
+
+    private func applyTourFocus(_ focus: GuidedTourFocus, canvasSize: CGSize) {
+        guard let node = graph.node(for: focus.nodeID) else { return }
+        isTourIntroVisible = false
+        tourFocus = focus
+        if let index = focus.linearIndex {
+            tourStopIndex = index
+        }
         graph.expandAncestors(of: node.id)
         let targetZoomLevel = Self.zoomLevel(for: node.level)
         zoomLevel = targetZoomLevel
@@ -855,68 +908,287 @@ struct KnowledgeMapView: View {
             interaction.center(on: node.id, layout: layout, canvasSize: canvasSize)
             interaction.selectedNodeID = node.id
         }
+        speakTourText(focus.narration)
     }
 
-    private func moveTour(by delta: Int, canvasSize: CGSize) {
-        guard let tour = activeTour else { return }
-        let nextIndex = tourStopIndex + delta
-        guard tour.stops.indices.contains(nextIndex) else { return }
-        tourStopIndex = nextIndex
-        applyTourStop(tour.stops[nextIndex], canvasSize: canvasSize)
+    private func chooseTourDestination(_ destination: GuidedTourFocus, canvasSize: CGSize) {
+        if let current = activeTourFocus {
+            tourBackStack.append(current)
+        }
+        applyTourFocus(destination, canvasSize: canvasSize)
     }
 
-    private func guidedTourOverlay(tour: GuidedTour, stop: GuidedTourStop, canvasSize: CGSize) -> some View {
+    private func moveTourBack(canvasSize: CGSize) {
+        guard let previous = tourBackStack.popLast() else { return }
+        applyTourFocus(previous, canvasSize: canvasSize)
+    }
+
+    private func finishTour() {
+        isTourVisible = false
+        isTourIntroVisible = false
+        tourStopIndex = 0
+        tourFocus = nil
+        tourBackStack = []
+        stopTourSpeech()
+    }
+
+    private func guidedTourIntroOverlay(tour: GuidedTour, canvasSize: CGSize) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Guided Tour")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    Text(stop.title)
+                    Text("Start Here")
                         .font(.headline)
                         .lineLimit(1)
                 }
 
                 Spacer()
 
-                Text("\(tourStopIndex + 1)/\(tour.stops.count)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .monospacedDigit()
+                voiceToggle
             }
 
-            Text(stop.narration)
+            Text(tourIntroduction(tour))
                 .font(.callout)
                 .foregroundColor(.primary)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack {
-                Button("Previous") {
-                    moveTour(by: -1, canvasSize: canvasSize)
-                }
-                .disabled(tourStopIndex == 0)
-
-                Button(tourStopIndex == tour.stops.count - 1 ? "Done" : "Next") {
-                    if tourStopIndex == tour.stops.count - 1 {
-                        isTourVisible = false
-                    } else {
-                        moveTour(by: 1, canvasSize: canvasSize)
-                    }
+                Button("Start Tour") {
+                    beginTourStops(tour: tour, canvasSize: canvasSize)
                 }
                 .buttonStyle(.borderedProminent)
 
                 Spacer()
 
                 Button("Skip") {
-                    isTourVisible = false
+                    finishTour()
                 }
             }
             .controlSize(.small)
         }
         .padding(12)
-        .frame(width: 420)
+        .frame(width: tourOverlayWidth(canvasSize))
         .background(RoundedRectangle(cornerRadius: 10).fill(.ultraThinMaterial))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.2)))
+    }
+
+    private func guidedTourOverlay(tour: GuidedTour, focus: GuidedTourFocus, canvasSize: CGSize) -> some View {
+        let choices = tourChoices(for: focus, in: tour)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Guided Tour")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(focus.title)
+                        .font(.headline)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                HStack(spacing: 8) {
+                    Text(progressText(for: focus, in: tour))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .monospacedDigit()
+                    voiceToggle
+                }
+            }
+
+            Text(focus.narration)
+                .font(.callout)
+                .foregroundColor(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !choices.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(choices) { choice in
+                        Button {
+                            chooseTourDestination(choice.destination, canvasSize: canvasSize)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(choice.title)
+                                    .font(.caption)
+                                    .fontWeight(.semibold)
+                                    .lineLimit(1)
+                                Text(choice.subtitle)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(2)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+            }
+
+            HStack {
+                Button("Previous") {
+                    moveTourBack(canvasSize: canvasSize)
+                }
+                .disabled(tourBackStack.isEmpty)
+
+                Spacer()
+
+                Button(choices.isEmpty ? "Done" : "Skip") {
+                    finishTour()
+                }
+            }
+            .controlSize(.small)
+        }
+        .padding(12)
+        .frame(width: tourOverlayWidth(canvasSize))
+        .background(RoundedRectangle(cornerRadius: 10).fill(.ultraThinMaterial))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.2)))
+    }
+
+    private var voiceToggle: some View {
+        Button {
+            isTourVoiceEnabled.toggle()
+        } label: {
+            Image(systemName: isTourVoiceEnabled ? "speaker.wave.2" : "speaker.slash")
+        }
+        .buttonStyle(.borderless)
+        .help(isTourVoiceEnabled ? "Turn Tour Voice Off" : "Turn Tour Voice On")
+    }
+
+    private func tourChoices(for focus: GuidedTourFocus, in tour: GuidedTour) -> [GuidedTourChoice] {
+        var choices: [GuidedTourChoice] = []
+        var excluded = Set(tourBackStack.map(\.nodeID))
+        excluded.insert(focus.nodeID)
+
+        if let next = nextLogicalFocus(after: focus, in: tour) {
+            choices.append(GuidedTourChoice(
+                id: "next-\(next.nodeID.uuidString)",
+                title: "Next logical step",
+                subtitle: "Continue the generated learning path to \(next.title).",
+                destination: next
+            ))
+            excluded.insert(next.nodeID)
+        }
+
+        let related = relatedTourDestinations(from: focus, excluding: excluded)
+        for (offset, destination) in related.prefix(2).enumerated() {
+            let label = offset == 0 ? "Explore A" : "Explore B"
+            choices.append(GuidedTourChoice(
+                id: "explore-\(offset)-\(destination.nodeID.uuidString)",
+                title: "\(label): \(destination.title)",
+                subtitle: destination.narration,
+                destination: destination
+            ))
+        }
+
+        return choices
+    }
+
+    private func nextLogicalFocus(after focus: GuidedTourFocus, in tour: GuidedTour) -> GuidedTourFocus? {
+        let currentIndex = focus.linearIndex ?? tourStopIndex
+        let nextIndex = currentIndex + 1
+        guard tour.stops.indices.contains(nextIndex) else { return nil }
+        return Self.focus(for: tour.stops[nextIndex], index: nextIndex)
+    }
+
+    private func relatedTourDestinations(
+        from focus: GuidedTourFocus,
+        excluding excluded: Set<UUID>
+    ) -> [GuidedTourFocus] {
+        graph.edges(for: focus.nodeID)
+            .compactMap { edge -> (ConceptNode, GraphEdge)? in
+                let otherID = edge.sourceNodeID == focus.nodeID ? edge.targetNodeID : edge.sourceNodeID
+                guard !excluded.contains(otherID), let node = graph.node(for: otherID) else { return nil }
+                return (node, edge)
+            }
+            .sorted { lhs, rhs in
+                if lhs.1.type.isContainment != rhs.1.type.isContainment {
+                    return !lhs.1.type.isContainment
+                }
+                if lhs.0.level != rhs.0.level {
+                    return Self.tourSortRank(lhs.0.level) < Self.tourSortRank(rhs.0.level)
+                }
+                let leftDegree = graph.degree(of: lhs.0.id)
+                let rightDegree = graph.degree(of: rhs.0.id)
+                if leftDegree != rightDegree { return leftDegree > rightDegree }
+                return lhs.0.label.localizedCaseInsensitiveCompare(rhs.0.label) == .orderedAscending
+            }
+            .reduce(into: [GuidedTourFocus]()) { result, pair in
+                guard !result.contains(where: { $0.nodeID == pair.0.id }) else { return }
+                result.append(exploreFocus(from: focus, to: pair.0, edge: pair.1))
+            }
+    }
+
+    private func exploreFocus(from focus: GuidedTourFocus, to node: ConceptNode, edge: GraphEdge) -> GuidedTourFocus {
+        let relationship = edge.displayText()
+        let direction = edge.sourceNodeID == focus.nodeID ? "via \(relationship)" : "through incoming \(relationship)"
+        let summary = node.summary?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let context = summary.isEmpty ? "" : " \(summary)"
+        return GuidedTourFocus(
+            nodeID: node.id,
+            title: node.label,
+            narration: "Explore \(node.label) \(direction) from \(focus.title).\(context)",
+            linearIndex: nil
+        )
+    }
+
+    private func progressText(for focus: GuidedTourFocus, in tour: GuidedTour) -> String {
+        guard let index = focus.linearIndex else { return "Explore" }
+        return "\(index + 1)/\(tour.stops.count)"
+    }
+
+    private func tourIntroduction(_ tour: GuidedTour) -> String {
+        let introduction = tour.introduction.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !introduction.isEmpty { return introduction }
+        if let firstStop = tour.stops.first {
+            return "This guided tour starts with \(firstStop.title), then branches through the document's main ideas. \(firstStop.narration)"
+        }
+        return "This guided tour introduces the main ideas in \(tour.documentURL.lastPathComponent). Start with the recommended path, or branch into related nodes when you want more context."
+    }
+
+    private func tourOverlayWidth(_ canvasSize: CGSize) -> CGFloat {
+        min(500, max(320, canvasSize.width - 16))
+    }
+
+    private func speakCurrentTourText() {
+        guard isTourVisible, let tour = activeTour else { return }
+        if isTourIntroVisible {
+            speakTourText(tourIntroduction(tour))
+        } else if let focus = activeTourFocus {
+            speakTourText(focus.narration)
+        }
+    }
+
+    private func speakTourText(_ text: String) {
+        guard isTourVoiceEnabled else { return }
+        stopTourSpeech()
+        speechSynthesizer.startSpeaking(text)
+    }
+
+    private func stopTourSpeech() {
+        if speechSynthesizer.isSpeaking {
+            speechSynthesizer.stopSpeaking()
+        }
+    }
+
+    private static func focus(for stop: GuidedTourStop, index: Int) -> GuidedTourFocus {
+        GuidedTourFocus(
+            nodeID: stop.nodeID,
+            title: stop.title,
+            narration: stop.narration,
+            linearIndex: index
+        )
+    }
+
+    private static func tourSortRank(_ level: NodeLevel) -> Int {
+        switch level {
+        case .document: return 0
+        case .chapter: return 1
+        case .concept: return 2
+        case .entity: return 3
+        }
     }
 
     // MARK: - Scanned PDF Banner

@@ -189,9 +189,11 @@ final class PromptTemplatesTests: XCTestCase {
         XCTAssertTrue(p.contains(nodeA.id.uuidString))
         XCTAssertTrue(p.contains(nodeB.id.uuidString))
         XCTAssertTrue(p.contains("dependsOn"))
+        XCTAssertTrue(p.contains("\"introduction\""))
         XCTAssertTrue(p.contains("\"stops\""))
         XCTAssertTrue(p.contains("\"nodeID\""))
         XCTAssertTrue(p.contains("\"narration\""))
+        XCTAssertTrue(p.contains("short introduction"))
         XCTAssertTrue(p.contains("Now that you understand"))
     }
 

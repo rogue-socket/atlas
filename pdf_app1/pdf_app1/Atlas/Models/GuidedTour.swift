@@ -10,6 +10,7 @@ import Foundation
 struct GuidedTour: Codable, Equatable {
     let id: UUID
     let documentURL: URL
+    var introduction: String
     var stops: [GuidedTourStop]
     var generatedAt: Date
     var generatedByModel: String?
@@ -17,15 +18,31 @@ struct GuidedTour: Codable, Equatable {
     init(
         id: UUID = UUID(),
         documentURL: URL,
+        introduction: String = "",
         stops: [GuidedTourStop],
         generatedAt: Date = Date(),
         generatedByModel: String? = nil
     ) {
         self.id = id
         self.documentURL = documentURL
+        self.introduction = introduction
         self.stops = stops
         self.generatedAt = generatedAt
         self.generatedByModel = generatedByModel
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, documentURL, introduction, stops, generatedAt, generatedByModel
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        documentURL = try c.decode(URL.self, forKey: .documentURL)
+        introduction = try c.decodeIfPresent(String.self, forKey: .introduction) ?? ""
+        stops = try c.decode([GuidedTourStop].self, forKey: .stops)
+        generatedAt = try c.decode(Date.self, forKey: .generatedAt)
+        generatedByModel = try c.decodeIfPresent(String.self, forKey: .generatedByModel)
     }
 }
 

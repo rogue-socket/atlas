@@ -38,6 +38,7 @@ final class KnowledgeGraphTests: XCTestCase {
         graph.addNode(node)
         let tour = GuidedTour(
             documentURL: url,
+            introduction: "Start with the big picture.",
             stops: [GuidedTourStop(nodeID: node.id, title: node.label, narration: "Start here.")],
             generatedByModel: "mock"
         )
@@ -47,7 +48,27 @@ final class KnowledgeGraphTests: XCTestCase {
         try decoded.decode(from: graph.encode())
 
         XCTAssertEqual(decoded.guidedTour(for: url)?.stops, tour.stops)
+        XCTAssertEqual(decoded.guidedTour(for: url)?.introduction, "Start with the big picture.")
         XCTAssertEqual(decoded.guidedTour(for: url)?.generatedByModel, "mock")
+    }
+
+    func test_guidedTour_decodesLegacyPayloadWithoutIntroduction() throws {
+        let url = URL(fileURLWithPath: "/tmp/tour.pdf")
+        let node = ConceptNode(label: "Tour Node")
+        let tour = GuidedTour(
+            documentURL: url,
+            introduction: "New field",
+            stops: [GuidedTourStop(nodeID: node.id, title: node.label, narration: "Start here.")]
+        )
+        let data = try JSONEncoder().encode(tour)
+        var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        payload.removeValue(forKey: "introduction")
+        let legacyData = try JSONSerialization.data(withJSONObject: payload)
+
+        let decoded = try JSONDecoder().decode(GuidedTour.self, from: legacyData)
+
+        XCTAssertEqual(decoded.introduction, "")
+        XCTAssertEqual(decoded.stops, tour.stops)
     }
 
     func test_addNode_isFindableByLabelCaseInsensitive() {
