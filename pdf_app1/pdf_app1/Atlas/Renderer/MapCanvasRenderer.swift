@@ -17,6 +17,7 @@ struct MapCanvasRenderer: View {
     var viewScale: CGFloat
     var viewOffset: CGPoint
     let renderCache: RenderCache
+    var showsEdgeLabels = true
 
     var body: some View {
         Canvas { context, size in
@@ -155,7 +156,7 @@ struct MapCanvasRenderer: View {
             arrow.closeSubpath()
             context.fill(arrow, with: .color(edge.type.color.opacity(alpha)))
 
-            let shouldDrawLabel = viewScale >= 0.85 || edge.sourceNodeID == selectedNodeID || edge.targetNodeID == selectedNodeID
+            let shouldDrawLabel = showsEdgeLabels && (viewScale >= 0.85 || edge.sourceNodeID == selectedNodeID || edge.targetNodeID == selectedNodeID)
             if shouldDrawLabel {
                 drawEdgeLabel(
                     edge,

@@ -162,7 +162,8 @@ struct KnowledgeMapView: View {
                         highlightedNodeIDs: highlightedNodeIDs,
                         viewScale: interaction.viewScale,
                         viewOffset: interaction.viewOffset,
-                        renderCache: mapRenderCache
+                        renderCache: mapRenderCache,
+                        showsEdgeLabels: !isTourMapFocused
                     )
                     .gesture(
                         MagnifyGesture()
@@ -245,6 +246,10 @@ struct KnowledgeMapView: View {
             // the prior split-handler behavior).
             .onChange(of: layoutKey(zoomLevel: zoomLevel)) { oldKey, newKey in
                 log.info("[MapView] layout key changed: nodeCount=\(newKey.nodeCount), edgeCount=\(newKey.edgeSignatures.count), zoomLevel=\(String(describing: newKey.zoomLevel))")
+                if isTourMapFocused {
+                    refitTourMap(canvasSize: geometry.size)
+                    return
+                }
                 if newKey.nodeCount > 0 && !interaction.isDragging {
                     recomputeLayout(canvasSize: geometry.size)
                     if oldKey.zoomLevel != newKey.zoomLevel {
@@ -273,6 +278,10 @@ struct KnowledgeMapView: View {
             }
             .onChange(of: graph.expansionGeneration) { _, _ in
                 withAnimation(.easeInOut(duration: 0.3)) {
+                    if isTourMapFocused {
+                        refitTourMap(canvasSize: geometry.size)
+                        return
+                    }
                     recomputeLayout(canvasSize: geometry.size)
                 }
             }
@@ -970,6 +979,12 @@ struct KnowledgeMapView: View {
         tourLayout.iteration += 1
     }
 
+    private func refitTourMap(canvasSize: CGSize) {
+        guard let focus = activeTourFocus, let tour = activeTour else { return }
+        updateTourMap(focus: focus, tour: tour)
+        fitTourMap(canvasSize: canvasSize)
+    }
+
     private func tourMapContext(for focus: GuidedTourFocus, in tour: GuidedTour) -> GuidedTourMapContext {
         var orderedIDs: [UUID] = []
 
@@ -996,7 +1011,7 @@ struct KnowledgeMapView: View {
     ) -> [UUID: CGPoint] {
         var positions: [UUID: CGPoint] = [focus.nodeID: CGPoint(x: 0, y: 0)]
         if let previous = tourBackStack.last {
-            positions[previous.nodeID] = CGPoint(x: -240, y: 0)
+            positions[previous.nodeID] = CGPoint(x: -330, y: 0)
         }
 
         let choiceNodes = context.nodes
@@ -1005,43 +1020,49 @@ struct KnowledgeMapView: View {
         switch choiceNodes.count {
         case 0: yOffsets = []
         case 1: yOffsets = [0]
-        case 2: yOffsets = [-110, 110]
-        default: yOffsets = [-170, 0, 170]
+        case 2: yOffsets = [-130, 130]
+        default: yOffsets = [-200, 0, 200]
         }
 
         for (index, node) in choiceNodes.prefix(3).enumerated() {
-            positions[node.id] = CGPoint(x: 240, y: yOffsets[index])
+            positions[node.id] = CGPoint(x: 330, y: yOffsets[index])
         }
 
         return positions
     }
 
     private func fitTourMap(canvasSize: CGSize) {
-        let positions = tourLayout.positions.filter { tourVisibleNodeIDs.contains($0.key) }.map(\.value)
-        guard let first = positions.first else { return }
-
-        var minX = first.x, maxX = first.x
-        var minY = first.y, maxY = first.y
-        for pos in positions.dropFirst() {
-            minX = min(minX, pos.x)
-            maxX = max(maxX, pos.x)
-            minY = min(minY, pos.y)
-            maxY = max(maxY, pos.y)
+        let nodeRects = tourVisibleNodeIDs.compactMap { nodeID -> CGRect? in
+            guard let node = graph.node(for: nodeID),
+                  let position = tourLayout.positions[nodeID] else { return nil }
+            let sizing = NodeSizing.forNodeLevel(node.level, hasSummary: node.summary != nil)
+            return CGRect(
+                x: CGFloat(position.x) - sizing.baseWidth / 2,
+                y: CGFloat(position.y) - sizing.baseHeight / 2,
+                width: sizing.baseWidth,
+                height: sizing.baseHeight
+            )
         }
+        guard let first = nodeRects.first else { return }
 
-        let paddedWidth = maxX - minX + 620
-        let paddedHeight = maxY - minY + 360
+        let bounds = nodeRects.dropFirst().reduce(first) { partial, rect in
+            partial.union(rect)
+        }
+        let horizontalPadding: CGFloat = 96
+        let verticalPadding: CGFloat = 84
+        let paddedWidth = bounds.width + horizontalPadding * 2
+        let paddedHeight = bounds.height + verticalPadding * 2
         let scale = min(
             canvasSize.width / paddedWidth,
             (canvasSize.height * 0.58) / paddedHeight,
             0.45
         )
-        let clampedScale = max(0.25, scale)
+        let clampedScale = max(0.38, scale)
 
         interaction.viewScale = clampedScale
         interaction.viewOffset = CGPoint(
-            x: canvasSize.width / 2 - (minX + maxX) / 2 * clampedScale,
-            y: canvasSize.height * 0.34 - (minY + maxY) / 2 * clampedScale
+            x: canvasSize.width / 2 - bounds.midX * clampedScale,
+            y: canvasSize.height * 0.34 - bounds.midY * clampedScale
         )
     }
 
