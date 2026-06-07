@@ -48,6 +48,8 @@ Living TODO list. Status tags: `[active]`, `[next]`, `[blocked: <reason>]`, no t
 
 - 2026-06-07 — **PDFViewerView timing-hack cleanup complete (#33).** Initial fit-to-page is already handled by `PDFViewRepresentable`'s frame-change observer; the remaining hardcoded `0.2s` fullscreen state delay in `PDFViewerView` was replaced with `NSWindow.didEnterFullScreenNotification` / `didExitFullScreenNotification`. The only remaining `asyncAfter` in `PDFViewerView` is the source-highlight pulse cleanup using `AppConstants.sourcePulseDuration`, not a layout stabilization delay. Verification: full XCTest `415 tests, 0 failures`; `git diff --check` clean.
 
+- 2026-06-07 — **Four-issue e2e graph-extraction checkpoint passed.** After resolving/closing #27, #28, #29, and #33, ran an isolated Meridian 4-document Fast extraction through the Codex Agent sidecar using `gpt-5.3-codex-spark` with disposable `--project-storage` and `--graphs-output`. Result: `exit_code=0`, four `DONE` lines, three SCE telemetry lines, live graph `175` nodes / `320` edges, and four saved graph files, each with `documentProcessingState=complete`.
+
 ## Active / Next
 
 ## Deferred Cleanup
