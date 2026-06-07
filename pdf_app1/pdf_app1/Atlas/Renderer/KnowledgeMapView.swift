@@ -31,8 +31,12 @@ private struct GuidedTourFocus: Equatable {
 private struct GuidedTourChoice: Identifiable {
     let id: String
     let title: String
-    let subtitle: String
+    let reason: String
     let destination: GuidedTourFocus
+}
+
+private struct GuidedTourMapContext {
+    let nodes: [ConceptNode]
 }
 
 struct MapLayoutComputationKey: Equatable {
@@ -49,6 +53,7 @@ struct KnowledgeMapView: View {
     let documentURL: URL?
 
     @State private var layout = ForceDirectedLayout()
+    @State private var tourLayout = ForceDirectedLayout()
     @State private var interaction = MapInteraction()
     @State private var densityManager = DensityManager()
     @State private var hasComputedLayout = false
@@ -84,6 +89,8 @@ struct KnowledgeMapView: View {
     @State private var tourStopIndex = 0
     @State private var tourFocus: GuidedTourFocus?
     @State private var tourBackStack: [GuidedTourFocus] = []
+    @State private var tourRenderCache: MapCanvasRenderer.RenderCache = .empty
+    @State private var tourVisibleNodeIDs: Set<UUID> = []
     @State private var speechSynthesizer = NSSpeechSynthesizer()
     @AppStorage("atlas.guidedTour.voice.enabled") private var isTourVoiceEnabled = true
 
@@ -127,8 +134,13 @@ struct KnowledgeMapView: View {
         var ids = filteredNodeIDs
         if isTourVisible, !isTourIntroVisible, let focus = activeTourFocus {
             ids.insert(focus.nodeID)
+            ids.formUnion(tourVisibleNodeIDs)
         }
         return ids
+    }
+
+    private var isTourMapFocused: Bool {
+        isTourVisible && !isTourIntroVisible && activeTourFocus != nil
     }
 
     var body: some View {
@@ -139,16 +151,18 @@ struct KnowledgeMapView: View {
                 if graph.nodeCount == 0 {
                     emptyState
                 } else {
+                    let mapLayout = isTourMapFocused ? tourLayout : layout
+                    let mapRenderCache = isTourMapFocused ? tourRenderCache : cachedRenderCache
                     // Map canvas
                     MapCanvasRenderer(
-                        layout: layout,
+                        layout: mapLayout,
                         zoomLevel: $zoomLevel,
                         selectedNodeID: $interaction.selectedNodeID,
                         activeNodeID: activeNodeID,
                         highlightedNodeIDs: highlightedNodeIDs,
                         viewScale: interaction.viewScale,
                         viewOffset: interaction.viewOffset,
-                        renderCache: cachedRenderCache
+                        renderCache: mapRenderCache
                     )
                     .gesture(
                         MagnifyGesture()
@@ -163,9 +177,9 @@ struct KnowledgeMapView: View {
                         DragGesture()
                             .onChanged { value in
                                 if !interaction.isDragging {
-                                    interaction.handleDragStart(at: value.startLocation, layout: layout, graph: graph)
+                                    interaction.handleDragStart(at: value.startLocation, layout: mapLayout, graph: graph)
                                 }
-                                interaction.handleDragChanged(translation: value.translation, layout: layout)
+                                interaction.handleDragChanged(translation: value.translation, layout: mapLayout)
                             }
                             .onEnded { _ in
                                 interaction.handleDragEnded()
@@ -177,7 +191,7 @@ struct KnowledgeMapView: View {
                         }
                     }
                     .onTapGesture { location in
-                        interaction.handleClick(at: location, layout: layout, graph: graph)
+                        interaction.handleClick(at: location, layout: mapLayout, graph: graph)
                     }
                 }
             }
@@ -880,6 +894,8 @@ struct KnowledgeMapView: View {
         tourStopIndex = 0
         tourFocus = nil
         tourBackStack = []
+        tourRenderCache = .empty
+        tourVisibleNodeIDs = []
         isTourIntroVisible = true
         isTourVisible = true
         interaction.selectedNodeID = nil
@@ -903,9 +919,11 @@ struct KnowledgeMapView: View {
         graph.expandAncestors(of: node.id)
         let targetZoomLevel = Self.zoomLevel(for: node.level)
         zoomLevel = targetZoomLevel
+        if let tour = activeTour {
+            updateTourMap(focus: focus, tour: tour)
+        }
         withAnimation(.easeInOut(duration: 0.35)) {
-            recomputeLayout(canvasSize: canvasSize, zoomOverride: targetZoomLevel)
-            interaction.center(on: node.id, layout: layout, canvasSize: canvasSize)
+            fitTourMap(canvasSize: canvasSize)
             interaction.selectedNodeID = node.id
         }
         speakTourText(focus.narration)
@@ -929,7 +947,102 @@ struct KnowledgeMapView: View {
         tourStopIndex = 0
         tourFocus = nil
         tourBackStack = []
+        tourRenderCache = .empty
+        tourVisibleNodeIDs = []
         stopTourSpeech()
+    }
+
+    private func updateTourMap(focus: GuidedTourFocus, tour: GuidedTour) {
+        let context = tourMapContext(for: focus, in: tour)
+        let nodeIDs = Set(context.nodes.map(\.id))
+        tourVisibleNodeIDs = nodeIDs
+
+        let tourGraph = filteredGraph(for: context.nodes)
+        tourRenderCache = MapCanvasRenderer.makeRenderCache(for: tourGraph, includeContainmentEdges: true)
+
+        tourLayout.positions = tourLayout.positions.filter { nodeIDs.contains($0.key) }
+        let positions = tourPositions(for: focus, context: context)
+        for node in context.nodes {
+            let point = positions[node.id] ?? .zero
+            tourLayout.positions[node.id] = NodePosition(x: point.x, y: point.y)
+        }
+        tourLayout.isConverged = true
+        tourLayout.iteration += 1
+    }
+
+    private func tourMapContext(for focus: GuidedTourFocus, in tour: GuidedTour) -> GuidedTourMapContext {
+        var orderedIDs: [UUID] = []
+
+        func append(_ id: UUID) {
+            guard !orderedIDs.contains(id) else { return }
+            orderedIDs.append(id)
+        }
+
+        if let previous = tourBackStack.last {
+            append(previous.nodeID)
+        }
+        append(focus.nodeID)
+        for choice in tourChoices(for: focus, in: tour) {
+            append(choice.destination.nodeID)
+        }
+
+        let nodes = orderedIDs.compactMap { graph.node(for: $0) }
+        return GuidedTourMapContext(nodes: nodes)
+    }
+
+    private func tourPositions(
+        for focus: GuidedTourFocus,
+        context: GuidedTourMapContext
+    ) -> [UUID: CGPoint] {
+        var positions: [UUID: CGPoint] = [focus.nodeID: CGPoint(x: 0, y: 0)]
+        if let previous = tourBackStack.last {
+            positions[previous.nodeID] = CGPoint(x: -240, y: 0)
+        }
+
+        let choiceNodes = context.nodes
+            .filter { $0.id != focus.nodeID && $0.id != tourBackStack.last?.nodeID }
+        let yOffsets: [CGFloat]
+        switch choiceNodes.count {
+        case 0: yOffsets = []
+        case 1: yOffsets = [0]
+        case 2: yOffsets = [-110, 110]
+        default: yOffsets = [-170, 0, 170]
+        }
+
+        for (index, node) in choiceNodes.prefix(3).enumerated() {
+            positions[node.id] = CGPoint(x: 240, y: yOffsets[index])
+        }
+
+        return positions
+    }
+
+    private func fitTourMap(canvasSize: CGSize) {
+        let positions = tourLayout.positions.filter { tourVisibleNodeIDs.contains($0.key) }.map(\.value)
+        guard let first = positions.first else { return }
+
+        var minX = first.x, maxX = first.x
+        var minY = first.y, maxY = first.y
+        for pos in positions.dropFirst() {
+            minX = min(minX, pos.x)
+            maxX = max(maxX, pos.x)
+            minY = min(minY, pos.y)
+            maxY = max(maxY, pos.y)
+        }
+
+        let paddedWidth = maxX - minX + 620
+        let paddedHeight = maxY - minY + 360
+        let scale = min(
+            canvasSize.width / paddedWidth,
+            (canvasSize.height * 0.58) / paddedHeight,
+            0.45
+        )
+        let clampedScale = max(0.25, scale)
+
+        interaction.viewScale = clampedScale
+        interaction.viewOffset = CGPoint(
+            x: canvasSize.width / 2 - (minX + maxX) / 2 * clampedScale,
+            y: canvasSize.height * 0.34 - (minY + maxY) / 2 * clampedScale
+        )
     }
 
     private func guidedTourIntroOverlay(tour: GuidedTour, canvasSize: CGSize) -> some View {
@@ -1006,19 +1119,23 @@ struct KnowledgeMapView: View {
 
             if !choices.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
+                    Text("Choose where to go next")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.secondary)
                     ForEach(choices) { choice in
                         Button {
                             chooseTourDestination(choice.destination, canvasSize: canvasSize)
                         } label: {
-                            VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: 3) {
                                 Text(choice.title)
                                     .font(.caption)
                                     .fontWeight(.semibold)
                                     .lineLimit(1)
-                                Text(choice.subtitle)
+                                Text(choice.reason)
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
-                                    .lineLimit(2)
+                                    .lineLimit(3)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -1066,7 +1183,7 @@ struct KnowledgeMapView: View {
             choices.append(GuidedTourChoice(
                 id: "next-\(next.nodeID.uuidString)",
                 title: "Next logical step",
-                subtitle: "Continue the generated learning path to \(next.title).",
+                reason: "Go to \(next.title). Why: this continues the generated learning sequence after \(focus.title). \(Self.shortTourText(next.narration, maxLength: 110))",
                 destination: next
             ))
             excluded.insert(next.nodeID)
@@ -1077,8 +1194,8 @@ struct KnowledgeMapView: View {
             let label = offset == 0 ? "Explore A" : "Explore B"
             choices.append(GuidedTourChoice(
                 id: "explore-\(offset)-\(destination.nodeID.uuidString)",
-                title: "\(label): \(destination.title)",
-                subtitle: destination.narration,
+                title: label,
+                reason: "Go to \(destination.title). \(destination.narration)",
                 destination: destination
             ))
         }
@@ -1122,17 +1239,37 @@ struct KnowledgeMapView: View {
     }
 
     private func exploreFocus(from focus: GuidedTourFocus, to node: ConceptNode, edge: GraphEdge) -> GuidedTourFocus {
-        let relationship = edge.displayText()
-        let direction = edge.sourceNodeID == focus.nodeID ? "via \(relationship)" : "through incoming \(relationship)"
+        let reason = tourRelationshipReason(from: focus, to: node, edge: edge)
         let summary = node.summary?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let context = summary.isEmpty ? "" : " \(summary)"
+        let context = summary.isEmpty ? "" : " Context: \(Self.shortTourText(summary, maxLength: 140))"
         let title = Self.tourDisplayTitle(node.label)
         return GuidedTourFocus(
             nodeID: node.id,
             title: title,
-            narration: "Explore \(title) \(direction) from \(focus.title).\(context)",
+            narration: "\(reason)\(context)",
             linearIndex: nil
         )
+    }
+
+    private func tourRelationshipReason(
+        from focus: GuidedTourFocus,
+        to node: ConceptNode,
+        edge: GraphEdge
+    ) -> String {
+        let title = Self.tourDisplayTitle(node.label)
+        if edge.type.isContainment {
+            if edge.sourceNodeID == focus.nodeID {
+                return "Why branch: \(title) is inside \(focus.title), so this drills into a more specific part of the current idea."
+            } else {
+                return "Why branch: \(title) contains \(focus.title), so this zooms out to the broader context."
+            }
+        }
+
+        let relationship = edge.displayText()
+        if edge.sourceNodeID == focus.nodeID {
+            return "Why branch: \(focus.title) connects to \(title) through \(relationship), so this follows a related theme."
+        }
+        return "Why branch: \(title) connects back to \(focus.title) through \(relationship), so this explains an incoming dependency."
     }
 
     private func progressText(for focus: GuidedTourFocus, in tour: GuidedTour) -> String {
@@ -1192,6 +1329,11 @@ struct KnowledgeMapView: View {
             word.prefix(1).uppercased() + String(word.dropFirst())
         }
         .joined(separator: " ")
+    }
+
+    private static func shortTourText(_ text: String, maxLength: Int) -> String {
+        guard text.count > maxLength, maxLength > 3 else { return text }
+        return String(text.prefix(maxLength - 3)) + "..."
     }
 
     private static func tourSortRank(_ level: NodeLevel) -> Int {

@@ -466,31 +466,61 @@ class ForceDirectedLayout {
 
     /// Push apart any nodes that are still overlapping after layout
     private func resolveOverlaps(nodes: [ConceptNode]) {
-        let minDist = nodeSpacing * 0.8
-        for _ in 0..<20 {
+        let readabilityGap: Double = 18
+
+        func nodeRect(for node: ConceptNode, at position: NodePosition) -> CGRect {
+            let sizing = NodeSizing.forNodeLevel(node.level, hasSummary: node.summary != nil)
+            let x = CGFloat(position.x)
+            let y = CGFloat(position.y)
+            return CGRect(
+                x: x - sizing.baseWidth / 2,
+                y: y - sizing.baseHeight / 2,
+                width: sizing.baseWidth,
+                height: sizing.baseHeight
+            ).insetBy(dx: -readabilityGap / 2, dy: -readabilityGap / 2)
+        }
+
+        for _ in 0..<30 {
             var anyOverlap = false
             var totalMovement: Double = 0
             for i in 0..<nodes.count {
                 for j in (i + 1)..<nodes.count {
                     guard var posA = positions[nodes[i].id], var posB = positions[nodes[j].id] else { continue }
-                    let dx = posA.x - posB.x
-                    let dy = posA.y - posB.y
-                    let dist = sqrt(dx * dx + dy * dy)
-                    if dist < minDist && dist > 0 {
-                        anyOverlap = true
-                        let push = (minDist - dist) / 2
-                        let nx = dx / dist
-                        let ny = dy / dist
-                        if !posA.isFixed {
-                            posA.x += nx * push
-                            posA.y += ny * push
-                            totalMovement += push * 2
+                    let rectA = nodeRect(for: nodes[i], at: posA)
+                    let rectB = nodeRect(for: nodes[j], at: posB)
+                    guard rectA.intersects(rectB) else { continue }
+
+                    anyOverlap = true
+                    let overlap = rectA.intersection(rectB)
+                    let moveA = !posA.isFixed
+                    let moveB = !posB.isFixed
+                    guard moveA || moveB else { continue }
+
+                    let split: Double = moveA && moveB ? 2 : 1
+                    if overlap.width <= overlap.height {
+                        let direction: Double = posA.x <= posB.x ? -1 : 1
+                        let push = Double(overlap.width) / split
+                        if moveA {
+                            posA.x += direction * push
+                            totalMovement += push
                             positions[nodes[i].id] = posA
                         }
-                        if !posB.isFixed {
-                            posB.x -= nx * push
-                            posB.y -= ny * push
-                            totalMovement += push * 2
+                        if moveB {
+                            posB.x -= direction * push
+                            totalMovement += push
+                            positions[nodes[j].id] = posB
+                        }
+                    } else {
+                        let direction: Double = posA.y <= posB.y ? -1 : 1
+                        let push = Double(overlap.height) / split
+                        if moveA {
+                            posA.y += direction * push
+                            totalMovement += push
+                            positions[nodes[i].id] = posA
+                        }
+                        if moveB {
+                            posB.y -= direction * push
+                            totalMovement += push
                             positions[nodes[j].id] = posB
                         }
                     }

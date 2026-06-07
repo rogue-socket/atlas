@@ -9,6 +9,21 @@ final class ForceDirectedLayoutTests: XCTestCase {
         ConceptNode(id: id, label: label, level: .concept)
     }
 
+    private func document(_ label: String, id: UUID = UUID()) -> ConceptNode {
+        ConceptNode(id: id, label: label, level: .document)
+    }
+
+    private func renderedRect(for node: ConceptNode, in layout: ForceDirectedLayout) throws -> CGRect {
+        let point = try XCTUnwrap(layout.point(for: node.id))
+        let sizing = NodeSizing.forNodeLevel(node.level, hasSummary: node.summary != nil)
+        return CGRect(
+            x: point.x - sizing.baseWidth / 2,
+            y: point.y - sizing.baseHeight / 2,
+            width: sizing.baseWidth,
+            height: sizing.baseHeight
+        )
+    }
+
     func testComputeLayoutPreservesExistingPositionForKnownNode() throws {
         let layout = ForceDirectedLayout(maxIterations: 0)
         let node = concept("Preserved")
@@ -43,6 +58,29 @@ final class ForceDirectedLayoutTests: XCTestCase {
 
         XCTAssertNotNil(layout.point(for: current.id))
         XCTAssertNil(layout.point(for: staleID))
+    }
+
+    func testComputeLayoutSeparatesRenderedNodeRectangles() throws {
+        let layout = ForceDirectedLayout(maxIterations: 0)
+        let first = document("First")
+        let second = document("Second")
+        layout.positions[first.id] = NodePosition(x: 100, y: 100)
+        layout.positions[second.id] = NodePosition(x: 250, y: 100)
+
+        let preFirst = try renderedRect(for: first, in: layout)
+        let preSecond = try renderedRect(for: second, in: layout)
+        XCTAssertTrue(preFirst.intersects(preSecond), "Pre-condition: rendered cards start overlapped")
+
+        layout.computeLayout(
+            nodes: [first, second],
+            edges: [],
+            canvasSize: CGSize(width: 800, height: 600),
+            validNodeIDs: [first.id, second.id]
+        )
+
+        let postFirst = try renderedRect(for: first, in: layout)
+        let postSecond = try renderedRect(for: second, in: layout)
+        XCTAssertFalse(postFirst.intersects(postSecond), "Post-condition: rendered cards are separated")
     }
 
     func testComputeLayoutConvergesAfterStableIterations() {

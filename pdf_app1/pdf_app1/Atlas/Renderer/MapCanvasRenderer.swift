@@ -80,14 +80,14 @@ struct MapCanvasRenderer: View {
         )
     }
 
-    static func makeRenderCache(for graph: KnowledgeGraph) -> RenderCache {
+    static func makeRenderCache(for graph: KnowledgeGraph, includeContainmentEdges: Bool = false) -> RenderCache {
         let levelOrder: [NodeLevel: Int] = [.entity: 0, .concept: 1, .chapter: 2, .document: 3]
         let sortedNodes = graph.allNodes.sorted { a, b in
             (levelOrder[a.level] ?? 0) < (levelOrder[b.level] ?? 0)
         }
 
         let allEdges = graph.allEdges
-        let semanticEdges = allEdges.filter { !$0.type.isContainment }
+        let semanticEdges = includeContainmentEdges ? allEdges : allEdges.filter { !$0.type.isContainment }
         let conceptEntityGroups = Self.conceptEntityGroups(in: graph, edges: allEdges)
         let entityCountByParent = Dictionary(
             uniqueKeysWithValues: conceptEntityGroups.map { ($0.concept.id, $0.entities.count) }
