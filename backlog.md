@@ -46,6 +46,8 @@ Living TODO list. Status tags: `[active]`, `[next]`, `[blocked: <reason>]`, no t
 
 - 2026-06-07 — **ForceDirectedLayout convergence/perf cleanup complete (#29).** Layout now preserves existing node positions across recomputes, uses an adaptive iteration budget with 10-stable-iteration convergence, caches group centers with membership-aware invalidation, and exits node/cluster overlap resolution when movement stabilizes. Verification: `ForceDirectedLayoutTests` + `ClusterOverlapTests` `6 tests, 0 failures`; full XCTest `413 tests, 0 failures`; `git diff --check` clean.
 
+- 2026-06-07 — **PDFViewerView timing-hack cleanup complete (#33).** Initial fit-to-page is already handled by `PDFViewRepresentable`'s frame-change observer; the remaining hardcoded `0.2s` fullscreen state delay in `PDFViewerView` was replaced with `NSWindow.didEnterFullScreenNotification` / `didExitFullScreenNotification`. The only remaining `asyncAfter` in `PDFViewerView` is the source-highlight pulse cleanup using `AppConstants.sourcePulseDuration`, not a layout stabilization delay. Verification: full XCTest `415 tests, 0 failures`; `git diff --check` clean.
+
 ## Active / Next
 
 ## Deferred Cleanup

@@ -263,6 +263,12 @@ struct PDFViewerView: View {
         .onReceive(NotificationCenter.default.publisher(for: .PDFViewScaleChanged, object: pdfView)) { _ in
             syncZoomText()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { notification in
+            updateFullscreenState(from: notification, fullscreen: true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { notification in
+            updateFullscreenState(from: notification, fullscreen: false)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToPage)) { notification in
             if let pageIndex = notification.object as? Int {
                 let userInfo = notification.userInfo
@@ -338,17 +344,22 @@ struct PDFViewerView: View {
     }
 
     private func toggleFullscreen() {
-        if let window = NSApplication.shared.windows.first {
+        if let window = pdfView.window ?? NSApplication.shared.windows.first {
             window.toggleFullScreen(nil)
+        }
+    }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                let fullscreenNow = window.styleMask.contains(.fullScreen)
-                isFullscreen = fullscreenNow
-                UserDefaults.standard.set(fullscreenNow, forKey: AppConstants.windowStateKey)
-                if !fullscreenNow {
-                    hideToolbarInFullscreen = false
-                }
-            }
+    private func updateFullscreenState(from notification: Notification, fullscreen: Bool) {
+        guard let window = notification.object as? NSWindow,
+              let currentWindow = pdfView.window,
+              window === currentWindow else {
+            return
+        }
+
+        isFullscreen = fullscreen
+        UserDefaults.standard.set(fullscreen, forKey: AppConstants.windowStateKey)
+        if !fullscreen {
+            hideToolbarInFullscreen = false
         }
     }
 
