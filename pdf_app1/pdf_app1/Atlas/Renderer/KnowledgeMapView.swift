@@ -31,6 +31,7 @@ private struct GuidedTourFocus: Equatable {
 private struct GuidedTourChoice: Identifiable {
     let id: String
     let title: String
+    let destinationTitle: String
     let reason: String
     let destination: GuidedTourFocus
 }
@@ -163,7 +164,8 @@ struct KnowledgeMapView: View {
                         viewScale: interaction.viewScale,
                         viewOffset: interaction.viewOffset,
                         renderCache: mapRenderCache,
-                        showsEdgeLabels: !isTourMapFocused
+                        showsEdgeLabels: !isTourMapFocused,
+                        wrapsNodeLabels: isTourMapFocused
                     )
                     .gesture(
                         MagnifyGesture()
@@ -1036,11 +1038,13 @@ struct KnowledgeMapView: View {
             guard let node = graph.node(for: nodeID),
                   let position = tourLayout.positions[nodeID] else { return nil }
             let sizing = NodeSizing.forNodeLevel(node.level, hasSummary: node.summary != nil)
+            let nodeWidth = sizing.baseWidth * 1.28
+            let nodeHeight = max(sizing.baseHeight, 52)
             return CGRect(
-                x: CGFloat(position.x) - sizing.baseWidth / 2,
-                y: CGFloat(position.y) - sizing.baseHeight / 2,
-                width: sizing.baseWidth,
-                height: sizing.baseHeight
+                x: CGFloat(position.x) - nodeWidth / 2,
+                y: CGFloat(position.y) - nodeHeight / 2,
+                width: nodeWidth,
+                height: nodeHeight
             )
         }
         guard let first = nodeRects.first else { return }
@@ -1055,7 +1059,7 @@ struct KnowledgeMapView: View {
         let scale = min(
             canvasSize.width / paddedWidth,
             (canvasSize.height * 0.58) / paddedHeight,
-            0.45
+            0.58
         )
         let clampedScale = max(0.38, scale)
 
@@ -1153,10 +1157,14 @@ struct KnowledgeMapView: View {
                                     .font(.caption)
                                     .fontWeight(.semibold)
                                     .lineLimit(1)
+                                Text(choice.destinationTitle)
+                                    .font(.callout)
+                                    .fontWeight(.semibold)
+                                    .lineLimit(2)
                                 Text(choice.reason)
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
-                                    .lineLimit(3)
+                                    .lineLimit(2)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -1204,7 +1212,8 @@ struct KnowledgeMapView: View {
             choices.append(GuidedTourChoice(
                 id: "next-\(next.nodeID.uuidString)",
                 title: "Next logical step",
-                reason: "Go to \(next.title). Why: this continues the generated learning sequence after \(focus.title). \(Self.shortTourText(next.narration, maxLength: 110))",
+                destinationTitle: next.title,
+                reason: "Continues the learning sequence after \(focus.title). \(Self.shortTourText(next.narration, maxLength: 95))",
                 destination: next
             ))
             excluded.insert(next.nodeID)
@@ -1216,7 +1225,8 @@ struct KnowledgeMapView: View {
             choices.append(GuidedTourChoice(
                 id: "explore-\(offset)-\(destination.nodeID.uuidString)",
                 title: label,
-                reason: "Go to \(destination.title). \(destination.narration)",
+                destinationTitle: destination.title,
+                reason: Self.shortTourText(destination.narration, maxLength: 135),
                 destination: destination
             ))
         }

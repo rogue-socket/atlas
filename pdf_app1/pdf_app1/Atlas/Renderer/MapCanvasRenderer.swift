@@ -18,6 +18,7 @@ struct MapCanvasRenderer: View {
     var viewOffset: CGPoint
     let renderCache: RenderCache
     var showsEdgeLabels = true
+    var wrapsNodeLabels = false
 
     var body: some View {
         Canvas { context, size in
@@ -264,8 +265,9 @@ struct MapCanvasRenderer: View {
 
             let hasSummary = node.summary != nil && viewScale >= 0.7
             let sizing = NodeSizing.forNodeLevel(node.level, hasSummary: hasSummary)
-            let nodeW = sizing.baseWidth * viewScale
-            let nodeH = sizing.baseHeight * viewScale
+            let nodeW = sizing.baseWidth * (wrapsNodeLabels ? 1.28 : 1) * viewScale
+            let baseHeight = wrapsNodeLabels ? max(sizing.baseHeight, 52) : sizing.baseHeight
+            let nodeH = baseHeight * viewScale
             let cr: CGFloat = 8 * viewScale
 
             let rect = CGRect(x: tp.x - nodeW / 2, y: tp.y - nodeH / 2, width: nodeW, height: nodeH)
@@ -306,7 +308,7 @@ struct MapCanvasRenderer: View {
                 context.stroke(nodePath, with: .color(borderColor.opacity(bgAlpha)), lineWidth: bw)
             }
 
-            guard viewScale >= 0.45 else { continue }
+            guard viewScale >= 0.45 || wrapsNodeLabels else { continue }
 
             // Type color strip on left
             let stripW: CGFloat = sizing.colorStripWidth * viewScale
@@ -318,10 +320,24 @@ struct MapCanvasRenderer: View {
             let fontSize = max(10, sizing.fontSize * viewScale)
             let fontWeight = sizing.fontWeight
             let labelX = rect.minX + stripW + 4 * viewScale
-            let label = Text(node.label)
-                .font(.system(size: fontSize, weight: fontWeight))
-                .foregroundColor(isDimmed ? .secondary.opacity(0.4) : .primary)
-            context.draw(context.resolve(label), in: CGRect(x: labelX, y: rect.minY + 3 * viewScale, width: nodeW - stripW - 8 * viewScale, height: fontSize + 4))
+            let labelColor: Color = isDimmed ? .secondary.opacity(0.4) : .primary
+            let labelRect = CGRect(x: labelX, y: rect.minY + 3 * viewScale, width: nodeW - stripW - 8 * viewScale, height: fontSize + 4)
+            if wrapsNodeLabels {
+                let lines = Self.wrappedNodeLabelLines(
+                    Self.tourNodeLabel(node.label),
+                    maxLineLength: node.level == .entity ? 14 : 16,
+                    maxLines: 2
+                )
+                let label = Text(lines.joined(separator: "\n"))
+                    .font(.system(size: fontSize, weight: fontWeight))
+                    .foregroundColor(labelColor)
+                context.draw(context.resolve(label), in: CGRect(x: labelRect.minX, y: labelRect.minY, width: labelRect.width, height: fontSize * 2.4))
+            } else {
+                let label = Text(node.label)
+                    .font(.system(size: fontSize, weight: fontWeight))
+                    .foregroundColor(labelColor)
+                context.draw(context.resolve(label), in: labelRect)
+            }
 
             // Entity count badge for concept nodes
             if isConcept && viewScale >= 0.5 {
@@ -390,5 +406,38 @@ struct MapCanvasRenderer: View {
                 }
             }
         }
+    }
+
+    private static func tourNodeLabel(_ label: String) -> String {
+        label
+            .replacingOccurrences(of: ".pdf", with: "", options: [.caseInsensitive])
+            .replacingOccurrences(of: "_", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func wrappedNodeLabelLines(_ label: String, maxLineLength: Int, maxLines: Int) -> [String] {
+        let words = label.split(separator: " ").map(String.init)
+        guard words.count > 1, maxLineLength > 0, maxLines > 1 else { return [label] }
+
+        var lines: [String] = []
+        var current = ""
+
+        for word in words {
+            if lines.count == maxLines { break }
+
+            let candidate = current.isEmpty ? word : "\(current) \(word)"
+            if candidate.count <= maxLineLength {
+                current = candidate
+            } else {
+                if !current.isEmpty { lines.append(current) }
+                current = word
+            }
+        }
+
+        if !current.isEmpty, lines.count < maxLines {
+            lines.append(current)
+        }
+
+        return lines.isEmpty ? [label] : lines
     }
 }
