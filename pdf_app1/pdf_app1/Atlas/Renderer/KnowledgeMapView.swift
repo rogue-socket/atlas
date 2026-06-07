@@ -1126,10 +1126,11 @@ struct KnowledgeMapView: View {
         let direction = edge.sourceNodeID == focus.nodeID ? "via \(relationship)" : "through incoming \(relationship)"
         let summary = node.summary?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let context = summary.isEmpty ? "" : " \(summary)"
+        let title = Self.tourDisplayTitle(node.label)
         return GuidedTourFocus(
             nodeID: node.id,
-            title: node.label,
-            narration: "Explore \(node.label) \(direction) from \(focus.title).\(context)",
+            title: title,
+            narration: "Explore \(title) \(direction) from \(focus.title).\(context)",
             linearIndex: nil
         )
     }
@@ -1143,9 +1144,9 @@ struct KnowledgeMapView: View {
         let introduction = tour.introduction.trimmingCharacters(in: .whitespacesAndNewlines)
         if !introduction.isEmpty { return introduction }
         if let firstStop = tour.stops.first {
-            return "This guided tour starts with \(firstStop.title), then branches through the document's main ideas. \(firstStop.narration)"
+            return "This guided tour starts with \(Self.tourDisplayTitle(firstStop.title)), then branches through the document's main ideas. \(firstStop.narration)"
         }
-        return "This guided tour introduces the main ideas in \(tour.documentURL.lastPathComponent). Start with the recommended path, or branch into related nodes when you want more context."
+        return "This guided tour introduces the main ideas in \(Self.tourDisplayTitle(tour.documentURL.lastPathComponent)). Start with the recommended path, or branch into related nodes when you want more context."
     }
 
     private func tourOverlayWidth(_ canvasSize: CGSize) -> CGFloat {
@@ -1176,10 +1177,21 @@ struct KnowledgeMapView: View {
     private static func focus(for stop: GuidedTourStop, index: Int) -> GuidedTourFocus {
         GuidedTourFocus(
             nodeID: stop.nodeID,
-            title: stop.title,
+            title: tourDisplayTitle(stop.title),
             narration: stop.narration,
             linearIndex: index
         )
+    }
+
+    private static func tourDisplayTitle(_ title: String) -> String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let withoutExtension = trimmed.hasSuffix(".pdf") ? String(trimmed.dropLast(4)) : trimmed
+        let words = withoutExtension.replacingOccurrences(of: "_", with: " ")
+        guard words == words.lowercased() else { return words }
+        return words.split(separator: " ").map { word in
+            word.prefix(1).uppercased() + String(word.dropFirst())
+        }
+        .joined(separator: " ")
     }
 
     private static func tourSortRank(_ level: NodeLevel) -> Int {

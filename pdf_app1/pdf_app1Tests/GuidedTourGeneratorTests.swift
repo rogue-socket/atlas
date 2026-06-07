@@ -71,7 +71,8 @@ final class GuidedTourGeneratorTests: XCTestCase {
         let tour = await GuidedTourGenerator.generate(graph: graph, documentURL: docURL, backend: backend, maxStops: 2)
 
         XCTAssertEqual(tour?.generatedByModel, "mock-tour-fallback")
-        XCTAssertTrue(tour?.introduction.contains("tour.pdf") == true)
+        XCTAssertTrue(tour?.introduction.contains("tour") == true)
+        XCTAssertFalse(tour?.introduction.contains(".pdf") == true)
         XCTAssertEqual(tour?.stops.map(\.nodeID), [document.id, chapter.id])
         XCTAssertTrue(tour?.stops.last?.narration.contains("Now that") == true)
     }

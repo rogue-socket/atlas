@@ -115,7 +115,12 @@ enum GuidedTourGenerator {
     }
 
     private static func defaultIntroduction(documentTitle: String) -> String {
-        "This tour introduces the main ideas in \(documentTitle) and lets you choose between the recommended learning path and related side topics."
+        var title = documentTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if title.lowercased().hasSuffix(".pdf") {
+            title.removeLast(4)
+        }
+        title = title.replacingOccurrences(of: "_", with: " ")
+        return "This tour introduces the main ideas in \(title) and lets you choose between the recommended learning path and related side topics."
     }
 }
 
