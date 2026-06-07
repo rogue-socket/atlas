@@ -6,11 +6,12 @@ import XCTest
 ///   - node lifecycle + adjacency, labelIndex sync on rename/remove
 ///   - edge lifecycle + bi-directional adjacency
 ///   - query helpers (edges/for, neighbors, degree, nodes(forDocument/forPage))
-///   - expansion (toggle, expandAll, collapseAll), `hasChildren`, `childNodes`
-///   - clear() wipes everything including labelIndex and highlightColorCounter
-///   - nextHighlightColorIndex wraps modulo palette size
-///   - documentProcessingState round-trips through encode/decode
-///   - SourceAnchor Codable
+    ///   - expansion (toggle, expandAll, collapseAll), `hasChildren`, `childNodes`
+    ///   - clear() wipes everything including labelIndex and highlightColorCounter
+    ///   - nextHighlightColorIndex wraps modulo palette size
+    ///   - documentProcessingState round-trips through encode/decode
+///   - guided tours round-trip through encode/decode
+    ///   - SourceAnchor Codable
 final class KnowledgeGraphTests: XCTestCase {
 
     private func anchor(_ url: URL = URL(fileURLWithPath: "/tmp/x.pdf"), page: Int = 0) -> SourceAnchor {
@@ -25,6 +26,28 @@ final class KnowledgeGraphTests: XCTestCase {
         g.addNode(n)
         XCTAssertEqual(g.nodeCount, 1)
         XCTAssertEqual(g.node(for: n.id)?.label, "Alpha")
+    }
+
+    func test_guidedTour_roundTripsThroughEncodeDecode() throws {
+        let url = URL(fileURLWithPath: "/tmp/tour.pdf")
+        let graph = KnowledgeGraph()
+        let node = ConceptNode(
+            label: "Tour Node",
+            sourceAnchors: [SourceAnchor(documentURL: url, pageIndex: 0, boundingBox: .zero, textSnippet: "")]
+        )
+        graph.addNode(node)
+        let tour = GuidedTour(
+            documentURL: url,
+            stops: [GuidedTourStop(nodeID: node.id, title: node.label, narration: "Start here.")],
+            generatedByModel: "mock"
+        )
+        graph.setGuidedTour(tour, for: url)
+
+        let decoded = KnowledgeGraph()
+        try decoded.decode(from: graph.encode())
+
+        XCTAssertEqual(decoded.guidedTour(for: url)?.stops, tour.stops)
+        XCTAssertEqual(decoded.guidedTour(for: url)?.generatedByModel, "mock")
     }
 
     func test_addNode_isFindableByLabelCaseInsensitive() {

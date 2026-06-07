@@ -157,6 +157,7 @@ nonisolated class KnowledgeGraph {
     private(set) var nodes: [UUID: ConceptNode] = [:]
     private(set) var edges: [UUID: GraphEdge] = [:]
     var documentProcessingState: [URL: ProcessingState] = [:]
+    private(set) var guidedTours: [String: GuidedTour] = [:]
 
     // Adjacency list: nodeID -> set of edgeIDs
     private(set) var adjacency: [UUID: Set<UUID>] = [:]
@@ -280,6 +281,15 @@ nonisolated class KnowledgeGraph {
 
     func nodes(at level: NodeLevel) -> [ConceptNode] {
         allNodes.filter { $0.level == level }
+    }
+
+    func guidedTour(for documentURL: URL?) -> GuidedTour? {
+        guard let documentURL else { return nil }
+        return guidedTours[documentURL.absoluteString]
+    }
+
+    func setGuidedTour(_ tour: GuidedTour, for documentURL: URL) {
+        guidedTours[documentURL.absoluteString] = tour
     }
 
     /// Children of `nodeID` via the structural containment edge appropriate
@@ -414,6 +424,7 @@ nonisolated class KnowledgeGraph {
         adjacency.removeAll()
         labelIndex.removeAll()
         documentProcessingState.removeAll()
+        guidedTours.removeAll()
         highlightColorCounter = 0
     }
 
@@ -451,6 +462,9 @@ nonisolated class KnowledgeGraph {
         for (url, state) in other.documentProcessingState {
             documentProcessingState[url] = state
         }
+        for (urlString, tour) in other.guidedTours {
+            guidedTours[urlString] = tour
+        }
     }
 }
 
@@ -460,19 +474,22 @@ extension KnowledgeGraph {
         let nodes: [ConceptNode]
         let edges: [GraphEdge]
         let documentProcessingState: [String: ProcessingState]
+        let guidedTours: [String: GuidedTour]
 
         private enum CodingKeys: String, CodingKey {
-            case nodes, edges, documentProcessingState
+            case nodes, edges, documentProcessingState, guidedTours
         }
 
         init(
             nodes: [ConceptNode],
             edges: [GraphEdge],
-            documentProcessingState: [String: ProcessingState]
+            documentProcessingState: [String: ProcessingState],
+            guidedTours: [String: GuidedTour] = [:]
         ) {
             self.nodes = nodes
             self.edges = edges
             self.documentProcessingState = documentProcessingState
+            self.guidedTours = guidedTours
         }
 
         // Lossy decode for edges: a single retired EdgeType (e.g. `subtopicOf`
@@ -485,6 +502,10 @@ extension KnowledgeGraph {
             documentProcessingState = try c.decodeIfPresent(
                 [String: ProcessingState].self,
                 forKey: .documentProcessingState
+            ) ?? [:]
+            guidedTours = try c.decodeIfPresent(
+                [String: GuidedTour].self,
+                forKey: .guidedTours
             ) ?? [:]
 
             let wrapped = try c.decode([LossyEdge].self, forKey: .edges)
@@ -510,7 +531,8 @@ extension KnowledgeGraph {
             edges: allEdges,
             documentProcessingState: documentProcessingState.reduce(into: [:]) { result, pair in
                 result[pair.key.absoluteString] = pair.value
-            }
+            },
+            guidedTours: guidedTours
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -543,10 +565,15 @@ extension KnowledgeGraph {
         if let state = documentProcessingState[documentURL] {
             scopedState[documentURL.absoluteString] = state
         }
+        var scopedTours: [String: GuidedTour] = [:]
+        if let tour = guidedTours[documentURL.absoluteString] {
+            scopedTours[documentURL.absoluteString] = tour
+        }
         let rep = CodableRepresentation(
             nodes: scopedNodes,
             edges: scopedEdges,
-            documentProcessingState: scopedState
+            documentProcessingState: scopedState,
+            guidedTours: scopedTours
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -591,6 +618,9 @@ extension KnowledgeGraph {
         if let state = rep.documentProcessingState[documentURL.absoluteString] {
             scratch.documentProcessingState[documentURL] = state
         }
+        if let tour = rep.guidedTours[documentURL.absoluteString] {
+            scratch.guidedTours[documentURL.absoluteString] = tour
+        }
         self.merge(from: scratch)
         return (scopedNodes.count, scopedEdges.count)
     }
@@ -611,5 +641,6 @@ extension KnowledgeGraph {
                 documentProcessingState[url] = state
             }
         }
+        guidedTours = rep.guidedTours
     }
 }

@@ -150,6 +150,8 @@ class ExtractionPipeline {
             ChapterExtraction.attachConceptsToChapters(graph: graph, documentURL: documentURL)
             statusMessage = "Generating document summary..."
             await Self.appendDocumentSummary(graph: graph, documentURL: documentURL, backend: backend)
+            statusMessage = "Generating guided tour..."
+            await Self.appendGuidedTour(graph: graph, documentURL: documentURL, backend: backend)
 
             // L2: aggregate lower-level semantic edges into chapter-level edges so
             // the Chapter tab isn't a graveyard of isolated nodes.
@@ -278,6 +280,8 @@ class ExtractionPipeline {
         // its chapters via containsChapter edges.
         statusMessage = "Generating document summary..."
         await Self.appendDocumentSummary(graph: graph, documentURL: documentURL, backend: backend)
+        statusMessage = "Generating guided tour..."
+        await Self.appendGuidedTour(graph: graph, documentURL: documentURL, backend: backend)
 
         // L2: aggregate lower-level semantic edges into chapter-level edges so
         // the Chapter tab isn't a graveyard of isolated nodes.
@@ -290,7 +294,7 @@ class ExtractionPipeline {
         statusMessage = "Done — \(graph.nodeCount) concepts extracted"
         graph.documentProcessingState[documentURL] = .complete
 
-        // Final save now that chapter / document / L2 enrichments and the
+        // Final save now that chapter / document / tour / L2 enrichments and the
         // terminal processing state are in the live graph. Encoding happens
         // synchronously at call time, so ordering here affects persisted state.
         GraphStore.shared.scheduleSave(graph, for: documentURL)
@@ -959,6 +963,23 @@ class ExtractionPipeline {
 // MARK: - Document Summary Generation
 
 extension ExtractionPipeline {
+    static func appendGuidedTour(
+        graph: KnowledgeGraph,
+        documentURL: URL,
+        backend: any AtlasModel
+    ) async {
+        guard let tour = await GuidedTourGenerator.generate(
+            graph: graph,
+            documentURL: documentURL,
+            backend: backend
+        ) else {
+            log.info("[GuidedTour] No tour generated for \(documentURL.lastPathComponent)")
+            return
+        }
+        graph.setGuidedTour(tour, for: documentURL)
+        log.info("[GuidedTour] Generated \(tour.stops.count) stop(s) for \(documentURL.lastPathComponent)")
+    }
+
     /// Final extraction step: produces the `.document`-level node for this
     /// PDF and links it to its `.chapter` children via `containsChapter`
     /// edges. Under the 4-level model the Document node is the top fold of

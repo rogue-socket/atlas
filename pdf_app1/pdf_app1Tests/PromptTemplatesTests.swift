@@ -171,6 +171,30 @@ final class PromptTemplatesTests: XCTestCase {
         XCTAssertTrue(p.contains("Return valid JSON only."))
     }
 
+    // MARK: - guidedTour
+
+    func test_guidedTour_includesCandidateIDsAndNarrationSchema() {
+        let nodeA = ConceptNode(label: "Foundational Theme", summary: "Start here", level: .chapter)
+        let nodeB = ConceptNode(label: "Applied Theme", summary: nil, level: .concept)
+        let edge = GraphEdge(sourceNodeID: nodeA.id, targetNodeID: nodeB.id, type: .dependsOn)
+
+        let p = PromptTemplates.guidedTour(
+            candidates: [nodeA, nodeB],
+            edges: [edge],
+            documentTitle: "chapter.pdf",
+            maxStops: 5
+        )
+
+        XCTAssertTrue(p.contains("chapter.pdf"))
+        XCTAssertTrue(p.contains(nodeA.id.uuidString))
+        XCTAssertTrue(p.contains(nodeB.id.uuidString))
+        XCTAssertTrue(p.contains("dependsOn"))
+        XCTAssertTrue(p.contains("\"stops\""))
+        XCTAssertTrue(p.contains("\"nodeID\""))
+        XCTAssertTrue(p.contains("\"narration\""))
+        XCTAssertTrue(p.contains("Now that you understand"))
+    }
+
     // MARK: - chapterExtraction
 
     func test_chapterExtraction_explainsPageMarkersAndZeroIndexing() {

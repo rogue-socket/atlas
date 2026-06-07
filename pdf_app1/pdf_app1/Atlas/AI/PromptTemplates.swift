@@ -510,6 +510,57 @@ enum PromptTemplates {
         """
     }
 
+    // MARK: - Guided Tour
+
+    static func guidedTour(
+        candidates: [ConceptNode],
+        edges: [GraphEdge],
+        documentTitle: String,
+        maxStops: Int
+    ) -> String {
+        let candidateIDs = Set(candidates.map(\.id))
+        let nodeList = candidates.map { node in
+            let summary = node.summary.map { " summary=\"\($0.promptEscaped)\"" } ?? ""
+            return "- id=\"\(node.id.uuidString)\" level=\"\(node.level.rawValue)\" label=\"\(node.label.promptEscaped)\"\(summary)"
+        }.joined(separator: "\n")
+        let edgeList = edges.compactMap { edge -> String? in
+            guard candidateIDs.contains(edge.sourceNodeID),
+                  candidateIDs.contains(edge.targetNodeID) else { return nil }
+            return "- \(edge.sourceNodeID.uuidString) --\(edge.type.rawValue)--> \(edge.targetNodeID.uuidString)"
+        }
+        .prefix(80)
+        .joined(separator: "\n")
+
+        return """
+        You are creating a guided learning tour for a concept map from "\(documentTitle)".
+
+        Choose an ordered path of up to \(maxStops) stops. Start with the most foundational document or chapter node when available, then walk through the major themes in a pedagogically sensible order. Include contextual transition narration so the student understands why the next stop follows from the previous one.
+
+        Candidate nodes:
+        \(nodeList)
+
+        Relationships:
+        \(edgeList.isEmpty ? "- none listed" : edgeList)
+
+        Return ONLY valid JSON in this exact shape:
+        {
+          "stops": [
+            {
+              "nodeID": "copy one candidate id exactly",
+              "narration": "1-2 sentences explaining this stop and, when helpful, how it connects to the next theme"
+            }
+          ]
+        }
+
+        Requirements:
+        - Use only nodeID values from the candidate list.
+        - Do not repeat nodes.
+        - Narration should be student-facing and specific to the labels.
+        - Include transition language such as "Now that you understand..." when moving between themes.
+        - Return JSON only, no markdown.
+        """
+    }
+
     // MARK: - Summarization
 
     static func summarize(conceptLabel: String, sourceText: String) -> String {
@@ -599,6 +650,12 @@ enum PromptTemplates {
 }
 
 private extension String {
+    var promptEscaped: String {
+        replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .sceHeaderLineText
+    }
+
     var sceHeaderLineText: String {
         components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }

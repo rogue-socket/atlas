@@ -64,6 +64,8 @@ struct KnowledgeMapView: View {
     @State private var popoverNodeID: UUID?
 
     @State private var cachedRenderCache: MapCanvasRenderer.RenderCache = .empty
+    @State private var isTourVisible = false
+    @State private var tourStopIndex = 0
 
     // Callback to navigate PDF (set by parent). Source document URL is
     // first so the parent can route to the right tab when the clicked
@@ -88,6 +90,24 @@ struct KnowledgeMapView: View {
         Self.searchResults(in: graph, query: searchQuery)
     }
 
+    private var activeTour: GuidedTour? {
+        graph.guidedTour(for: documentURL)
+    }
+
+    private var activeTourStop: GuidedTourStop? {
+        guard let tour = activeTour,
+              tour.stops.indices.contains(tourStopIndex) else { return nil }
+        return tour.stops[tourStopIndex]
+    }
+
+    private var highlightedNodeIDs: Set<UUID> {
+        var ids = filteredNodeIDs
+        if isTourVisible, let stop = activeTourStop {
+            ids.insert(stop.nodeID)
+        }
+        return ids
+    }
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
@@ -102,7 +122,7 @@ struct KnowledgeMapView: View {
                         zoomLevel: $zoomLevel,
                         selectedNodeID: $interaction.selectedNodeID,
                         activeNodeID: activeNodeID,
-                        highlightedNodeIDs: filteredNodeIDs,
+                        highlightedNodeIDs: highlightedNodeIDs,
                         viewScale: interaction.viewScale,
                         viewOffset: interaction.viewOffset,
                         renderCache: cachedRenderCache
@@ -158,6 +178,9 @@ struct KnowledgeMapView: View {
                 if pipeline.isProcessing {
                     processingIndicator
                         .padding(8)
+                } else if isTourVisible, let tour = activeTour, let stop = activeTourStop {
+                    guidedTourOverlay(tour: tour, stop: stop, canvasSize: geometry.size)
+                        .padding(8)
                 } else if pipeline.scannedPDFDetected && graph.nodeCount == 0 {
                     scannedPDFBanner
                         .padding(8)
@@ -212,6 +235,12 @@ struct KnowledgeMapView: View {
             .onAppear {
                 if graph.nodeCount > 0 {
                     recomputeLayout(canvasSize: geometry.size)
+                }
+            }
+            .onChange(of: activeTour?.id) { _, newID in
+                if newID == nil {
+                    isTourVisible = false
+                    tourStopIndex = 0
                 }
             }
             .alert("Export Failed", isPresented: exportErrorPresented) {
@@ -531,6 +560,14 @@ struct KnowledgeMapView: View {
                         modePickerPopover
                     }
             }
+
+            if let tour = activeTour, !tour.stops.isEmpty {
+                Divider().frame(width: 16)
+                Button(action: { startTour(canvasSize: canvasSize) }) {
+                    Image(systemName: isTourVisible ? "arrow.clockwise.circle" : "play.circle")
+                }
+                .help(isTourVisible ? "Replay Guided Tour" : "Start Guided Tour")
+            }
         }
         .buttonStyle(.borderless)
         .padding(4)
@@ -797,6 +834,89 @@ struct KnowledgeMapView: View {
         .padding(12)
         .frame(width: 360)
         .background(RoundedRectangle(cornerRadius: 10).fill(.ultraThinMaterial))
+    }
+
+    // MARK: - Guided Tour
+
+    private func startTour(canvasSize: CGSize) {
+        guard let tour = activeTour, !tour.stops.isEmpty else { return }
+        tourStopIndex = 0
+        isTourVisible = true
+        applyTourStop(tour.stops[0], canvasSize: canvasSize)
+    }
+
+    private func applyTourStop(_ stop: GuidedTourStop, canvasSize: CGSize) {
+        guard let node = graph.node(for: stop.nodeID) else { return }
+        graph.expandAncestors(of: node.id)
+        let targetZoomLevel = Self.zoomLevel(for: node.level)
+        zoomLevel = targetZoomLevel
+        withAnimation(.easeInOut(duration: 0.35)) {
+            recomputeLayout(canvasSize: canvasSize, zoomOverride: targetZoomLevel)
+            interaction.center(on: node.id, layout: layout, canvasSize: canvasSize)
+            interaction.selectedNodeID = node.id
+        }
+    }
+
+    private func moveTour(by delta: Int, canvasSize: CGSize) {
+        guard let tour = activeTour else { return }
+        let nextIndex = tourStopIndex + delta
+        guard tour.stops.indices.contains(nextIndex) else { return }
+        tourStopIndex = nextIndex
+        applyTourStop(tour.stops[nextIndex], canvasSize: canvasSize)
+    }
+
+    private func guidedTourOverlay(tour: GuidedTour, stop: GuidedTourStop, canvasSize: CGSize) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Guided Tour")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(stop.title)
+                        .font(.headline)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                Text("\(tourStopIndex + 1)/\(tour.stops.count)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .monospacedDigit()
+            }
+
+            Text(stop.narration)
+                .font(.callout)
+                .foregroundColor(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Button("Previous") {
+                    moveTour(by: -1, canvasSize: canvasSize)
+                }
+                .disabled(tourStopIndex == 0)
+
+                Button(tourStopIndex == tour.stops.count - 1 ? "Done" : "Next") {
+                    if tourStopIndex == tour.stops.count - 1 {
+                        isTourVisible = false
+                    } else {
+                        moveTour(by: 1, canvasSize: canvasSize)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+
+                Spacer()
+
+                Button("Skip") {
+                    isTourVisible = false
+                }
+            }
+            .controlSize(.small)
+        }
+        .padding(12)
+        .frame(width: 420)
+        .background(RoundedRectangle(cornerRadius: 10).fill(.ultraThinMaterial))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.2)))
     }
 
     // MARK: - Scanned PDF Banner
