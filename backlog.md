@@ -50,6 +50,8 @@ Living TODO list. Status tags: `[active]`, `[next]`, `[blocked: <reason>]`, no t
 
 - 2026-06-07 — **Four-issue e2e graph-extraction checkpoint passed.** After resolving/closing #27, #28, #29, and #33, ran an isolated Meridian 4-document Fast extraction through the Codex Agent sidecar using `gpt-5.3-codex-spark` with disposable `--project-storage` and `--graphs-output`. Result: `exit_code=0`, four `DONE` lines, three SCE telemetry lines, live graph `175` nodes / `320` edges, and four saved graph files, each with `documentProcessingState=complete`.
 
+- 2026-06-07 — **Map concept search with zoom-to-node complete (#10).** The map search field now shows ranked substring results as the user types, handles no-match state, selects the first result on Return, and selecting a result expands its containment ancestors, switches to the node's semantic zoom level, recomputes layout for that level, centers the viewport on the node, and highlights/selects it. Verification: `MapInteractionTests` + `MapInteractionMoreTests` + `KnowledgeGraphTests` `60 tests, 0 failures`; full XCTest `420 tests, 0 failures`; `git diff --check` clean.
+
 ## Active / Next
 
 ## Deferred Cleanup

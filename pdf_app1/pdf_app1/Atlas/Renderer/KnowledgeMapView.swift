@@ -77,16 +77,15 @@ struct KnowledgeMapView: View {
             if !filteredNodeIDs.isEmpty { filteredNodeIDs = [] }
             return
         }
-        let q = debouncedSearchQuery.lowercased()
-        filteredNodeIDs = Set(graph.allNodes.filter {
-            $0.label.lowercased().contains(q) ||
-            ($0.summary?.lowercased().contains(q) ?? false) ||
-            $0.type.displayName.lowercased().contains(q)
-        }.map(\.id))
+        filteredNodeIDs = Set(Self.searchResults(in: graph, query: debouncedSearchQuery).map(\.id))
     }
 
     private var visibleNodes: [ConceptNode] {
         densityManager.visibleNodesIncludingRelationshipContext(from: graph, zoomLevel: zoomLevel)
+    }
+
+    private var visibleSearchResults: [ConceptNode] {
+        Self.searchResults(in: graph, query: searchQuery)
     }
 
     var body: some View {
@@ -142,7 +141,7 @@ struct KnowledgeMapView: View {
             // Top: search + zoom levels
             .overlay(alignment: .top) {
                 if graph.nodeCount > 0 {
-                    topBar
+                    topBar(canvasSize: geometry.size)
                         .padding(8)
                 }
             }
@@ -223,9 +222,7 @@ struct KnowledgeMapView: View {
         }
     }
 
-    /// Build a filtered graph based on the current zoom level
-    private var graphForCurrentZoom: KnowledgeGraph {
-        let nodes = visibleNodes
+    private func filteredGraph(for nodes: [ConceptNode]) -> KnowledgeGraph {
         if nodes.count == graph.nodeCount { return graph }
 
         let filtered = KnowledgeGraph()
@@ -247,20 +244,21 @@ struct KnowledgeMapView: View {
         )
     }
 
-    private func recomputeLayout(canvasSize: CGSize) {
+    private func recomputeLayout(canvasSize: CGSize, zoomOverride: SemanticZoomLevel? = nil) {
         let startedAt = Date()
-        let nodes = visibleNodes
+        let effectiveZoomLevel = zoomOverride ?? zoomLevel
+        let nodes = densityManager.visibleNodesIncludingRelationshipContext(from: graph, zoomLevel: effectiveZoomLevel)
         let nodeIDs = Set(nodes.map(\.id))
         let edges = graph.allEdges.filter { nodeIDs.contains($0.sourceNodeID) && nodeIDs.contains($0.targetNodeID) }
         let key = Self.layoutComputationKey(
             nodes: nodes,
             edges: edges,
-            zoomLevel: zoomLevel,
+            zoomLevel: effectiveZoomLevel,
             canvasSize: canvasSize,
             expansionGeneration: graph.expansionGeneration
         )
         if hasComputedLayout && lastLayoutComputationKey == key {
-            log.debug("[MapView] recomputeLayout skipped unchanged key nodes=\(nodes.count) edges=\(edges.count) zoom=\(String(describing: self.zoomLevel)) bucket=\(Int(key.canvasBucket.width))x\(Int(key.canvasBucket.height))")
+            log.debug("[MapView] recomputeLayout skipped unchanged key nodes=\(nodes.count) edges=\(edges.count) zoom=\(String(describing: effectiveZoomLevel)) bucket=\(Int(key.canvasBucket.width))x\(Int(key.canvasBucket.height))")
             return
         }
 
@@ -271,15 +269,14 @@ struct KnowledgeMapView: View {
         layout.computeLayout(nodes: nodes, edges: edges, canvasSize: canvasSize, validNodeIDs: allIDs)
         lastLayoutComputationKey = key
 
-        let filteredGraph = graphForCurrentZoom
-        cachedRenderCache = MapCanvasRenderer.makeRenderCache(for: filteredGraph)
+        cachedRenderCache = MapCanvasRenderer.makeRenderCache(for: filteredGraph(for: nodes))
 
         if !hasComputedLayout {
             interaction.fitToContent(layout: layout, canvasSize: canvasSize, visibleIDs: nodeIDs)
             hasComputedLayout = true
         }
         let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
-        log.info("[MapView] recomputeLayout completed nodes=\(nodes.count) edges=\(edges.count) zoom=\(String(describing: self.zoomLevel)) bucket=\(Int(key.canvasBucket.width))x\(Int(key.canvasBucket.height)) iterations=\(self.layout.iteration) elapsed_ms=\(elapsedMS)")
+        log.info("[MapView] recomputeLayout completed nodes=\(nodes.count) edges=\(edges.count) zoom=\(String(describing: effectiveZoomLevel)) bucket=\(Int(key.canvasBucket.width))x\(Int(key.canvasBucket.height)) iterations=\(self.layout.iteration) elapsed_ms=\(elapsedMS)")
     }
 
     static func layoutComputationKey(
@@ -321,6 +318,39 @@ struct KnowledgeMapView: View {
         ].joined(separator: "|")
     }
 
+    static func searchResults(in graph: KnowledgeGraph, query: String, limit: Int = 8) -> [ConceptNode] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return [] }
+
+        return graph.allNodes.compactMap { node -> (node: ConceptNode, rank: Int)? in
+            let label = node.label.lowercased()
+            let summary = node.summary?.lowercased() ?? ""
+            let type = node.type.displayName.lowercased()
+
+            if label == q { return (node, 0) }
+            if label.hasPrefix(q) { return (node, 1) }
+            if label.contains(q) { return (node, 2) }
+            if type.contains(q) { return (node, 3) }
+            if summary.contains(q) { return (node, 4) }
+            return nil
+        }
+        .sorted {
+            if $0.rank != $1.rank { return $0.rank < $1.rank }
+            return $0.node.label.localizedStandardCompare($1.node.label) == .orderedAscending
+        }
+        .prefix(limit)
+        .map(\.node)
+    }
+
+    static func zoomLevel(for nodeLevel: NodeLevel) -> SemanticZoomLevel {
+        switch nodeLevel {
+        case .document: return .document
+        case .chapter: return .chapter
+        case .concept: return .concept
+        case .entity: return .entity
+        }
+    }
+
     static func edgeSignature(_ edge: GraphEdge) -> String {
         [
             edge.id.uuidString,
@@ -341,34 +371,42 @@ struct KnowledgeMapView: View {
 
     // MARK: - Top Bar (search + zoom levels)
 
-    private var topBar: some View {
-        HStack(spacing: 6) {
-            // Search
-            HStack(spacing: 4) {
-                Image(systemName: "magnifyingglass")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                TextField("Search concepts...", text: $searchQuery)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 11))
-                if !searchQuery.isEmpty {
-                    Button(action: { searchQuery = "" }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
+    private func topBar(canvasSize: CGSize) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    TextField("Search concepts...", text: $searchQuery)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11))
+                        .onSubmit {
+                            if let first = visibleSearchResults.first {
+                                selectSearchResult(first, canvasSize: canvasSize)
+                            }
+                        }
+                    if !searchQuery.isEmpty {
+                        Button(action: {
+                            searchQuery = ""
+                            debouncedSearchQuery = ""
+                            filteredNodeIDs = []
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .controlBackgroundColor)))
-            .frame(maxWidth: 200)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .controlBackgroundColor)))
+                .frame(width: 200)
 
-            if !searchQuery.isEmpty && !filteredNodeIDs.isEmpty {
-                Text("\(filteredNodeIDs.count) found")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                if !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    searchResultsList(canvasSize: canvasSize)
+                }
             }
 
             Spacer()
@@ -391,6 +429,55 @@ struct KnowledgeMapView: View {
         }
         .padding(6)
         .background(RoundedRectangle(cornerRadius: 8).fill(.ultraThinMaterial))
+    }
+
+    private func searchResultsList(canvasSize: CGSize) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if visibleSearchResults.isEmpty {
+                Text("No matches")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+            } else {
+                ForEach(visibleSearchResults, id: \.id) { node in
+                    Button {
+                        selectSearchResult(node, canvasSize: canvasSize)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: node.type.icon)
+                                .font(.caption2)
+                                .foregroundColor(node.type.color)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(node.label)
+                                    .font(.caption2)
+                                    .lineLimit(1)
+                                Text(node.level.rawValue.capitalized)
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .frame(width: 200)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .controlBackgroundColor)))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.15)))
+    }
+
+    private func selectSearchResult(_ node: ConceptNode, canvasSize: CGSize) {
+        graph.expandAncestors(of: node.id)
+        let targetZoomLevel = Self.zoomLevel(for: node.level)
+        zoomLevel = targetZoomLevel
+        recomputeLayout(canvasSize: canvasSize, zoomOverride: targetZoomLevel)
+        interaction.center(on: node.id, layout: layout, canvasSize: canvasSize)
+        filteredNodeIDs = [node.id]
     }
 
     // MARK: - Action Controls

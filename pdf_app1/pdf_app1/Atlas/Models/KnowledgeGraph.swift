@@ -342,6 +342,38 @@ nonisolated class KnowledgeGraph {
         expansionGeneration += 1
     }
 
+    func expandAncestors(of nodeID: UUID) {
+        var parentIDs: Set<UUID> = []
+        var frontier: Set<UUID> = [nodeID]
+
+        while !frontier.isEmpty {
+            var next: Set<UUID> = []
+            for childID in frontier {
+                guard let edgeIDs = adjacency[childID] else { continue }
+                for edgeID in edgeIDs {
+                    guard let edge = edges[edgeID],
+                          edge.type.isContainment,
+                          edge.targetNodeID == childID,
+                          !parentIDs.contains(edge.sourceNodeID) else { continue }
+                    parentIDs.insert(edge.sourceNodeID)
+                    next.insert(edge.sourceNodeID)
+                }
+            }
+            frontier = next
+        }
+
+        var changed = false
+        for id in parentIDs {
+            guard var node = nodes[id], node.expansionState != .expanded else { continue }
+            node.expansionState = .expanded
+            nodes[id] = node
+            changed = true
+        }
+        if changed {
+            expansionGeneration += 1
+        }
+    }
+
     func expandAll() {
         for id in nodes.keys {
             nodes[id]?.expansionState = .expanded

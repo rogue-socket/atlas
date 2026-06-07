@@ -63,6 +63,25 @@ final class MapInteractionTests: XCTestCase {
         XCTAssertEqual(interaction.viewOffset.y, 230, accuracy: 0.001)
     }
 
+    func testCenterOnNodeSelectsNodeAndCentersViewport() {
+        let interaction = MapInteraction()
+        let layout = ForceDirectedLayout()
+        let nodeID = UUID()
+        layout.positions[nodeID] = NodePosition(x: 300, y: 200)
+
+        interaction.center(
+            on: nodeID,
+            layout: layout,
+            canvasSize: CGSize(width: 800, height: 600),
+            scale: 1.5
+        )
+
+        XCTAssertEqual(interaction.selectedNodeID, nodeID)
+        XCTAssertEqual(interaction.viewScale, 1.5)
+        XCTAssertEqual(interaction.viewOffset.x, 400 - 300 * 1.5, accuracy: 0.001)
+        XCTAssertEqual(interaction.viewOffset.y, 300 - 200 * 1.5, accuracy: 0.001)
+    }
+
     func testEdgeControlPointIsNotCurveMidpointForCurvedEdge() {
         let source = CGPoint(x: 0, y: 0)
         let target = CGPoint(x: 100, y: 0)
@@ -155,6 +174,34 @@ final class MapInteractionTests: XCTestCase {
         XCTAssertEqual(cache.conceptEntityGroups.count, 1)
         XCTAssertEqual(cache.conceptEntityGroups.first?.concept.id, concept.id)
         XCTAssertEqual(cache.conceptEntityGroups.first?.entities.map(\.id), [entity.id])
+    }
+
+    func testSearchResultsRanksExactPrefixAndSubstringMatches() {
+        let graph = KnowledgeGraph()
+        let exact = ConceptNode(label: "ATP Synthase", level: .concept); graph.addNode(exact)
+        let prefix = ConceptNode(label: "ATP Cycle", level: .concept); graph.addNode(prefix)
+        let substring = ConceptNode(label: "Mitochondrial ATP Transport", level: .concept); graph.addNode(substring)
+        let summary = ConceptNode(label: "Chemiosmosis", summary: "ATP production pathway", level: .concept); graph.addNode(summary)
+        graph.addNode(ConceptNode(label: "Unrelated", level: .concept))
+
+        let results = KnowledgeMapView.searchResults(in: graph, query: "ATP")
+
+        XCTAssertEqual(results.map(\.id), [prefix.id, exact.id, substring.id, summary.id])
+    }
+
+    func testSearchResultsEmptyQueryAndNoMatchesAreEmpty() {
+        let graph = KnowledgeGraph()
+        graph.addNode(ConceptNode(label: "Photosynthesis", level: .concept))
+
+        XCTAssertTrue(KnowledgeMapView.searchResults(in: graph, query: " ").isEmpty)
+        XCTAssertTrue(KnowledgeMapView.searchResults(in: graph, query: "ribosome").isEmpty)
+    }
+
+    func testZoomLevelForNodeLevelMatchesSemanticTabs() {
+        XCTAssertEqual(KnowledgeMapView.zoomLevel(for: .document), .document)
+        XCTAssertEqual(KnowledgeMapView.zoomLevel(for: .chapter), .chapter)
+        XCTAssertEqual(KnowledgeMapView.zoomLevel(for: .concept), .concept)
+        XCTAssertEqual(KnowledgeMapView.zoomLevel(for: .entity), .entity)
     }
 
     func testLayoutComputationKeyIsStableForSameInputs() {

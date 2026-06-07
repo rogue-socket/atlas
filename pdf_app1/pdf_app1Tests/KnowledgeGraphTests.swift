@@ -247,6 +247,29 @@ final class KnowledgeGraphTests: XCTestCase {
         XCTAssertEqual(g.expansionGeneration, g0)
     }
 
+    func test_expandAncestors_expandsContainmentParentChainOnce() {
+        let g = KnowledgeGraph()
+        let doc = ConceptNode(label: "Doc", level: .document); g.addNode(doc)
+        let chapter = ConceptNode(label: "Chapter", level: .chapter); g.addNode(chapter)
+        let concept = ConceptNode(label: "Concept", level: .concept); g.addNode(concept)
+        let entity = ConceptNode(label: "Entity", level: .entity); g.addNode(entity)
+        g.addEdge(GraphEdge(sourceNodeID: doc.id, targetNodeID: chapter.id, type: .containsChapter))
+        g.addEdge(GraphEdge(sourceNodeID: chapter.id, targetNodeID: concept.id, type: .containsConcept))
+        g.addEdge(GraphEdge(sourceNodeID: concept.id, targetNodeID: entity.id, type: .containsEntity))
+
+        let g0 = g.expansionGeneration
+        g.expandAncestors(of: entity.id)
+
+        XCTAssertEqual(g.node(for: doc.id)?.expansionState, .expanded)
+        XCTAssertEqual(g.node(for: chapter.id)?.expansionState, .expanded)
+        XCTAssertEqual(g.node(for: concept.id)?.expansionState, .expanded)
+        XCTAssertEqual(g.node(for: entity.id)?.expansionState, .collapsed)
+        XCTAssertEqual(g.expansionGeneration, g0 + 1)
+
+        g.expandAncestors(of: entity.id)
+        XCTAssertEqual(g.expansionGeneration, g0 + 1)
+    }
+
     func test_expandAll_thenCollapseAll() {
         let g = KnowledgeGraph()
         g.addNode(ConceptNode(label: "a"))

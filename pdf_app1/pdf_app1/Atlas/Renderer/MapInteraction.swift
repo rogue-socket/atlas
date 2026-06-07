@@ -181,4 +181,19 @@ class MapInteraction {
             y: canvasSize.height / 2 - (minY + maxY) / 2 * viewScale
         )
     }
+
+    func center(
+        on nodeID: UUID,
+        layout: ForceDirectedLayout,
+        canvasSize: CGSize,
+        scale: CGFloat = 1.4
+    ) {
+        guard let point = layout.point(for: nodeID) else { return }
+        viewScale = max(0.1, min(5.0, scale))
+        viewOffset = CGPoint(
+            x: canvasSize.width / 2 - point.x * viewScale,
+            y: canvasSize.height / 2 - point.y * viewScale
+        )
+        selectedNodeID = nodeID
+    }
 }
