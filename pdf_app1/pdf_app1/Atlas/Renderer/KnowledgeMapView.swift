@@ -13,15 +13,15 @@ import UniformTypeIdentifiers
 private let log = AtlasLogger.ui
 
 private struct LayoutKey: Equatable {
-    let nodeIDs: [String]
+    let nodeSignatures: [String]
     let edgeSignatures: [String]
     let zoomLevel: SemanticZoomLevel
 
-    var nodeCount: Int { nodeIDs.count }
+    var nodeCount: Int { nodeSignatures.count }
 }
 
 struct MapLayoutComputationKey: Equatable {
-    let nodeIDs: [String]
+    let nodeSignatures: [String]
     let edgeSignatures: [String]
     let zoomLevel: SemanticZoomLevel
     let canvasBucket: CGSize
@@ -189,7 +189,7 @@ struct KnowledgeMapView: View {
                         )
                     }
                 }
-                if oldKey.nodeIDs != newKey.nodeIDs && !debouncedSearchQuery.isEmpty {
+                if oldKey.nodeSignatures != newKey.nodeSignatures && !debouncedSearchQuery.isEmpty {
                     rerunSearchFilter()
                 }
             }
@@ -241,7 +241,7 @@ struct KnowledgeMapView: View {
 
     private func layoutKey(zoomLevel: SemanticZoomLevel) -> LayoutKey {
         LayoutKey(
-            nodeIDs: graph.allNodes.map { $0.id.uuidString }.sorted(),
+            nodeSignatures: graph.allNodes.map { Self.nodeSignature($0) }.sorted(),
             edgeSignatures: graph.allEdges.map { Self.edgeSignature($0) }.sorted(),
             zoomLevel: zoomLevel
         )
@@ -253,7 +253,7 @@ struct KnowledgeMapView: View {
         let nodeIDs = Set(nodes.map(\.id))
         let edges = graph.allEdges.filter { nodeIDs.contains($0.sourceNodeID) && nodeIDs.contains($0.targetNodeID) }
         let key = Self.layoutComputationKey(
-            nodeIDs: nodeIDs,
+            nodes: nodes,
             edges: edges,
             zoomLevel: zoomLevel,
             canvasSize: canvasSize,
@@ -283,6 +283,22 @@ struct KnowledgeMapView: View {
     }
 
     static func layoutComputationKey(
+        nodes: [ConceptNode],
+        edges: [GraphEdge],
+        zoomLevel: SemanticZoomLevel,
+        canvasSize: CGSize,
+        expansionGeneration: Int
+    ) -> MapLayoutComputationKey {
+        MapLayoutComputationKey(
+            nodeSignatures: nodes.map { Self.nodeSignature($0) }.sorted(),
+            edgeSignatures: edges.map { Self.edgeSignature($0) }.sorted(),
+            zoomLevel: zoomLevel,
+            canvasBucket: canvasBucket(for: canvasSize),
+            expansionGeneration: expansionGeneration
+        )
+    }
+
+    static func layoutComputationKey(
         nodeIDs: Set<UUID>,
         edges: [GraphEdge],
         zoomLevel: SemanticZoomLevel,
@@ -290,12 +306,19 @@ struct KnowledgeMapView: View {
         expansionGeneration: Int
     ) -> MapLayoutComputationKey {
         MapLayoutComputationKey(
-            nodeIDs: nodeIDs.map(\.uuidString).sorted(),
+            nodeSignatures: nodeIDs.map(\.uuidString).sorted(),
             edgeSignatures: edges.map { Self.edgeSignature($0) }.sorted(),
             zoomLevel: zoomLevel,
             canvasBucket: canvasBucket(for: canvasSize),
             expansionGeneration: expansionGeneration
         )
+    }
+
+    static func nodeSignature(_ node: ConceptNode) -> String {
+        [
+            node.id.uuidString,
+            node.level.rawValue
+        ].joined(separator: "|")
     }
 
     static func edgeSignature(_ edge: GraphEdge) -> String {

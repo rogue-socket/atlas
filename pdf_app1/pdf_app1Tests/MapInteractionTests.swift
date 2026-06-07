@@ -230,4 +230,55 @@ final class MapInteractionTests: XCTestCase {
             )
         )
     }
+
+    func testLayoutComputationKeyChangesWhenNodeLevelChanges() {
+        let nodeID = UUID()
+        let concept = ConceptNode(id: nodeID, label: "Shared", level: .concept)
+        let entity = ConceptNode(id: nodeID, label: "Shared", level: .entity)
+
+        let base = KnowledgeMapView.layoutComputationKey(
+            nodes: [concept],
+            edges: [],
+            zoomLevel: .concept,
+            canvasSize: CGSize(width: 812, height: 602),
+            expansionGeneration: 3
+        )
+
+        XCTAssertNotEqual(
+            base,
+            KnowledgeMapView.layoutComputationKey(
+                nodes: [entity],
+                edges: [],
+                zoomLevel: .concept,
+                canvasSize: CGSize(width: 812, height: 602),
+                expansionGeneration: 3
+            )
+        )
+    }
+
+    func testLayoutComputationKeyChangesWhenParentContainmentEdgeChanges() {
+        let concept = ConceptNode(label: "Parent", level: .concept)
+        let entity = ConceptNode(label: "Child", level: .entity)
+        let oldParent = GraphEdge(sourceNodeID: concept.id, targetNodeID: entity.id, type: .containsEntity)
+        let newParent = GraphEdge(sourceNodeID: UUID(), targetNodeID: entity.id, type: .containsEntity)
+
+        let base = KnowledgeMapView.layoutComputationKey(
+            nodes: [concept, entity],
+            edges: [oldParent],
+            zoomLevel: .entity,
+            canvasSize: CGSize(width: 812, height: 602),
+            expansionGeneration: 3
+        )
+
+        XCTAssertNotEqual(
+            base,
+            KnowledgeMapView.layoutComputationKey(
+                nodes: [concept, entity],
+                edges: [newParent],
+                zoomLevel: .entity,
+                canvasSize: CGSize(width: 812, height: 602),
+                expansionGeneration: 3
+            )
+        )
+    }
 }
